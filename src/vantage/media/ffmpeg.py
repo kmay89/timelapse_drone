@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
+from typing import IO
 
 import numpy as np
 
@@ -21,6 +23,30 @@ from vantage import log
 
 class FFmpegError(RuntimeError):
     pass
+
+
+class _StderrTail:
+    """Drain a child's stderr on a thread, keeping only its last `limit` bytes for error messages.
+
+    A damaged clip makes ffmpeg log every bad macroblock, even at `-loglevel error`. A pipe nobody
+    reads fills at about 64 KB, ffmpeg then blocks mid-run, and whoever waits on its stdout (or
+    writes its stdin) waits forever.
+    """
+
+    def __init__(self, pipe: IO[bytes], limit: int = 4000) -> None:
+        self._pipe, self._limit, self._tail = pipe, limit, b""
+        self._thread = threading.Thread(target=self._drain, name="ffmpeg-stderr", daemon=True)
+        self._thread.start()
+
+    def _drain(self) -> None:
+        with self._pipe:
+            while chunk := self._pipe.read(1 << 16):
+                self._tail = (self._tail + chunk)[-self._limit :]
+
+    def text(self) -> str:
+        """The kept tail; waits for the pipe to close, so call it once the process has exited."""
+        self._thread.join()
+        return self._tail.decode(errors="replace").strip()
 
 
 @cache
@@ -170,7 +196,8 @@ def iter_frames(
     cmd += ["-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
     log.debug(" ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert proc.stdout is not None
+    assert proc.stdout is not None and proc.stderr is not None
+    stderr = _StderrTail(proc.stderr)
     frame_bytes = w * h * 3
     step = every_s if every_s else (1.0 / info.fps if info.fps else 0.0)
     i = 0
@@ -183,10 +210,14 @@ def iter_frames(
             t = (i + 0.5) * step if every_s else i * step
             yield t, np.frombuffer(buf, np.uint8).reshape(h, w, 3)
             i += 1
+        # Read to the end (a consumer that stops early kills ffmpeg below, which is no failure).
+        if (code := proc.wait()) != 0:
+            raise FFmpegError(f"ffmpeg decode failed ({code}) for {video}:\n{stderr.text()}")
     finally:
         proc.stdout.close()
         proc.kill()
         proc.wait()
+        stderr.text()
 
 
 class FrameWriter:
@@ -243,10 +274,13 @@ class FrameWriter:
             str(out),
         ]
         self.proc: subprocess.Popen | None = None
+        self._stderr: _StderrTail | None = None
 
     def __enter__(self) -> FrameWriter:
         log.debug(" ".join(self.cmd))
         self.proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert self.proc.stderr is not None
+        self._stderr = _StderrTail(self.proc.stderr)
         return self
 
     def write(self, frame: np.ndarray) -> None:
@@ -256,9 +290,9 @@ class FrameWriter:
         self.proc.stdin.write(np.ascontiguousarray(frame, dtype=np.uint8).tobytes())
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        assert self.proc and self.proc.stdin
+        assert self.proc and self.proc.stdin and self._stderr
         self.proc.stdin.close()
-        err = self.proc.stderr.read().decode() if self.proc.stderr else ""
         code = self.proc.wait()
+        err = self._stderr.text()
         if exc_type is None and code != 0:
-            raise FFmpegError(f"ffmpeg encode failed ({code}) for {self.out}:\n{err[-4000:]}")
+            raise FFmpegError(f"ffmpeg encode failed ({code}) for {self.out}:\n{err}")
