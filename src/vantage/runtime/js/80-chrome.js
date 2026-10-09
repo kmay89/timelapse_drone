@@ -67,6 +67,7 @@ if (canSave) {
     if (m.type === "vantage:progress") {
       saveWatch(45e3);
       saveBtn.disabled = true;
+      if (saveMeter.hidden) saveBtn.replaceChildren(icon("save"), "Save for offline"); // a late start after a retry state
       saveMeter.hidden = false;
       saveMeter.value = m.totalBytes ? m.bytes / m.totalBytes : m.done / m.total;
       saveStatus.textContent = `Saving… ${MB(m.bytes)} of ${MB(m.totalBytes)}`;

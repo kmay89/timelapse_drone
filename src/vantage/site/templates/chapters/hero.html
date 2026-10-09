@@ -13,7 +13,8 @@
 <figure class="v-hero__media v-media">
 {{ picture(img, "full", eager=true) }}
 {% if ch.video and ch.video.sources and not embedded %}
-<video autoplay muted loop playsinline preload="metadata" poster="{{ ch.video.poster.fallback }}" aria-hidden="true" tabindex="-1">
+{# No autoplay attribute: the runtime starts the loop only when motion is allowed (WebKit autoplays hidden videos). #}
+<video muted loop playsinline preload="metadata" poster="{{ ch.video.poster.fallback }}" aria-hidden="true" tabindex="-1">
 {% for s in ch.video.sources %}
 <source src="{{ s.src }}" type="{{ s.type }}">
 {% endfor %}

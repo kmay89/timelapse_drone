@@ -211,6 +211,19 @@ for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
   const playing = await vid.evaluate((v) => !v.paused);
   await go(page, 0, 800);
   check("video chapter plays on screen, pauses off screen", playing && (await vid.evaluate((v) => v.paused)));
+  // The pause button stops a loop that really plays here, and a reload (same tab) keeps it stopped.
+  await page.getByRole("button", { name: "Pause the background video" }).tap();
+  await page.waitForTimeout(300);
+  const stopped = await page.$eval("#opening video", (v) => v.paused);
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(2000);
+  check(
+    "hero pause: stops the playing loop and survives a reload",
+    stopped && (await page.$eval("#opening video", (v) => v.paused && !v.autoplay)),
+  );
+  await page.getByRole("button", { name: "Play the background video" }).tap();
+  await page.waitForTimeout(1200);
+  check("hero pause: play starts the loop again", await page.$eval("#opening video", (v) => !v.paused));
   check("no console errors (video)", errors.length === 0, errors.join(" | "));
   await ctx.close();
 }
@@ -218,7 +231,8 @@ for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
   const { ctx, page } = await open(browser, { ...IPHONE, reducedMotion: "reduce" });
   await page.waitForTimeout(1500);
   // The base sheet hides the loop (display: none), so neither engine autoplays it.
-  const still = await page.$eval("#opening video", (v) => v.paused && getComputedStyle(v).display === "none");
+  // The runtime also drops the markup's autoplay: WebKit would play the hidden loop anyway.
+  const still = await page.$eval("#opening video", (v) => v.paused && !v.autoplay && getComputedStyle(v).display === "none");
   check("reduced motion: hero loop stays on its still", still);
   const vid = page.locator("#last-evening video");
   await vid.scrollIntoViewIfNeeded();

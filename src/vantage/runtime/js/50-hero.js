@@ -14,7 +14,7 @@ function buildVideo(/** @type {any} */ video, /** @type {Record<string, any>} */
 /** Resolves once a video has a source: a built one gets its blob, decoded once (H.264 is the last
  * source, and the only one in single files). */
 function loadVideo(/** @type {any} */ el, /** @type {any} */ video) {
-  return (el.vLoad = el.vLoad || (el.src || $("source", el) ? Promise.resolve() : assetURL(video.sources[video.sources.length - 1].src).then((u) => void (el.src = u))));
+  return (el.vLoad = el.vLoad || (el.src || $("source", el) ? Promise.resolve() : assetURL(video.sources[video.sources.length - 1].src).then((u) => void (el.src = u), () => {})));
 }
 
 /** Play muted and inline; resolves false when the browser refuses (the poster stays). */
@@ -43,6 +43,10 @@ function hero(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const video =
     $("video", sec) || (media && ch.video?.sources.length ? media.appendChild(buildVideo(ch.video, { loop: true, "aria-hidden": "true", tabindex: "-1" })) : null);
   if (video) {
+    // From here the runtime decides (on screen, not paused by the reader, motion allowed): WebKit would
+    // otherwise autoplay the markup's loop even while it is hidden under reduced motion.
+    video.autoplay = false;
+    if (reduced) video.pause();
     video.addEventListener("playing", () => media.classList.add("v-playing"));
     if (!video.paused) media.classList.add("v-playing");
   }

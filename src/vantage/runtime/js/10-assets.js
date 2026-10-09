@@ -45,7 +45,7 @@ function assetURL(/** @type {string} */ path) {
 function releaseAsset(/** @type {string} */ path) {
   const blob = blobs.get(path);
   if (blob && --blob.refs <= 0) {
-    blob.url.then((u) => URL.revokeObjectURL(u));
+    blob.url.then((u) => URL.revokeObjectURL(u), () => {});
     blobs.delete(path);
   }
 }

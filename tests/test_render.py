@@ -141,7 +141,8 @@ def test_every_chapter_is_a_semantic_section(no_runtime_js):
     assert '<img class="v-logo" src="assets/brand/w.svg" alt="Brand logo">' in html
     assert 'style="--fx:40.0%;--fy:60.0%"' in html  # portrait focus
     assert (
-        '<video autoplay muted loop playsinline preload="metadata" poster="assets/img/poster-960.jpg"' in html
+        '<video muted loop playsinline preload="metadata" poster="assets/img/poster-960.jpg"' in html
+        and "autoplay" not in html.split("<video", 1)[1].split(">", 1)[0]
     )
     hevc, h264 = html.index('src="assets/video/v-hevc.mp4"'), html.index('src="assets/video/v.mp4"')
     assert hevc < h264
