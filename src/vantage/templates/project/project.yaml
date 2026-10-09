@@ -1,0 +1,50 @@
+# project.yaml — settings for this Vantage project.
+# Every key is documented in src/vantage/config.py (ProjectConfig). Run `vantage validate {{slug}}`
+# after editing. Lines marked TODO need real information before the story ships.
+
+slug: {{slug}}
+title: "{{title}}"
+subtitle: "TODO: one line on what is being built"
+kicker: "TODO: Place, Region · 2025–2026"
+dek: >-
+  TODO: a one-paragraph standfirst. What was here, what is coming, and why the
+  view from above tells the story better than anything else.
+byline: "TODO: Aerial imagery by … · Story by …"
+lang: en
+location:
+  name: "TODO: Site name"
+  region: "TODO: City, State"
+  # lat: 41.0000
+  # lon: -81.0000
+timezone: America/New_York # IANA zone the flights happened in (dates are local calendar days)
+brand: brand/brand.yaml
+footage_dir: footage # raw flights, one sub-folder per visit: footage/2026-09-12/DJI_0042.MP4 (+ .SRT)
+draft: true # shows a "Preview" badge; set false for the final delivery
+simulated: false
+
+align:
+  method: auto # auto | homography | affine | none
+  detector: sift # sift | akaze | orb
+  min_inliers: 60
+
+grade:
+  mode: reinhard # none | reinhard | histogram
+  strength: 0.6 # 0 keeps each flight's own light, 1 fully matches the reference
+
+select:
+  sample_every_s: 0.5
+  max_candidates_per_source: 240
+  gps_radius_m: 60
+
+output:
+  # base_url: https://example.org/{{slug}}/   # canonical URL, used for share cards
+  single_file: true
+  service_worker: true
+  film:
+    enabled: true
+    vertical: true # also render a 9:16 cut for phones and social
+    hold_s: 1.1
+    fade_s: 0.9
+  images:
+    widths: [960, 1600, 2560]
+    formats: [avif, jpeg]

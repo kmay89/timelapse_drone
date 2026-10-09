@@ -1,0 +1,11 @@
+{
+  "name": "vantage-web-tests",
+  "private": true,
+  "description": "Browser tests for Vantage stories (Playwright: iPhone WebKit + Chromium).",
+  "scripts": {
+    "test:web": "playwright test -c web-tests/playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

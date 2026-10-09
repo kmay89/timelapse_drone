@@ -1,0 +1,50 @@
+# brand.yaml — the client's brand kit. Paths are relative to this file.
+# Model: src/vantage/config.py (BrandKit). The placeholder logos are generated wordmarks:
+# replace them with the client's real files (SVG strongly preferred).
+
+name: "{{title}}" # TODO: the client's name as it should appear in credits
+# short_name: "…"   # home-screen label (≤ 12 characters)
+# url: https://…
+
+logos:
+  primary: logo.svg # for light backgrounds
+  on_dark: logo-on-dark.svg # for dark backgrounds (usually white)
+  mark: mark.svg # square symbol: favicon and home-screen icon
+  alt: "{{title}}"
+
+colors:
+  accent: "#d4a24c" # TODO: signature brand color (progress rail, highlights)
+  # accent_2: "#5fa8a0"   # secondary accent, used for the "after" side
+  ink: "#14110f"
+  paper: "#f4f0e8"
+  night: "#0b0c0b"
+
+typography:
+  display:
+    family: Fraunces
+    bundled: fraunces # `vantage fonts` lists the bundled open-licensed faces
+    fallback: "Georgia, 'Times New Roman', serif"
+  text:
+    family: Inter
+    bundled: inter
+  # Client-licensed web fonts instead (the license must allow web embedding):
+  # display:
+  #   family: "Brand Serif"
+  #   files: [fonts/BrandSerif-Variable.woff2]
+
+voice:
+  tone: "Warm, civic, precise. Let the imagery carry the emotion."
+  avoid: ["hype", "unverified claims"]
+
+partners: []
+# partners:
+#   - name: "TODO: Developer"
+#     role: Owner
+#     url: https://…
+#     logo: partners/developer.svg
+#     logo_on_dark: partners/developer-white.svg
+
+credit_line: "TODO: Aerial story produced for …"
+# copyright: "© 2026 …"
+theme: dark
+grain: true

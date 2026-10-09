@@ -292,3 +292,23 @@ Bundled fonts: `runtime/fonts/fonts.json` maps a key (`fraunces`, `inter`,
 `{family, category, axes, weight, license, unicode_range, faces: [{file, style, weight}]}`
 with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
 `bundled: <key>` or its own `files` (client-licensed woff2).
+
+### StoryJSON v1 additions (blueprint round 1)
+
+* Every chapter carries `surface: "night" | "paper"` (default: `night` for hero/scrub/compare/video/explore/gallery-of-captures, `paper` for text/stats/timeline/credits/gallery-of-images).
+* `Vantage` gains `kind` and optional `portraitFocus: [x, y]` (normalized) — the crop centre on portrait phones.
+* `scrub` gains `hold` (0–1, share of each capture's scroll segment spent still); `scrollVh` is always resolved (default `min(900, 75 × captures)`).
+* `compare` gains `mode: "curtain" | "blink"`.
+* Timeline items gain `status?: "done" | "in-progress" | "planned"`.
+* New chapter:
+  `{ type: "gallery"; id; kicker?; title?; html?; surface; vantage?: string; captures: number[];
+     images: { img: Img; caption?: string; date?: string; credit?: string }[] }`
+* `brand.disclaimer?: string`.
+* Facts: markdown may contain `{fact:id}` tokens resolved from the project's optional
+  `facts.yaml` (`config.Facts`). The build renders the fact text followed by a numbered
+  source marker linking to the credits; StoryJSON gains
+  `notes: { n: number; factId: string; text: string; sources: string[]; status: string }[]`
+  and `meta.unverifiedFacts: number`. Draft builds style non-releasable facts visibly
+  (`.v-fact[data-releasable="false"]`); `vantage build --release` fails if any fact used in the
+  story is not releasable (`Fact.releasable`), if a token references an unknown fact, or if the
+  project is `draft: true`.
