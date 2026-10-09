@@ -9,7 +9,7 @@ not recognise and never raises on content:
 
       <font size="28">FrameCnt: 1, DiffTime: 33ms
       2025-04-12 10:41:07.123
-      [iso: 100] [shutter: 1/1000.0] [fnum: 2.8] [ev: 0] [latitude: 41.3401] [longitude: -81.3712]
+      [iso: 100] [shutter: 1/1000.0] [fnum: 2.8] [ev: 0] [latitude: 12.3401] [longitude: -45.6712]
       [rel_alt: 60.000 abs_alt: 350.000] [gb_yaw: 12.3 gb_pitch: -30.0 gb_roll: 0.0] </font>
 
 * Mini 2 / Air 2 / Mavic Pro variants: ``[latitude : …] [longtitude : …] [altitude: …]`` (sic),

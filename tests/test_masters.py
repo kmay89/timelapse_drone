@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from test_align import WORLD, make_world, random_homography, reference_view, render_view
-from test_select import Shot, build_project
+from test_select import SITE, Shot, build_project
 from vantage.models import FramePick, MastersIndex
 from vantage.process.masters import make_masters
 from vantage.process.select import select_frames
@@ -32,7 +32,7 @@ def _tile_shifts(a: np.ndarray, b: np.ndarray, n: int = 3) -> np.ndarray:
 
 
 def test_make_masters_end_to_end(tmp_path):
-    project, catalog, shots = build_project(tmp_path, vantage={"hint": {"lat": 41.3170, "lon": -81.3530}})
+    project, catalog, shots = build_project(tmp_path, vantage={"hint": {"lat": SITE[0], "lon": SITE[1]}})
     selection = select_frames(project, catalog)
     picks = selection.vantages["overview"].picks
     # A manual pick that cannot register is kept (flagged); an automatic one is dropped.

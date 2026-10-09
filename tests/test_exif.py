@@ -51,12 +51,12 @@ def _inject_app1_xmp(path: Path, packet: bytes) -> None:
 
 def test_exif_date_and_gps_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "DJI_0001.JPG"
-    exif = _exif("2025:04:12 10:41:07", 41.3401234, -81.3712345)
+    exif = _exif("2025:04:12 10:41:07", 12.3401234, -45.6712345)
     Image.new("RGB", (64, 48), (90, 120, 80)).save(path, exif=exif)
     meta = read_still_metadata(path)
     assert meta.datetime == dt.datetime(2025, 4, 12, 10, 41, 7, 250000)
-    assert meta.lat == pytest.approx(41.3401234, abs=1e-6)
-    assert meta.lon == pytest.approx(-81.3712345, abs=1e-6)
+    assert meta.lat == pytest.approx(12.3401234, abs=1e-6)
+    assert meta.lon == pytest.approx(-45.6712345, abs=1e-6)
     assert meta.abs_alt == pytest.approx(350.5)
     assert (meta.width, meta.height, meta.make, meta.model) == (64, 48, "DJI", "FC3582")
     assert meta.rel_alt is None and meta.camera_heading is None
@@ -85,13 +85,13 @@ def test_injected_xmp_elements_and_gps_fallback(tmp_path: Path) -> None:
         b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description>'
         b"<drone-dji:RelativeAltitude>+45.00</drone-dji:RelativeAltitude>"
         b"<drone-dji:GimbalPitchDegree> -90.0 </drone-dji:GimbalPitchDegree>"
-        b"<drone-dji:GpsLatitude>41.25</drone-dji:GpsLatitude>"
-        b"<drone-dji:GpsLongtitude>-81.5</drone-dji:GpsLongtitude>"
+        b"<drone-dji:GpsLatitude>12.35</drone-dji:GpsLatitude>"
+        b"<drone-dji:GpsLongtitude>-45.68</drone-dji:GpsLongtitude>"
         b"</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end='w'?>"
     )
     _inject_app1_xmp(path, packet)
     meta = read_still_metadata(path)
-    assert (meta.rel_alt, meta.gimbal_pitch, meta.lat, meta.lon) == (45.0, -90.0, 41.25, -81.5)
+    assert (meta.rel_alt, meta.gimbal_pitch, meta.lat, meta.lon) == (45.0, -90.0, 12.35, -45.68)
     assert (meta.width, meta.height) == (30, 40)  # orientation 6 → displayed portrait
     assert meta.datetime is None
 

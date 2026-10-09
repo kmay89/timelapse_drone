@@ -77,7 +77,7 @@ vantages:
     name: Over the lake, looking at the gatehouses
     kind: drone                       # drone | ground | ortho | archival | plan
     reference: { source: "2026-09-12/DJI_0042.MP4", t: 12.5 }   # clearest frame, ideally latest visit
-    hint: { lat: 41.0000, lon: -81.0000, alt_m: 90, heading_deg: 150, gimbal_pitch_deg: -30 }
+    hint: { lat: 12.3456, lon: -45.6789, alt_m: 90, heading_deg: 150, gimbal_pitch_deg: -30 }
     portrait_focus: [0.5, 0.5]        # centre of the phone crop, 0–1
 ```
 
