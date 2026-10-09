@@ -273,3 +273,22 @@ Shared helpers: `vantage.log` (info/ok/warn/fail/step), `vantage.paths`
 (find_project, projects_root, dist_root, project_dist, RUNTIME_DIR), and
 `vantage.media.ffmpeg` (probe, run, extract_frame, iter_frames, FrameWriter,
 encoders).
+
+### Site rendering API
+
+```python
+vantage.site.theme.theme_css(brand: BrandKit, *, font_prefix: str = "assets/fonts/") -> Theme
+    # Theme(css: str, fonts: list[FontAsset(src: Path, dest: str)])  — dest relative to site root
+    # css = :root custom properties (see Runtime principles) + @font-face rules for every face used
+vantage.site.render.render_page(story: dict, *, theme_css: str, base_href: str | None = None) -> str
+    # full index.html: pre-rendered semantic HTML for every chapter, inlined runtime CSS/JS
+    # (runtime/css/*.css, runtime/js/*.js in filename order), theme CSS, and the StoryJSON
+    # <script id="vantage-story" type="application/json">. Pure function: no file IO except
+    # reading the runtime directory.
+```
+
+Bundled fonts: `runtime/fonts/fonts.json` maps a key (`fraunces`, `inter`,
+`newsreader`, `libre-franklin`, `public-sans`, `instrument-serif`) to
+`{family, category, axes, weight, license, unicode_range, faces: [{file, style, weight}]}`
+with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
+`bundled: <key>` or its own `files` (client-licensed woff2).
