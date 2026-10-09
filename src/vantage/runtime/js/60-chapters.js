@@ -33,9 +33,12 @@ function stats(/** @type {HTMLElement} */ sec) {
   const below = items.filter((it) => it.el.getBoundingClientRect().top > innerHeight);
   below.forEach((it) => (it.span.style.minWidth = `${it.span.offsetWidth}px`));
   below.forEach((it) => (it.span.textContent = it.fmt(0)));
+  let next = 0; // stats arriving together start 110 ms apart
   onceVisible(below.map((it) => it.el), (el) => {
     const it = below.find((x) => x.el === el);
-    window.setTimeout(() => tween(900, (t) => (it.span.textContent = it.fmt(it.to * easeOut(t)))), 120 * below.indexOf(it) % 360);
+    const wait = Math.max(0, next - performance.now());
+    next = performance.now() + wait + 110;
+    window.setTimeout(() => tween(900, (t) => (it.span.textContent = it.fmt(it.to * easeOut(t)))), wait);
   }, 0.6);
 }
 
@@ -118,15 +121,20 @@ function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     media.replaceChildren(el);
   }
   if (!el) return;
-  let ours = false;
+  let auto = false; // the next "pause" event is ours, not the reader's
   let userPaused = false;
-  el.addEventListener("pause", () => (userPaused = !ours));
+  el.addEventListener("pause", () => {
+    userPaused = !auto;
+    auto = false;
+  });
+  el.addEventListener("play", () => (userPaused = false));
   new IntersectionObserver(
     ([e]) => {
-      ours = true;
       if (e.isIntersecting && !userPaused && !reduced) tryPlay(el);
-      else if (!e.isIntersecting) el.pause();
-      ours = false;
+      else if (!e.isIntersecting && !el.paused) {
+        auto = true;
+        el.pause();
+      }
     },
     { threshold: 0.5 },
   ).observe(el);
