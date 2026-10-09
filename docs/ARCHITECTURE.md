@@ -201,7 +201,7 @@ type Video = { poster: Img; sources: { src: string; type: string }[] };   // hev
 type StoryJSON = {
   version: 1;
   meta: { slug: string; title: string; subtitle?: string; kicker?: string; dek?: string; byline?: string;
-          lang: string; location?: { name: string; region?: string; lat?: number; lon?: number };
+          lang: string; location?: { name: string; region?: string };  // never lat/lon: they stay in project.yaml
           draft: boolean; simulated: boolean; generatedAt: string;          // ISO timestamp
           dateRange: { start: string; end: string }; url?: string; shareImage?: string };
   brand: { name: string; url?: string; alt: string; theme: "dark" | "light"; grain: boolean;

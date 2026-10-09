@@ -402,6 +402,18 @@ def test_unknown_fact_fails_the_build(tmp_path):
         build_site(load_project(make_project(tmp_path / "p", story=story)), tmp_path / "site")
 
 
+def test_site_coordinates_are_never_published(tmp_path):
+    """project.yaml may record the site's lat/lon, but no edition publishes where the site is."""
+    location = {"name": "Lot Nine", "region": "Somewhere", "lat": 12.3456, "lon": -45.6789}
+    site = tmp_path / "site"
+    html = build_site(load_project(make_project(tmp_path / "p", location=location)), site).read_text()
+    assert read_story(html)["meta"]["location"] == {"name": "Lot Nine", "region": "Somewhere"}
+    for f in site.rglob("*"):
+        if f.suffix in {".html", ".js", ".json", ".webmanifest", ".txt"}:
+            text = f.read_text()
+            assert "12.3456" not in text and "45.6789" not in text, f.name
+
+
 def test_release_gate(tmp_path):
     root = make_project(tmp_path / "p")
     with pytest.raises(ReleaseError) as err:

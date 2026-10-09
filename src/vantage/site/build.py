@@ -710,10 +710,12 @@ class StoryBuilder:
         cfg = self.project.config
         dates = sorted({c.date for v in self.vantages.values() for c in v.captures})
         url = safe_url(cfg.output.base_url, "project.yaml output.base_url")
+        # Name and region only: lat/lon stay in project.yaml, so no edition pins an unannounced site.
+        loc = cfg.location
         return _compact({
             "slug": cfg.slug, "title": self.plain(cfg.title), "subtitle": self.plain(cfg.subtitle),
             "kicker": self.plain(cfg.kicker), "byline": self.plain(cfg.byline), "lang": cfg.lang,
-            "location": cfg.location.model_dump(exclude_none=True) if cfg.location else None,
+            "location": _compact({"name": loc.name, "region": loc.region}) if loc else None,
             "draft": cfg.draft, "simulated": cfg.simulated, "generatedAt": _generated_at(),
             "dateRange": {"start": dates[0], "end": dates[-1]} if dates else None,
             "flights": len(dates), "url": url, "shortTitle": self._short_title(),

@@ -183,6 +183,8 @@ class BrandKit(Model):
 
 
 class Location(Model):
+    """Where the site is. Stories publish name and region only; lat/lon never leave project.yaml."""
+
     name: str
     region: str | None = None
     lat: float | None = None

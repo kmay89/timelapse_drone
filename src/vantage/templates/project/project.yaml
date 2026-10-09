@@ -14,7 +14,7 @@ lang: en
 location:
   name: "TODO: Site name"
   region: "TODO: City, State"
-  # lat: 12.3456
+  # lat: 12.3456 # optional, for the crew; stories never publish lat/lon
   # lon: -45.6789
 timezone: America/New_York # IANA zone the flights happened in (dates are local calendar days)
 brand: brand/brand.yaml
