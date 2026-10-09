@@ -77,14 +77,68 @@ def test_agent_frontmatter(agent: Path) -> None:
     assert meta["description"] and meta["tools"]
 
 
+def _workflow_steps(spec: dict) -> list[tuple[str, dict]]:
+    return [(name, step) for name, job in spec["jobs"].items() for step in job["steps"]]
+
+
+def _can_write(permissions: object) -> bool:
+    if isinstance(permissions, str):
+        return permissions == "write-all"
+    return isinstance(permissions, dict) and "write" in permissions.values()
+
+
 @pytest.mark.parametrize("workflow", WORKFLOWS, ids=_rel)
 def test_workflows_parse_and_pin_actions(workflow: Path) -> None:
-    spec = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    """Actions are pinned to a full commit SHA (a tag can be re-pointed at new code) with the version
+    as a trailing comment, which is what Dependabot reads and bumps."""
+    text = workflow.read_text(encoding="utf-8")
+    spec = yaml.safe_load(text)
     assert spec[True] and spec["jobs"]  # YAML 1.1 reads the `on:` key as True
     assert spec["permissions"] == {"contents": "read"}, "least privilege by default"
-    for job in spec["jobs"].values():
+    uses = [step["uses"] for _, step in _workflow_steps(spec) if "uses" in step]
+    for ref in uses:
+        assert re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", ref), f"{_rel(workflow)}: pin {ref} to a SHA"
+    commented = re.findall(r"^\s*(?:- )?uses: (\S+) # v\d+(?:\.\d+)*$", text, flags=re.MULTILINE)
+    assert sorted(commented) == sorted(uses), f"{_rel(workflow)}: every pin needs a `# vX.Y.Z` comment"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS, ids=_rel)
+def test_checkouts_do_not_persist_the_token(workflow: Path) -> None:
+    spec = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    for name, step in _workflow_steps(spec):
+        if step.get("uses", "").startswith("actions/checkout@"):
+            assert step.get("with", {}).get("persist-credentials") is False, f"{_rel(workflow)}: {name}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS, ids=_rel)
+def test_jobs_that_can_write_run_no_project_or_third_party_code(workflow: Path) -> None:
+    """A job holding a write token never checks out or builds the project and uses only GitHub's own
+    actions, so a compromised dependency never runs beside a token that can push, tag or replace
+    release assets."""
+    spec = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    for name, job in spec["jobs"].items():
+        if not _can_write(job.get("permissions", spec["permissions"])):
+            continue
         for step in job["steps"]:
-            assert "uses" not in step or re.search(r"@v\d", step["uses"]), step["uses"]
+            ref = step.get("uses", "")
+            assert not ref.startswith("actions/checkout@"), f"{_rel(workflow)}: {name} checks out code"
+            assert not ref or ref.startswith("actions/"), f"{_rel(workflow)}: {name} runs {ref}"
+            assert not re.search(r"\b(uv|npm|npx|pip|python3?)\b", step.get("run", "")), name
+
+
+def test_release_builds_read_only_and_publishes_from_a_separate_job() -> None:
+    spec = yaml.safe_load((ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
+    writers = {
+        n for n, job in spec["jobs"].items() if _can_write(job.get("permissions", spec["permissions"]))
+    }
+    assert writers == {"publish"}, "only the publish job may hold contents: write"
+    assert spec["jobs"]["publish"]["needs"] == "build"
+    assert spec["jobs"]["publish"]["permissions"] == {"contents": "write"}
+
+
+def test_dependabot_bumps_the_pinned_actions() -> None:
+    config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    assert any(u["package-ecosystem"] == "github-actions" for u in config["updates"])
 
 
 def test_session_start_hook_is_wired_and_executable() -> None:

@@ -79,7 +79,9 @@ commit. `vantage build --release` fails while any printed fact is still `needs-c
 ## CI for private projects
 
 The engine's workflows build the demo. For client projects, copy `.github/workflows/release.yml` into
-the private repo and add a step that checks out the engine (pinned to a tag) and runs
-`uv sync --frozen` there with `VANTAGE_PROJECTS=$GITHUB_WORKSPACE`. Builds use the committed masters;
+the private repo and add a step to its `build` job that checks out the engine (pinned to a release
+commit SHA, `persist-credentials: false`) and runs `uv sync --frozen` there with
+`VANTAGE_PROJECTS=$GITHUB_WORKSPACE`. Keep the split: only `publish` holds `contents: write`, and it
+checks out nothing and runs no project code. Builds use the committed masters;
 no footage is needed. Never deploy a client story with GitHub Pages: Pages sites are public even
 from private repositories on most plans.
