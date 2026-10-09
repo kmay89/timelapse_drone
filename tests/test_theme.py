@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -124,15 +125,39 @@ def test_client_fonts_numeric_face_and_light_theme(tmp_path: Path):
     assert '--v-font-display:"Brand Serif", Georgia, serif' in theme.css
     assert "--v-display-features:'ss01' 1" in theme.css
     assert '--v-font-numeric:"Public Sans"' in theme.css
+    regular = f"Brand-Regular-{hashlib.sha256(b'wOF2').hexdigest()[:8]}.woff2"  # client files: content hash
     assert (
-        'font-family:"Brand Serif";src:url("assets/fonts/Brand-Regular.woff2") format("woff2");font-weight:300 700'
+        f'font-family:"Brand Serif";src:url("assets/fonts/{regular}") format("woff2");font-weight:300 700'
         in theme.css
     )
     assert "Brand-Italic" not in theme.css  # the display face is only used upright
     assert [f.dest.rsplit("/", 1)[1] for f in theme.fonts] == [
-        "Brand-Regular.woff2", "inter-latin-opsz-normal.woff2", "inter-latin-opsz-italic.woff2",
+        regular, "inter-latin-opsz-normal.woff2", "inter-latin-opsz-italic.woff2",
         "public-sans-latin-wght-normal.woff2",
     ]  # fmt: skip
+
+
+def test_client_fonts_with_one_file_name_keep_their_own_url(tmp_path: Path):
+    # display and text from two folders, both "Regular.woff2": one shared dest would mean the last copy
+    # wins in assets/fonts/ and the display face renders in the text font
+    for folder in ("serif", "sans"):
+        (tmp_path / "fonts" / folder).mkdir(parents=True)
+        (tmp_path / "fonts" / folder / "Regular.woff2").write_bytes(f"wOF2 {folder}".encode())
+    brand = BrandKit.model_validate({
+        "name": "Client",
+        "typography": {
+            "display": {"family": "Brand Serif", "files": ["fonts/serif/Regular.woff2"]},
+            "text": {"family": "Brand Sans", "files": ["fonts/sans/Regular.woff2"]},
+        },
+    })  # fmt: skip
+    brand.root = tmp_path
+    theme = theme_css(brand)
+    dests = {f.src.parent.name: f.dest for f in theme.fonts}
+    assert set(dests) == {"serif", "sans"} and dests["serif"] != dests["sans"]
+    assert all(re.fullmatch(r"assets/fonts/Regular-[0-9a-f]{8}\.woff2", d) for d in dests.values())
+    urls = dict(re.findall(r'font-family:"([^"]+)";src:url\("([^"]+)"\)', theme.css))
+    assert urls == {"Brand Serif": dests["serif"], "Brand Sans": dests["sans"]}
+    assert theme_css(brand).css == theme.css  # deterministic: the name follows the bytes
 
 
 def test_unknown_bundled_font_is_an_error():

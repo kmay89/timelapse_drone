@@ -9,6 +9,7 @@ sRGB gamut), e.g. `--v-accent-on-night` / `--v-accent-on-paper`. Chapters switch
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -225,6 +226,14 @@ def _stack(spec: FontSpec) -> str:
     return f"{_family(spec.family)}, {fallback}"
 
 
+def _font_dest(src: Path, prefix: str) -> str:
+    """A face file's site path. Bundled names are unique; a client file's name gets a content hash,
+    so `serif/Regular.woff2` and `sans/Regular.woff2` don't overwrite each other in one folder."""
+    if src.is_relative_to(_FONTS_DIR):
+        return prefix + src.name
+    return f"{prefix}{src.stem}-{hashlib.sha256(src.read_bytes()).hexdigest()[:8]}{src.suffix}"
+
+
 def _font_face(face: _Face, url: str) -> str:
     rules = [
         f"font-family:{_family(face.family)}",
@@ -297,7 +306,8 @@ def theme_css(brand: BrandKit, *, font_prefix: str = "assets/fonts/", italic: bo
     for spec, styles in roles:
         for face in _faces(spec, styles, brand):
             faces.setdefault((face.family, face.src), face)
-    fonts = list({f.src: FontAsset(f.src, font_prefix + f.src.name) for f in faces.values()}.values())
+    dests = {f.src: _font_dest(f.src, font_prefix) for f in faces.values()}
+    fonts = [FontAsset(src, dest) for src, dest in dests.items()]
     decls = {f"--v-{name}": value for name, value in colors.items()}
     decls |= {
         "--v-night-rgb": _rgb_triplet(colors["night"]),
@@ -312,5 +322,5 @@ def theme_css(brand: BrandKit, *, font_prefix: str = "assets/fonts/", italic: bo
         "color-scheme": "light" if brand.theme == "light" else "dark",
     }
     root = ":root{" + ";".join(f"{k}:{v}" for k, v in decls.items()) + "}"
-    css = "\n".join([root, *(_font_face(face, font_prefix + face.src.name) for face in faces.values())])
+    css = "\n".join([root, *(_font_face(face, dests[face.src]) for face in faces.values())])
     return Theme(css=css + "\n", fonts=fonts, colors=colors)

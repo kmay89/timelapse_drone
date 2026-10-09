@@ -227,7 +227,7 @@ dist/<slug>/site/
   assets/img/<vantage>/<date>-<w>.<avif|webp|jpg>
   assets/video/<chapter>.<mp4>   (h264 + hevc)
   assets/brand/…                 logos (SVGs sanitized, rasters re-encoded bare, see below)
-  assets/fonts/…                 woff2 actually used
+  assets/fonts/…                 woff2 actually used (bundled: own name; client: <stem>-<sha256[:8]>.woff2)
   share.jpg (1200×630)  icon-192.png  icon-512.png  apple-touch-icon.png
   manifest.webmanifest  sw.js
 ```
