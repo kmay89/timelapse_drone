@@ -1,4 +1,5 @@
 // Adversarial checks for the runtime (dev loop, not CI): the cases a happy-path walk-through misses.
+// Written against the demo story (its chapter ids), like interact.mjs.
 //   node web-tests/dev/adversarial.mjs <served-url> <outdir>
 // Needs ffmpeg with libsvtav1: this Chromium has no H.264/HEVC decoder, so the story's MP4s are
 // answered with a tiny AV1 clip to exercise real playback.
