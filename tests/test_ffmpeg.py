@@ -37,7 +37,7 @@ sys.stderr.flush()
 if sys.argv[-1] == "-":  # iter_frames: decode to raw frames on stdout
     sys.stdout.buffer.write(bytes({frame_bytes}) * int(os.environ.get("FAKE_FRAMES", "0")))
     sys.stdout.flush()
-else:  # FrameWriter: swallow raw frames from stdin
+elif not os.environ.get("FAKE_SKIP_STDIN"):  # FrameWriter: swallow raw frames from stdin
     sys.stdin.buffer.read()
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 """
@@ -148,3 +148,35 @@ def test_frame_writer_reports_stderr_tail(
         _within(encode)
     assert len(str(err.value)) < 4200  # only the tail of a megabyte of log
     assert os.fspath(tmp_path / "out.mp4") in str(err.value)
+
+
+def test_frame_writer_reports_why_ffmpeg_quit_mid_encode(tmp_path: Path) -> None:
+    """ffmpeg that quits while frames are still coming (bad filter, full disk) is reported with its
+    own reason, not as the '[Errno 32] Broken pipe' the next write hits."""
+
+    def encode() -> None:
+        out = tmp_path / "out.mp4"
+        with ffmpeg.FrameWriter(out, W, H, fps=10, preset="ultrafast", extra=["-vf", "no_such_filter"]) as w:
+            for _ in range(400):  # ~3.7 MB of frames: far more than stdin's pipe holds
+                w.write(np.zeros((H, W, 3), np.uint8))
+
+    with pytest.raises(ffmpeg.FFmpegError, match=r"(?s)encode failed \(\d+\) for .*out\.mp4.*no_such_filter"):
+        _within(encode)
+
+
+def test_frame_writer_reports_why_ffmpeg_quit_before_flush(
+    fake_ffmpeg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A small last frame still buffered in stdin is flushed on close into an ffmpeg that already
+    quit; that is reported with ffmpeg's stderr too, not as a broken pipe."""
+    monkeypatch.setenv("FAKE_EXIT", "1")
+    monkeypatch.setenv("FAKE_SKIP_STDIN", "1")  # rejects its input without reading it
+
+    def encode() -> None:
+        with ffmpeg.FrameWriter(tmp_path / "out.mp4", 8, 8, fps=10) as writer:
+            writer.write(np.zeros((8, 8, 3), np.uint8))  # 192 bytes: stays in the stdin buffer
+            assert writer.proc is not None
+            writer.proc.wait()
+
+    with pytest.raises(ffmpeg.FFmpegError, match=r"(?s)encode failed \(1\).*Invalid data found"):
+        _within(encode)

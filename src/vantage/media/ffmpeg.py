@@ -6,6 +6,7 @@ builds ffmpeg command lines by hand.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import subprocess
@@ -287,12 +288,20 @@ class FrameWriter:
         if frame.shape[:2] != (self.height, self.width):
             raise ValueError(f"frame {frame.shape[:2]} != {(self.height, self.width)}")
         assert self.proc and self.proc.stdin
-        self.proc.stdin.write(np.ascontiguousarray(frame, dtype=np.uint8).tobytes())
+        try:
+            self.proc.stdin.write(np.ascontiguousarray(frame, dtype=np.uint8).tobytes())
+        except BrokenPipeError:  # ffmpeg quit early: say why, not "[Errno 32] Broken pipe"
+            raise self._finish() or FFmpegError(f"ffmpeg stopped reading frames for {self.out}") from None
+
+    def _finish(self) -> FFmpegError | None:
+        """Close stdin (flushing buffered frames) and wait for ffmpeg; the error to raise if it failed."""
+        assert self.proc and self.proc.stdin and self._stderr
+        with contextlib.suppress(BrokenPipeError):  # the flush hit an ffmpeg that already quit
+            self.proc.stdin.close()
+        code, err = self.proc.wait(), self._stderr.text()
+        return FFmpegError(f"ffmpeg encode failed ({code}) for {self.out}:\n{err}") if code else None
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        assert self.proc and self.proc.stdin and self._stderr
-        self.proc.stdin.close()
-        code = self.proc.wait()
-        err = self._stderr.text()
-        if exc_type is None and code != 0:
-            raise FFmpegError(f"ffmpeg encode failed ({code}) for {self.out}:\n{err}")
+        error = self._finish()
+        if exc_type is None and error:
+            raise error
