@@ -1,6 +1,7 @@
 {% from "macros.html" import attrs, head %}
 {% set paper = ch.surface == "paper" %}
 {% set dates = vantages.values()|map(attribute="captures")|sum(start=[])|map(attribute="date")|unique|sort %}
+{% include "intro.html" %}
 <section {{ attrs(ch, index) }}>
 <div class="v-flow">
 {{ head(ch, "v-wide") }}

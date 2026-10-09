@@ -2,8 +2,8 @@
 
 `build_site` resolves capture references against masters/index.json, renders markdown (raw
 HTML disabled) with `{fact:id}` notes, encodes responsive images and video clips, writes the
-theme's fonts, brand logos, share card, icons, web manifest and service worker, and renders
-index.html (docs/ARCHITECTURE.md: "StoryJSON", "Site output layout").
+theme's fonts, brand logos (SVGs sanitized on the way: `sanitize_svg`), share card, icons, web manifest
+and service worker, and renders index.html (docs/ARCHITECTURE.md: "StoryJSON", "Site output layout").
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from xml.parsers import expat
 
 from markdown_it import MarkdownIt
 
@@ -47,7 +49,7 @@ from vantage.config import (
 from vantage.media import ffmpeg
 from vantage.models import MastersIndex
 from vantage.paths import RUNTIME_DIR
-from vantage.site.facts import FactNotes, check_release
+from vantage.site.facts import BRAND_TEXT, FactNotes, check_release
 from vantage.site.images import CardText, ImageSpec, app_icon, encode_images, fast_mode, initials, share_card
 from vantage.site.render import MONTHS, capture_label, render_page
 from vantage.site.theme import font_file, theme_css
@@ -58,6 +60,20 @@ _CLIP_VERSION = 1
 _SW_CONFIG = re.compile(r"/\*@config\*/.*?/\*@end\*/", re.S)
 _LINK_SCHEMES = {"", "http", "https", "mailto", "tel"}
 _LOGO_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"}
+# SVG elements that run code or embed HTML, and the URL attributes whose scheme is checked.
+_SVG_DROP = {"script", "foreignobject", "handler", "iframe", "embed", "object"}
+_SVG_ANIMATE = {"set", "animate"}
+_SVG_URL_ATTRS = {"href", "src", "action", "formaction"}
+_SCRIPT_SCHEMES = {"javascript", "vbscript", "livescript"}
+_SVG_NS = "http://www.w3.org/2000/svg"
+_XHTML_NS = "http://www.w3.org/1999/xhtml"
+_XML_PREFIXES = {
+    _SVG_NS: "",
+    "http://www.w3.org/1999/xlink": "xlink",
+    "http://www.w3.org/XML/1998/namespace": "xml",
+}
+_SVG_MAX_DEPTH = 200  # a logo is a few levels deep; this keeps the recursive serializer safe
+_CONTROL = re.compile(r"[\x00-\x20\x7f]+")
 
 
 class ReleaseError(ValueError):
@@ -139,6 +155,141 @@ def inside(path: Path, root: Path, what: str) -> Path:
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"{what} {path} is outside {root}; keep the files it names in that folder")
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Brand SVGs
+# --------------------------------------------------------------------------- #
+
+
+def _local(name: str) -> str:
+    return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
+
+
+def _scheme(value: str) -> str:
+    """The URL scheme a browser would see: whitespace and control characters inside it are ignored."""
+    head = _CONTROL.sub("", value).lower()
+    return head.split(":", 1)[0] if ":" in head.split("/", 1)[0] else ""
+
+
+def _unsafe_url(value: str) -> bool:
+    scheme = _scheme(value)
+    if scheme == "data":
+        return not _CONTROL.sub("", value).lower().startswith("data:image/")
+    return scheme in _SCRIPT_SCHEMES
+
+
+def _refuse_declarations(data: bytes, what: str) -> None:
+    """Refuse entity declarations and DOCTYPE internal subsets before ElementTree sees the file.
+
+    A plain `<!DOCTYPE svg PUBLIC …>` (common in design-tool exports) is allowed: no DTD is fetched and
+    re-serializing drops it. Entities are where billion-laughs and external-entity tricks live.
+    """
+    reason: list[str] = []
+    depth = [0]
+
+    def refuse(why: str) -> None:
+        reason.append(why)
+        raise ValueError(why)
+
+    def start(*_: object) -> None:
+        depth[0] += 1
+        if depth[0] > _SVG_MAX_DEPTH:
+            refuse(f"elements nested more than {_SVG_MAX_DEPTH} deep")
+
+    def end(*_: object) -> None:
+        depth[0] -= 1
+
+    parser = expat.ParserCreate()
+    parser.StartElementHandler, parser.EndElementHandler = start, end
+    parser.StartDoctypeDeclHandler = lambda _n, _s, _p, internal: (
+        internal and refuse("a DOCTYPE internal subset")
+    )
+    parser.EntityDeclHandler = lambda *_: refuse("an entity declaration")
+    parser.UnparsedEntityDeclHandler = lambda *_: refuse("an entity declaration")
+    parser.ExternalEntityRefHandler = lambda *_: refuse("an external entity")
+    try:
+        parser.Parse(data, True)
+    except (ValueError, expat.ExpatError) as exc:
+        detail = f"it has {reason[0]}" if reason else f"it is not well-formed XML ({exc})"
+        raise ValueError(
+            f"{what}: refusing to publish this SVG: {detail}; re-export it as plain SVG"
+        ) from None
+
+
+def sanitize_svg(data: bytes, what: str = "SVG") -> tuple[bytes, list[str]]:
+    """A copy of an SVG without anything that can run code when the file is opened on its own.
+
+    Logos are shown through <img> (where SVG never runs script), but the copy in assets/brand/ can also
+    be opened directly, on the story's own origin. So this drops <script>, <foreignObject> and any
+    XHTML element, event-handler attributes (on*), javascript: and non-image data: URLs, <set>/<animate>
+    that rewrite links or handlers, comments and processing instructions (xml-stylesheet). Raises
+    ValueError for entity declarations, DOCTYPE internal subsets and roots other than an SVG <svg>.
+    Returns the bytes and what was removed.
+    """
+    _refuse_declarations(data, what)
+    root = ET.fromstring(data)  # comments and processing instructions are not kept
+    if root.tag != f"{{{_SVG_NS}}}svg":
+        raise ValueError(f'{what}: not an SVG document (the root must be <svg xmlns="{_SVG_NS}">)')
+    removed: list[str] = []
+    parents = [root]
+    while parents:  # depth-first; a dropped element's subtree is not visited (or reported)
+        parent = parents.pop()
+        for child in list(parent):
+            name, target = _local(child.tag), _local(child.get("attributeName", ""))
+            animates_code = name in _SVG_ANIMATE and (target in _SVG_URL_ATTRS or target.startswith("on"))
+            if name in _SVG_DROP or child.tag.startswith(f"{{{_XHTML_NS}}}") or animates_code:
+                parent.remove(child)
+                removed.append(f"<{name}>")
+            else:
+                parents.append(child)
+    for el in root.iter():
+        for key, value in list(el.attrib.items()):
+            name, scheme = _local(key), _scheme(value)
+            if name.startswith("on"):
+                removed.append(f"{name}=…")
+            elif (name in _SVG_URL_ATTRS and _unsafe_url(value)) or scheme in _SCRIPT_SCHEMES:
+                removed.append(f"{name}={scheme}:…")
+            else:
+                continue
+            del el.attrib[key]
+    return _xml_bytes(root), removed
+
+
+def _xml_bytes(root: ET.Element) -> bytes:
+    """Serialize with SVG as the default namespace and the usual xlink/xml prefixes (ElementTree would
+    write ns0:svg). Attributes in the SVG namespace itself are not SVG attributes and are dropped."""
+    prefixes = dict(_XML_PREFIXES)
+    used: dict[str, str] = {}
+
+    def qname(name: str) -> str:
+        if not name.startswith("{"):
+            return name
+        uri, local = name[1:].split("}", 1)
+        prefix = used[uri] = prefixes.setdefault(uri, f"ns{len(prefixes) - 2}")
+        return f"{prefix}:{local}" if prefix else local
+
+    def attr(value: str) -> str:
+        return html.escape(value).replace("\t", "&#9;").replace("\n", "&#10;").replace("\r", "&#13;")
+
+    def walk(el: ET.Element) -> str:
+        tag = qname(el.tag)
+        attrs = "".join(
+            f' {qname(k)}="{attr(v)}"' for k, v in el.attrib.items() if not k.startswith(f"{{{_SVG_NS}}}")
+        )
+        if el is root:
+            attrs = (
+                "".join(f' xmlns{":" * bool(p)}{p}="{uri}"' for uri, p in used.items() if p != "xml") + attrs
+            )
+        inner = html.escape(el.text or "", quote=False) + "".join(walk(child) for child in el)
+        tail = html.escape(el.tail or "", quote=False) if el is not root else ""
+        return f"<{tag}{attrs}>{inner}</{tag}>{tail}" if inner else f"<{tag}{attrs}/>{tail}"
+
+    for el in root.iter():  # every namespace in use, so the root can declare them all
+        qname(el.tag)
+        for key in el.attrib:
+            qname(key)
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n{walk(root)}\n'.encode()
 
 
 # --------------------------------------------------------------------------- #
@@ -277,6 +428,11 @@ def _generated_at() -> str:
     return when.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _camel(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(word.capitalize() for word in rest)
+
+
 def _dest(*parts: str) -> str:
     return "/".join(re.sub(r"[^A-Za-z0-9._-]+", "-", p).strip("-") or "x" for p in parts)
 
@@ -371,7 +527,13 @@ class StoryBuilder:
         url = "assets/brand/" + "/".join(_dest(p) for p in name.split("/"))
         target = self.site_dir / url
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
+        if path.suffix.lower() == ".svg":
+            data, removed = sanitize_svg(path.read_bytes(), f"brand.yaml: logo {rel!r}")
+            if removed:
+                log.warn(f"brand.yaml: logo {rel!r}: removed {', '.join(sorted(set(removed)))}")
+            target.write_bytes(data)
+        else:
+            shutil.copyfile(path, target)
         return url
 
     # -- references ---------------------------------------------------------- #
@@ -577,7 +739,7 @@ class StoryBuilder:
                           "logo": self.brand_file(p.logo), "logoOnDark": self.brand_file(p.logo_on_dark)})
                 for p in b.partners
             ],
-            "creditLine": b.credit_line, "copyright": b.copyright, "disclaimer": b.disclaimer,
+            **{_camel(key): self.plain(getattr(b, key)) for key in BRAND_TEXT},
         })  # fmt: skip
 
     def build(self) -> dict[str, Any]:

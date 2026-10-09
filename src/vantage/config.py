@@ -200,7 +200,7 @@ class ProjectConfig(Model):
     title: str
     subtitle: str | None = None
     kicker: str | None = Field(
-        None, description="Small line above the title, e.g. 'Aurora, Ohio · 2025–2026'."
+        None, description="Small line above the title, e.g. 'Riverside, Ohio · 2025–2026'."
     )
     dek: str | None = Field(None, description="One-paragraph standfirst under the title.")
     byline: str | None = None

@@ -1,5 +1,6 @@
 {% from "macros.html" import attrs, head %}
 {% set status_label = {"done": "Complete", "in-progress": "Under way", "planned": "Planned"} %}
+{% include "intro.html" %}
 <section {{ attrs(ch, index) }}>
 <div class="v-flow">
 {{ head(ch) }}

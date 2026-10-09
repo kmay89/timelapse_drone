@@ -3,6 +3,10 @@
 {% set img = v.captures[ch.capture].img if v else (ch.video.poster if ch.video else none) %}
 {% set focus = v.portraitFocus if v and v.portraitFocus else none %}
 {% set logo = brand.logos.onDark or brand.logos.primary if img else brand.logos.primary or brand.logos.onDark %}
+{# The opening hero carries the page's <h1>, the brand bar, the story's dates and the standfirst; a later
+   hero is a part opener: an <h2> over its picture. #}
+{% set lead = index == 0 %}
+{% set heading = "h1" if lead else "h2" %}
 <section {{ attrs(ch, index, "" if img else " v-hero--plain") }}>
 <div class="v-hero__stage"{% if focus %} style="--fx:{{ focus[0] * 100 }}%;--fy:{{ focus[1] * 100 }}%"{% endif %}>
 {% if img %}
@@ -17,6 +21,7 @@
 {% endif %}
 </figure>
 {% endif %}
+{% if lead %}
 <div class="v-hero__top">
 {% if logo %}
 <img class="v-logo" src="{{ logo }}" alt="{{ brand.alt }}">
@@ -27,14 +32,16 @@
 <span class="v-badge">Preview</span>
 {% endif %}
 </div>
+{% endif %}
 <header class="v-hero__head">
 {% if ch.kicker %}
 <p class="v-kicker">{{ ch.kicker }}</p>
 {% endif %}
-<h1 class="v-display" id="{{ ch.id }}-title">{{ ch.title }}</h1>
+<{{ heading }} class="v-display" id="{{ ch.id }}-title">{{ ch.title }}</{{ heading }}>
 {% if ch.html %}
 <div class="v-hero__line v-dek">{{ ch.html|safe }}</div>
 {% endif %}
+{% if lead %}
 <p class="v-hero__meta">
 {% if meta.dateRange %}
 <span class="v-label"><time datetime="{{ meta.dateRange.start }}">{{ meta.dateRange.start|month }}</time> – <time datetime="{{ meta.dateRange.end }}">{{ meta.dateRange.end|month }}</time></span>
@@ -46,25 +53,15 @@
 <span class="v-label">Simulated imagery</span>
 {% endif %}
 </p>
+{% endif %}
 </header>
+{% if lead %}
 <span class="v-hero__cue" aria-hidden="true"></span>
+{% endif %}
 </div>
-{% if meta.dekHtml or meta.byline %}
+{% if lead and (meta.dekHtml or meta.byline) %}
 <div class="v-standfirst v-flow">
-{% if meta.dekHtml %}
-<p class="v-dek">{{ meta.dekHtml|safe }}</p>
-{% endif %}
-<p class="v-meta">
-{% if meta.byline %}
-<span>{{ meta.byline }}</span>
-{% endif %}
-{% if meta.dateRange %}
-<span>Latest flight <time datetime="{{ meta.dateRange.end }}">{{ meta.dateRange.end|date }}</time></span>
-{% endif %}
-</p>
-{% if meta.simulated %}
-<p class="v-disclosure">The aerial imagery in this story is simulated: a demonstration of the format, not photographs of a real place.</p>
-{% endif %}
+{% include "standfirst.html" %}
 </div>
 {% endif %}
 </section>

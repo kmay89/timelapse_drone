@@ -3,24 +3,40 @@
  * Hosted and offline editions reference site-relative paths. Single-file editions carry each asset once
  * (ARCHITECTURE.md "Single-file assets"): an element with data-asset + src lends its data: URI, and a
  * <script type="application/octet-stream" data-asset> becomes a blob: URL, created lazily and revoked
- * when its last user releases it. */
+ * when its last user releases it. The base64 is decoded by fetch() of a data: URL, off the main thread
+ * (a chunked atob() that yields between chunks is the fallback), so a large film never stalls a frame. */
 
 const embedded = new Map($$("[data-asset]").map((el) => [el.dataset.asset, el]));
-/** @type {Map<string, {url: string, refs: number}>} */
+/** @type {Map<string, {url: Promise<string>, refs: number}>} */
 const blobs = new Map();
 
-/** URL for a site-relative asset path; pair every call with releaseAsset(path). */
+/** Bytes of a base64 string, 1 MiB of text per task. */
+async function unbase64(/** @type {string} */ b64, /** @type {string} */ type) {
+  const parts = [];
+  for (let i = 0; i < b64.length; i += 1 << 20) {
+    const bin = atob(b64.slice(i, i + (1 << 20)));
+    const bytes = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+    parts.push(bytes);
+    await new Promise((r) => setTimeout(r));
+  }
+  return new Blob(parts, { type });
+}
+
+/** URL (a promise) for a site-relative asset path; pair every call with releaseAsset(path). */
 function assetURL(/** @type {string} */ path) {
   const el = embedded.get(path);
-  if (!el) return path;
-  if (el.tagName !== "SCRIPT") return el.getAttribute("src");
+  if (!el) return Promise.resolve(path);
+  if (el.tagName !== "SCRIPT") return Promise.resolve(/** @type {string} */ (el.getAttribute("src")));
   let blob = blobs.get(path);
   if (!blob) {
-    const bin = atob(el.textContent.trim());
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    blob = { url: URL.createObjectURL(new Blob([bytes], { type: el.dataset.type })), refs: 0 };
-    blobs.set(path, blob);
+    const type = el.dataset.type;
+    const b64 = el.textContent.trim();
+    const url = fetch(`data:${type};base64,${b64}`)
+      .then((r) => r.blob())
+      .catch(() => unbase64(b64, type))
+      .then((b) => URL.createObjectURL(b));
+    blobs.set(path, (blob = { url, refs: 0 }));
   }
   blob.refs++;
   return blob.url;
@@ -29,7 +45,7 @@ function assetURL(/** @type {string} */ path) {
 function releaseAsset(/** @type {string} */ path) {
   const blob = blobs.get(path);
   if (blob && --blob.refs <= 0) {
-    URL.revokeObjectURL(blob.url);
+    blob.url.then((u) => URL.revokeObjectURL(u));
     blobs.delete(path);
   }
 }
@@ -66,8 +82,8 @@ async function decodeImg(/** @type {any} */ img, /** @type {number} */ need) {
   const path = pickSrc(img, need);
   const el = new Image();
   el.decoding = "async";
-  el.src = assetURL(path);
   try {
+    el.src = await assetURL(path);
     await el.decode();
   } finally {
     releaseAsset(path);

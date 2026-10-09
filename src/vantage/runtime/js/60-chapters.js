@@ -48,8 +48,10 @@ function openCapture(/** @type {any} */ v, /** @type {number} */ i, /** @type {H
   const path = pickSrc(c.img, Math.min(innerWidth, 900) * Math.min(devicePixelRatio || 1, 2));
   const img = h("img", { class: "v-dlg__img", alt: c.img.alt, width: c.img.w, height: c.img.h });
   img.style.backgroundColor = c.img.color;
-  img.src = assetURL(path);
-  img.decode().catch(() => {}).finally(() => releaseAsset(path));
+  assetURL(path)
+    .then((u) => ((img.src = u), img.decode()))
+    .catch(() => {})
+    .finally(() => releaseAsset(path));
   const ex = explorers.find((x) => x.has(v.id));
   const go = () => {
     closeSheet();
@@ -112,7 +114,8 @@ function gallery(/** @type {HTMLElement} */ sec) {
   mark();
 }
 
-/** VIDEO: plays (muted, inline) while at least half on screen, unless the reader paused it. */
+/** VIDEO: plays (muted, inline) while at least half on screen, unless the reader paused it. A player the
+ * runtime built (single files) gets its blob as it nears the viewport, so its controls work on arrival. */
 function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let el = $("video", sec);
   const media = $(".v-clip .v-media", sec);
@@ -129,12 +132,13 @@ function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     auto = false;
   });
   el.addEventListener("play", () => (userPaused = false));
+  if (built) watchWarm(el, { update() {}, warm: () => loadVideo(el, ch.video) });
+  let seen = false;
   new IntersectionObserver(
     (entries) => {
-      const e = entries[entries.length - 1]; // a fast fling can batch an arrival and a departure
-      if (e.isIntersecting && built) loadVideo(el, ch.video);
-      if (e.isIntersecting && !userPaused && !reduced) tryPlay(el);
-      else if (!e.isIntersecting && !el.paused) {
+      seen = entries[entries.length - 1].isIntersecting; // a fast fling can batch an arrival and a departure
+      if (seen && !userPaused && !reduced) (built ? loadVideo(el, ch.video) : Promise.resolve()).then(() => seen && tryPlay(el));
+      else if (!seen && !el.paused) {
         auto = true;
         el.pause();
       }

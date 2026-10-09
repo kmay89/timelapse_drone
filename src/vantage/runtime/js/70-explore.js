@@ -19,7 +19,9 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const tags = [0, 1].map((k) => h("span", { class: `v-cmp__tag v-label v-cmp__tag--${k ? "a" : "b"}` }));
   const grip = h("div", { class: "v-cmp__grip", role: "slider", tabindex: "0", "aria-label": "Divider", "aria-valuemin": "0", "aria-valuemax": "100" }, [icon("grip")]);
   const handle = h("div", { class: "v-cmp__handle" }, [h("span", { class: "v-cmp__rule" }), grip]);
-  const stage = h("div", { class: "v-x__stage" }, [canvas, h("div", { class: "v-scrim" }), handle, ...tags, reset]);
+  // Blink: press and hold the stage, or this toggle (keyboard and screen readers), to see the before flight.
+  const blinkBtn = h("button", { class: "v-btn v-btn--text", type: "button", "aria-pressed": "false" });
+  const stage = h("div", { class: "v-x__stage" }, [canvas, h("div", { class: "v-scrim" }), handle, ...tags, h("div", { class: "v-cmp__bar" }, [blinkBtn]), reset]);
   const play = h("button", { class: "v-btn v-x__play", type: "button", "aria-label": "Play the flights in order" }, [icon("play")]);
   const input = h("input", { class: "v-x__input", type: "range", min: "0", step: "1", "aria-label": "Flight date" });
   const ticks = h("div", { class: "v-x__ticks", "aria-hidden": "true" });
@@ -56,7 +58,8 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let u = 0; // continuous position in seq (single mode)
   let pick = [0, 0];
   let split = 0.5;
-  let showA = false;
+  let showA = false; // blink: showing the before flight
+  let held = false; // ... because the stage is pressed
   let cx = 0.5;
   let cy = 0.5;
   let z = 1;
@@ -75,6 +78,11 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const redraw = () => {
     dirty = true;
     kick();
+  };
+  const blinkTo = (/** @type {boolean} */ a) => {
+    showA = a;
+    blinkBtn.setAttribute("aria-pressed", String(a));
+    redraw();
   };
 
   function setVantage(/** @type {string} */ id) {
@@ -176,6 +184,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     b.addEventListener("click", () => {
       mode = b.dataset.mode;
       setPlaying(false);
+      blinkTo(false);
       sync();
     }),
   );
@@ -186,6 +195,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     }),
   );
   play.addEventListener("click", () => setPlaying(!playing));
+  blinkBtn.addEventListener("click", () => blinkTo(!showA));
   input.addEventListener("input", () => {
     setPlaying(false);
     u = uForDay(days[0] + +input.value);
@@ -239,7 +249,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       g = { kind: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y), z0: z, anchor: rect(), mid: local({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }) };
     } else if (pts.size === 1) {
       g = { kind: "pending" };
-      if (mode === "blink") holdTimer = window.setTimeout(() => ((showA = true), redraw()), 120);
+      if (mode === "blink") holdTimer = window.setTimeout(() => blinkTo((held = true)), 120);
     }
   });
   stage.addEventListener("pointermove", (/** @type {PointerEvent} */ e) => {
@@ -277,10 +287,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     if (!p) return;
     pts.delete(e.pointerId);
     clearTimeout(holdTimer);
-    if (showA) {
-      showA = false;
-      redraw();
-    }
+    if (held) blinkTo((held = false));
     if (g?.kind === "pending" && e.type === "pointerup") {
       const [x, y] = local(p);
       if (e.timeStamp - lastTap.t < 320 && Math.hypot(x - lastTap.x, y - lastTap.y) < 30) {
@@ -329,6 +336,8 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       grip.setAttribute("aria-valuenow", String(Math.round(split * 100)));
       grip.setAttribute("aria-valuetext", `${Math.round((1 - split) * 100)}% ${caps[pick[1]].label}, ${Math.round(split * 100)}% ${caps[pick[0]].label}`);
     }
+    const blinkText = `Show ${caps[pick[0]].label}`;
+    if (blinkBtn.textContent !== blinkText) blinkBtn.textContent = blinkText;
     tags.forEach((t, k) => {
       t.replaceChildren(h("b", { text: k ? "After" : "Before" }), caps[pick[k]].label);
       t.classList.toggle("v-on", mode === "curtain" || (mode === "blink" && showA === !k));

@@ -5,6 +5,8 @@ and, in markdown, a superscript note marker linking to the numbered source list 
 Notes are numbered in first-use (reading) order and facts that are never used are ignored.
 Markdown is rendered with raw HTML disabled, so facts are marked with private-use sentinels
 before rendering (`FactNotes.mark`) and wrapped in their HTML afterwards (`FactNotes.finish`).
+Tokens work in project.yaml and story.yaml text and in brand.yaml's `BRAND_TEXT` fields; `check_facts`
+and `check_release` scan all three files.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from vantage.config import FACT_TOKEN_RE, Fact, Project
 _OPEN, _MID, _CLOSE = "", "", ""
 _SENTINELS = re.compile("[-]")
 _MARKED = re.compile(f"{_OPEN}(\\d+){_MID}(.*?){_CLOSE}", re.S)
+BRAND_TEXT = ("credit_line", "disclaimer", "copyright")  # brand.yaml fields whose {fact:…} tokens resolve
 
 
 class FactError(ValueError):
@@ -81,6 +84,7 @@ class FactNotes:
                 "text": self.facts[fact_id].text,
                 "sources": list(self.facts[fact_id].sources),
                 "status": self.facts[fact_id].status,
+                "releasable": self.facts[fact_id].releasable,
             }
             for i, fact_id in enumerate(self.order, 1)
         ]
@@ -110,24 +114,38 @@ def _reason(fact: Fact) -> str:
     return f"has status {fact.status!r}"
 
 
+def fact_uses(project: Project) -> Iterator[tuple[str, str]]:
+    """(where, fact id) for the first use of each `{fact:id}` in project.yaml, story.yaml and brand.yaml."""
+    seen: set[str] = set()
+    texts = [
+        *_strings(project.config.model_dump(mode="json", by_alias=True), "project.yaml"),
+        *_strings(project.story.model_dump(mode="json", by_alias=True), "story.yaml"),
+        *_strings(project.brand.model_dump(mode="json", by_alias=True), "brand.yaml"),
+    ]
+    for where, text in texts:
+        for fact_id in FACT_TOKEN_RE.findall(text):
+            if fact_id not in seen:
+                seen.add(fact_id)
+                yield where, fact_id
+
+
+def check_facts(project: Project) -> tuple[list[str], list[str]]:
+    """(tokens naming a fact facts.yaml lacks, facts in use that are not releasable yet)."""
+    unknown: list[str] = []
+    unreleasable: list[str] = []
+    for where, fact_id in fact_uses(project):
+        fact = project.facts.facts.get(fact_id)
+        if fact is None:
+            unknown.append(f"{where}: unknown fact {{fact:{fact_id}}} (not in facts.yaml)")
+        elif not fact.releasable:
+            unreleasable.append(f"{where}: fact {fact_id!r} {_reason(fact)}")
+    return unknown, unreleasable
+
+
 def check_release(project: Project) -> list[str]:
     """Why this project cannot ship as a release build (empty when it can)."""
     problems = (
         ["project.yaml has draft: true (set it to false for the release)"] if project.config.draft else []
     )
-    seen: set[str] = set()
-    texts = [
-        *_strings(project.config.model_dump(mode="json", by_alias=True), "project.yaml"),
-        *_strings(project.story.model_dump(mode="json", by_alias=True), "story.yaml"),
-    ]
-    for where, text in texts:
-        for fact_id in FACT_TOKEN_RE.findall(text):
-            if fact_id in seen:
-                continue
-            seen.add(fact_id)
-            fact = project.facts.facts.get(fact_id)
-            if fact is None:
-                problems.append(f"{where}: unknown fact {{fact:{fact_id}}} (not in facts.yaml)")
-            elif not fact.releasable:
-                problems.append(f"{where}: fact {fact_id!r} {_reason(fact)}")
-    return problems
+    unknown, unreleasable = check_facts(project)
+    return [*problems, *unknown, *unreleasable]

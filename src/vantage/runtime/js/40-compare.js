@@ -61,6 +61,8 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let valueNow = -1;
   let tagW = [0, 0];
   let top = 0; // pins hide above this line (the date tags)
+  let onScreen = false;
+  let blinkLoop = () => {};
   const after = layers[1].el;
 
   /* Curtain: handle (1px rule + 44pt grip, a role=slider), dates riding on either side. */
@@ -114,18 +116,27 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         if (held) show((held = false));
       });
     toggle.addEventListener("click", () => show(!before));
-    auto.addEventListener("click", () => {
-      blinking = !blinking;
-      auto.setAttribute("aria-pressed", String(blinking));
-      auto.replaceChildren(icon(blinking ? "pause" : "play"));
+    /* The auto-blink loop runs only while the chapter is on screen and the tab visible (the frame loop
+     * sleeps otherwise); the reader's choice stands, so it picks up again on return. */
+    let looping = false;
+    blinkLoop = () => {
+      if (looping || !blinking || reduced || !onScreen || doc.hidden) return;
+      looping = true;
       let t0 = 0;
       every((now) => {
-        if (!blinking || reduced) return false;
+        if (!blinking || reduced || !onScreen || doc.hidden) return (looping = false);
         t0 = t0 || now;
         const b = Math.floor((now - t0) / 700) % 2 === 1;
         if (b !== before) show(b);
         return true;
       });
+    };
+    doc.addEventListener("visibilitychange", blinkLoop);
+    auto.addEventListener("click", () => {
+      blinking = !blinking;
+      auto.setAttribute("aria-pressed", String(blinking));
+      auto.replaceChildren(icon(blinking ? "pause" : "play"));
+      blinkLoop();
     });
     stage.append(h("div", { class: "v-cmp__bar" }, [toggle, !reduced && auto]), tags[0], tags[1]);
   }
@@ -154,6 +165,11 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     },
     enter() {
       manual = false;
+      onScreen = true;
+      blinkLoop();
+    },
+    leave() {
+      onScreen = false;
     },
     measure: () => pinProgress(track, trackH, H),
     update(p) {

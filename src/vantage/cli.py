@@ -654,7 +654,7 @@ def doctor_checks() -> list[_Check]:
 @_command("new")
 def new_cmd(
     slug: Annotated[
-        str, typer.Argument(help="Project id: lowercase words joined by hyphens, e.g. aurora-park.")
+        str, typer.Argument(help="Project id: lowercase words joined by hyphens, e.g. riverside-park.")
     ],
     title: Annotated[
         str | None, typer.Option("--title", "-t", help="Display title (default: from slug).")

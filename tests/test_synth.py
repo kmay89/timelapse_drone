@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import itertools
 import json
+import os
 import re
 import shutil
 import time
@@ -284,12 +286,65 @@ def test_brand_files_exist_and_are_clean_svg() -> None:
         assert not tags & {"text", "image", "use", "script", "foreignObject"}
 
 
+# sha256 of lowercase words and two-word phrases that must never appear in this public repo (the real
+# client, its site and the people involved). Hashed so the guard does not publish what it guards.
+DENYLIST_SHA256 = frozenset({
+    "c9c5e6dbc91b13c825ee2db27e7f1f7604cfe6b212c780a833d9d07cfd1175fd",
+    "1bd71d4cb4a2f4236f2a9bca2e54bcfb0b6c63eacdb397542d6815f115452d75",
+    "b1c100fe8e3a878f4001f0faec733bc4df3fbf4f1933b804eaee04eebcea72ee",
+    "9b89025ce7a6d932b28f6e15132a70d402f723874a425e9b4c7cc3b179fa66ce",
+    "25064b5df7121a2ed9516867c55ec79063b0286a791139bf35331012557a7813",
+    "ec0d21e4d7b1e9f293845fca49ae1831a534f2f59957216c676609b4ecbbe1ec",
+    "00b41302886b5fd316a6cc0d99d9b8f4683918f7f04933cb5f519eb2f984cc4e",
+    "4eae13f17ca920df9edd66adeecdc0d8c379237a26aa0cf6163b7c9ff5faf9f9",
+    "7aa94415a2c099ea26d09d3c952d8a79a97988103c7bc07411137addd1df751a",
+})  # fmt: skip
+_WORD = re.compile(r"[a-z0-9]+")
+_TEXT_SUFFIXES = {".py", ".md", ".yaml", ".yml", ".toml", ".json", ".mjs", ".js", ".css", ".html", ".svg",
+                  ".txt", ".sh", ".cfg", ".ini"}  # fmt: skip
+_SKIP_DIRS = {".git", ".venv", ".pytest_cache", ".ruff_cache", ".results", "__pycache__", "node_modules",
+              "dist", "work", "footage", "masters"}  # fmt: skip
+
+
+def denied_terms(text: str, hashes: frozenset[str] = DENYLIST_SHA256) -> set[str]:
+    """Words, adjacent pairs ("a b") and joined pairs ("ab") of `text` whose sha256 is in `hashes`."""
+    words = _WORD.findall(text.lower())
+    grams = set(words)
+    grams |= {f"{a} {b}" for a, b in itertools.pairwise(words)}
+    grams |= {a + b for a, b in itertools.pairwise(words)}
+    return {g for g in grams if hashlib.sha256(g.encode()).hexdigest() in hashes}
+
+
+def test_denylist_matches_words_pairs_and_joined_pairs() -> None:
+    fake = frozenset(hashlib.sha256(t.encode()).hexdigest() for t in ("heron", "blue gill", "redwing"))
+    text = "A Heron, a BLUE-gill and a red\nwing; no bluegill pond, no herons."
+    assert denied_terms(text, fake) == {"heron", "blue gill", "redwing"}
+    assert denied_terms("Lakeside Parks Conservancy · Riverside Park", fake) == set()
+    assert len(DENYLIST_SHA256) == 9 and all(re.fullmatch(r"[0-9a-f]{64}", h) for h in DENYLIST_SHA256)
+
+
+def _count(path: Path) -> int:
+    """How many denylisted terms a file holds. Only a count, so a failure never prints a name in CI logs."""
+    return len(denied_terms(path.read_text(encoding="utf-8", errors="replace")))
+
+
 def test_demo_is_fictional() -> None:
-    text = " ".join(
-        p.read_text(encoding="utf-8").lower() for p in DEMO.rglob("*") if p.suffix in {".yaml", ".md", ".svg"}
-    )
-    for name in ("seaworld", "sea world", "geauga", "aurora", "six flags", "cedar fair"):
-        assert name not in text
+    files = sorted(p for p in DEMO.rglob("*") if p.suffix in {".yaml", ".md", ".svg"})
+    assert len(files) >= 5
+    hits = {p.relative_to(DEMO).as_posix(): n for p in files if (n := _count(p))}
+    assert hits == {}, "the demo names the real client (term counts per file)"
+
+
+def test_public_repo_never_names_the_client() -> None:
+    root = repo_root()
+    hits: dict[str, int] = {}
+    for folder, dirs, names in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
+        for name in sorted(names):
+            path = Path(folder) / name
+            if path.suffix in _TEXT_SUFFIXES and (n := _count(path)):
+                hits[path.relative_to(root).as_posix()] = n
+    assert hits == {}, "public files name the real client (term counts per file)"
 
 
 def test_story_matches_generated_footage(footage: tuple[Path, dict]) -> None:

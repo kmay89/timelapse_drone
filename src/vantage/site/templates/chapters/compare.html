@@ -1,5 +1,6 @@
 {% from "macros.html" import attrs, head, pins, legend %}
 {% set v = vantages[ch.vantage] %}
+{% include "intro.html" %}
 <section {{ attrs(ch, index) }} data-vantage="{{ v.id }}" data-mode="{{ ch.mode }}">
 <div class="v-flow">
 {{ head(ch) }}

@@ -1,5 +1,6 @@
 {% from "macros.html" import attrs, head %}
 {% set v = vantages.get(ch.vantage) if ch.vantage else none %}
+{% include "intro.html" %}
 <section {{ attrs(ch, index) }}>
 <div class="v-flow">
 {{ head(ch) }}

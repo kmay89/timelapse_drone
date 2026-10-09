@@ -33,9 +33,9 @@ def _invoke(tmp_path: Path, *args: str) -> object:
 
 @pytest.fixture
 def project_dir(tmp_path: Path) -> Path:
-    result = _invoke(tmp_path, "new", "aurora-park", "--title", "Aurora Park")
+    result = _invoke(tmp_path, "new", "riverside-park", "--title", "Riverside Park")
     assert result.exit_code == 0, result.output
-    return tmp_path / "aurora-park"
+    return tmp_path / "riverside-park"
 
 
 def test_root_help_lists_every_command() -> None:
@@ -55,9 +55,9 @@ def test_command_help(cmd: str) -> None:
 def test_new_creates_a_valid_project(tmp_path: Path, project_dir: Path) -> None:
     project = load_project(project_dir)
     assert (project.slug, project.config.title, project.brand.name) == (
-        "aurora-park",
-        "Aurora Park",
-        "Aurora Park",
+        "riverside-park",
+        "Riverside Park",
+        "Riverside Park",
     )
     assert [v.id for v in project.story.vantages] == ["overview"]
     types_ = [ch.type for ch in project.story.chapters]
@@ -66,16 +66,16 @@ def test_new_creates_a_valid_project(tmp_path: Path, project_dir: Path) -> None:
     assert (project_dir / "footage").is_dir()
     assert "{{" not in "".join(p.read_text() for p in project_dir.rglob("*") if p.is_file())
 
-    again = _invoke(tmp_path, "new", "aurora-park")
+    again = _invoke(tmp_path, "new", "riverside-park")
     assert again.exit_code == 1 and "already exists" in again.output
     bad = _invoke(tmp_path, "new", "Not A Slug")
     assert bad.exit_code == 1 and "invalid slug" in bad.output
 
 
 def test_validate_passes_on_a_new_project(tmp_path: Path, project_dir: Path) -> None:
-    by_slug = _invoke(tmp_path, "validate", "aurora-park")
+    by_slug = _invoke(tmp_path, "validate", "riverside-park")
     assert by_slug.exit_code == 0, by_slug.output
-    assert "aurora-park is valid" in by_slug.output and "TODO markers left" in by_slug.output
+    assert "riverside-park is valid" in by_slug.output and "TODO markers left" in by_slug.output
     by_path = runner.invoke(app, ["validate", str(project_dir)])
     assert by_path.exit_code == 0, by_path.output
 
@@ -93,7 +93,7 @@ def test_validate_reports_cross_check_errors(tmp_path: Path, project_dir: Path) 
     footage.mkdir(parents=True)
     Image.new("RGB", (8, 8)).save(footage / "still.jpg")
 
-    result = _invoke(tmp_path, "validate", "aurora-park")
+    result = _invoke(tmp_path, "validate", "riverside-park")
     assert result.exit_code == 1
     for needle in (
         "logos.primary: missing file",
@@ -107,13 +107,13 @@ def test_validate_reports_cross_check_errors(tmp_path: Path, project_dir: Path) 
 
 def test_schema_errors_are_friendly(tmp_path: Path, project_dir: Path) -> None:
     config = project_dir / "project.yaml"
-    config.write_text(config.read_text().replace("slug: aurora-park", "slug: Aurora Park\nbogus: 1"))
-    result = _invoke(tmp_path, "validate", "aurora-park")
+    config.write_text(config.read_text().replace("slug: riverside-park", "slug: Riverside Park\nbogus: 1"))
+    result = _invoke(tmp_path, "validate", "riverside-park")
     assert result.exit_code == 1
     assert "invalid project.yaml" in result.output and "slug" in result.output and "bogus" in result.output
     assert "Traceback" not in result.output
     config.write_text("slug: [unclosed")
-    assert "YAML syntax error" in _invoke(tmp_path, "validate", "aurora-park").output
+    assert "YAML syntax error" in _invoke(tmp_path, "validate", "riverside-park").output
     missing = _invoke(tmp_path, "validate", "nope")
     assert missing.exit_code == 1 and "no project 'nope'" in missing.output
 
@@ -122,7 +122,7 @@ def test_ingest_command(tmp_path: Path, project_dir: Path) -> None:
     folder = project_dir / "footage" / "2025-06-14"
     folder.mkdir(parents=True)
     Image.effect_noise((64, 48), 40).convert("RGB").save(folder / "DJI_0001.JPG")
-    result = _invoke(tmp_path, "ingest", "aurora-park")
+    result = _invoke(tmp_path, "ingest", "riverside-park")
     assert result.exit_code == 0, result.output
     assert "1 sources over 1 dates, 1 candidates" in result.output
     assert (project_dir / "work" / "catalog.json").is_file()
@@ -168,26 +168,26 @@ def fake_outputs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_all_builds_from_committed_masters(
     tmp_path: Path, project_dir: Path, fake_outputs: list[str]
 ) -> None:
-    no_inputs = _invoke(tmp_path, "all", "aurora-park")
+    no_inputs = _invoke(tmp_path, "all", "riverside-park")
     assert no_inputs.exit_code == 1 and "no masters/index.json" in no_inputs.output
     MastersIndex(vantages={"overview": MastersVantage(name="Overview", width=16, height=9)}).save(
         project_dir / "masters" / "index.json"
     )
-    result = _invoke(tmp_path, "all", "aurora-park")
+    result = _invoke(tmp_path, "all", "riverside-park")
     assert result.exit_code == 0, result.output
     assert fake_outputs == ["build", "film", "package"]
-    dist = tmp_path / "dist" / "aurora-park"
-    for needle in ("building from the committed masters", "single file", "aurora-park-16x9.mp4", "2.0 KB"):
+    dist = tmp_path / "dist" / "riverside-park"
+    for needle in ("building from the committed masters", "single file", "riverside-park-16x9.mp4", "2.0 KB"):
         assert needle in result.output
     assert (dist / "site" / "index.html").is_file()
 
     fake_outputs.clear()
-    assert _invoke(tmp_path, "all", "aurora-park", "--no-film").exit_code == 0
+    assert _invoke(tmp_path, "all", "riverside-park", "--no-film").exit_code == 0
     assert fake_outputs == ["build", "package"]
 
 
 def test_preview_needs_a_built_site(tmp_path: Path, project_dir: Path) -> None:
-    result = _invoke(tmp_path, "preview", "aurora-park")
+    result = _invoke(tmp_path, "preview", "riverside-park")
     assert result.exit_code == 1 and "no built site" in result.output
 
 
