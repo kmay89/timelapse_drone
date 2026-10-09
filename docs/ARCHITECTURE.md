@@ -103,7 +103,7 @@ placeholder logos), a README and an empty `footage/` from `src/vantage/templates
 | `vantage select <project>` | choose best frame per vantage per visit |
 | `vantage align <project>` | register, crop, grade → masters/ + review sheets |
 | `vantage process <project>` | ingest → select → align |
-| `vantage build <project> [--out DIR]` | build the interactive site from masters + YAML |
+| `vantage build <project> [--out DIR]` | build the interactive site from masters + YAML; `--out` replaces only an earlier Vantage build, and refuses any other non-empty folder or one under version control |
 | `vantage film <project>` | render MP4 films |
 | `vantage package <project>` | single-file HTML + offline zip |
 | `vantage all <project>` | process → build → film → package |

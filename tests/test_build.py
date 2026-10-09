@@ -425,12 +425,40 @@ def test_release_gate(tmp_path):
     build_site(load_project(root), tmp_path / "site2", release=True)
 
 
-def test_refuses_to_clobber_a_foreign_folder(tmp_path):
-    out = tmp_path / "docs"
-    out.mkdir()
-    (out / "notes.txt").write_text("mine")
-    with pytest.raises(FileExistsError):
+def _tree(folder: Path) -> list[str]:
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
+
+
+@pytest.mark.parametrize(
+    "index",
+    [
+        None,  # no index.html at all
+        "<!doctype html><title>My website</title>",  # someone else's site
+        '<!doctype html><script id="vantage-story" type="application/json">{}</script>',  # a build, under git
+    ],
+)
+def test_refuses_to_clobber_a_foreign_folder(tmp_path, index):
+    """--out may point at any folder: only an earlier Vantage build, outside version control, is replaced."""
+    out = tmp_path / "website"
+    (out / ".git").mkdir(parents=True)
+    (out / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (out / "blog").mkdir()
+    (out / "blog" / "post.html").write_text("<p>mine</p>")
+    if index is not None:
+        (out / "index.html").write_text(index)
+    before = _tree(out)
+    with pytest.raises(FileExistsError, match="empty folder"):
         build_site(load_project(make_project(tmp_path / "p")), out)
+    assert _tree(out) == before
+
+
+def test_rebuild_replaces_an_earlier_build(tmp_path):
+    root = make_project(tmp_path / "p")
+    site = tmp_path / "site"
+    build_site(load_project(root), site)
+    (site / "stale.jpg").write_bytes(b"old")
+    build_site(load_project(root), site)
+    assert not (site / "stale.jpg").exists() and (site / "index.html").is_file()
 
 
 # --------------------------------------------------------------------------- #

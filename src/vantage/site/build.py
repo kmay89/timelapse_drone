@@ -819,10 +819,25 @@ class StoryBuilder:
 # --------------------------------------------------------------------------- #
 
 
+_STORY_MARKER = b'<script id="vantage-story"'
+_VCS_DIRS = (".git", ".hg", ".svn")
+
+
 def _prepare(out_dir: Path) -> None:
+    """Empty out_dir for a fresh build. `--out` can name any folder, so a non-empty one is wiped only
+    when it is an earlier Vantage build (index.html carries the StoryJSON) outside version control."""
     if out_dir.exists() and any(out_dir.iterdir()):
-        if not (out_dir / "index.html").is_file():
-            raise FileExistsError(f"refusing to replace {out_dir}: it is not empty and has no index.html")
+        index = out_dir / "index.html"
+        vcs = [name for name in _VCS_DIRS if (out_dir / name).exists()]
+        reason = ""
+        if not index.is_file() or _STORY_MARKER not in index.read_bytes():
+            reason = "it is not empty and is not an earlier Vantage build"
+        elif vcs:
+            reason = f"it is under version control ({vcs[0]})"
+        if reason:
+            raise FileExistsError(
+                f"refusing to replace {out_dir}: {reason}; build into an empty folder and copy the files over"
+            )
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
