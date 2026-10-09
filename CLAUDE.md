@@ -38,9 +38,9 @@ npm run test:web:local                     # Playwright, iPhone + desktop Chromi
 
 - Web tests need a built story (`vantage demo --fast --no-film`, or `VANTAGE_STORY=<slug>` for another
   build in `dist/`). WebKit projects run in CI only; locally use the `*-chromium` projects.
-- Checkpoint screenshots land in `web-tests/.results/test-results/shots/<project>/*.png`. Open them with
+- Checkpoint screenshots land in `web-tests/.results/test-results/shots/<project>/*.jpg`. Open them with
   the Read tool and look before claiming anything visual works. No golden-image diffs.
-- Visual change? Screenshot iPhone (393×852) and desktop, JS on and JS off (`nojs-lite-*` is the
+- Visual change? Look at iPhone (393 pt wide) and desktop shots, JS on and off (`nojs-lite-*` is the
   Quick Look stand-in).
 
 ## Invariants

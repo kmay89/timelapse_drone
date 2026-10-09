@@ -124,12 +124,12 @@ export const effectiveOpacity = (locator) =>
     return o;
   });
 
-/** Screenshot into .results/shots/<project>/<name>.png and attach it to the test report. */
+/** Screenshot into .results/test-results/shots/<project>/<name>.jpg and attach it to the report. */
 export async function checkpoint(page, testInfo, name) {
-  const file = path.join(testInfo.project.outputDir, "shots", testInfo.project.name, `${name}.png`);
+  const file = path.join(testInfo.project.outputDir, "shots", testInfo.project.name, `${name}.jpg`);
   await until(page, () => document.fonts.status === "loaded");
-  await page.screenshot({ path: file });
-  await testInfo.attach(name, { path: file, contentType: "image/png" });
+  await page.screenshot({ path: file, type: "jpeg", quality: 80 }); // ~5× smaller than PNG at DPR 3
+  await testInfo.attach(name, { path: file, contentType: "image/jpeg" });
 }
 
 /** Screenshots every chapter: its top, and for tall (pinned) chapters the middle and the end too. */

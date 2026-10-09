@@ -46,7 +46,7 @@ case), `interactions` (scrub, curtain slider, hotspots, chapter index; also with
 
 ## 4. Look (the important part)
 
-Screenshots: `web-tests/.results/test-results/shots/<playwright-project>/<spec>-<NN>-<chapter>[-k].png`
+Screenshots: `web-tests/.results/test-results/shots/<playwright-project>/<mode>-<NN>-<chapter>[-k].jpg`
 (`js-…`, `nojs-site-…`, `nojs-lite-…`, `reduced-motion-…`). Read them with the Read tool, iPhone
 first. For each chapter judge, and write down concrete fixes:
 
