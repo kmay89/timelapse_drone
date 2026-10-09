@@ -108,7 +108,7 @@ def test_page_shell(no_runtime_js):
     assert '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">' in html
     assert 'classList.replace("no-js", "js")' in html
     assert '<style id="vantage-theme">:root{--v-accent:#fff}</style>' in html
-    for needle in ('<link rel="manifest" href="manifest.webmanifest">', '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
+    for needle in ('m.rel="manifest";m.href="manifest.webmanifest"', '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
                    '<meta property="og:image" content="share.jpg">', '<meta name="twitter:card" content="summary_large_image">',
                    '<link rel="canonical" href="https://example.org/s/">', '<meta name="theme-color" content="#0b0c0b">',
                    '<meta name="apple-mobile-web-app-capable" content="yes">', '<meta name="robots" content="noindex">',
