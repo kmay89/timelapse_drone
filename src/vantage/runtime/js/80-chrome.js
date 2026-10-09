@@ -100,7 +100,6 @@ function chrome() {
     ]),
     sheetWrap,
     toastEl,
-    liveRegion,
   );
   let last = -1;
   actives.add({

@@ -29,9 +29,9 @@ function openSheet(o) {
   if (o.node) sheetBody.append(o.node);
   sheet.classList.toggle("v-dlg--wide", !!o.wide);
   sheetWrap.hidden = false;
-  for (const el of doc.body.children) if (el !== sheetWrap && el !== liveRegion && el !== toastEl) el.inert = true;
+  for (const el of doc.body.children) if (el !== sheetWrap && el !== toastEl) el.inert = true;
   sheet.style.transform = "";
-  requestAnimationFrame(() => {
+  every(() => {
     sheet.classList.toggle("v-fit", sheetBody.scrollHeight <= sheetBody.clientHeight);
     sheetWrap.classList.add("v-open");
     sheetClose.focus({ preventScroll: true });

@@ -44,7 +44,8 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   );
   const where = dateTicks(ticks, caps);
   const tickEls = $$(".v-tick:not(.v-tick--year)", ticks);
-  const stage = h("div", { class: "v-stage" }, [canvas, h("div", { class: "v-scrim" }), layer, odo.el, cards.el, rail]);
+  const live = liveRegion();
+  const stage = h("div", { class: "v-stage" }, [canvas, h("div", { class: "v-scrim" }), layer, odo.el, cards.el, rail, live]);
   const track = h("div", { class: "v-track", style: `--len:${Math.max(ch.scrollVh || 75 * n, 200)}` }, [stage]);
   sec.append(track);
   sec.classList.add("v-live", "v-pinned");
@@ -187,7 +188,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         rail.setAttribute("aria-valuetext", caps[k].label);
         const text = `${v.name}, ${caps[k].label}: ${step ? plain(step.html) : caps[k].note || ""}`;
         canvas.setAttribute("aria-label", text);
-        announce(text);
+        live.say(text);
       }
       return more;
     },

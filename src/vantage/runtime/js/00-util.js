@@ -73,12 +73,15 @@ function splitLabel(label) {
   return m ? [m[1], m[2]] : [label, ""];
 }
 
-const liveRegion = h("div", { class: "v-sr", "aria-live": "polite" });
-let announceTimer = 0;
-/** Polite screen-reader announcement, settled for `wait` ms so scrubbing doesn't chatter. */
-function announce(/** @type {string} */ text, wait = 700) {
-  clearTimeout(announceTimer);
-  announceTimer = window.setTimeout(() => (liveRegion.textContent = text), wait);
+/** A polite live region whose say(text) waits until the text has settled, so scrubbing doesn't chatter. */
+function liveRegion() {
+  const el = h("p", { class: "v-sr", "aria-live": "polite" });
+  let timer = 0;
+  el.say = (/** @type {string} */ text) => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => (el.textContent = text), 600);
+  };
+  return el;
 }
 
 /** Text of an HTML fragment (step cards → aria labels). */

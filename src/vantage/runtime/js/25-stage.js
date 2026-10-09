@@ -164,7 +164,7 @@ class Odometer {
         this.count,
         story.meta.simulated && h("span", { class: "v-odo__sim", text: "Simulated" }),
       ]),
-      h("div", { class: "v-odo__date" }, [this.month, this.year]),
+      h("div", { class: "v-odo__date" }, [this.month, " ", this.year]),
       this.note,
     ]);
     this.label = "";
