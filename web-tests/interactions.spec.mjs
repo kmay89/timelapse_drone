@@ -27,6 +27,17 @@ async function open(page, type, where = () => true) {
 const curtain = (c) => c.mode !== "blink";
 const valueOf = async (slider) => Number(await slider.getAttribute("aria-valuenow"));
 
+/** aria-valuenow once it stops changing (the curtain may ease to its new position). */
+async function settled(slider) {
+  for (let last = await valueOf(slider), i = 0; i < 20; i++) {
+    await slider.page().waitForTimeout(80);
+    const now = await valueOf(slider);
+    if (now === last) return now;
+    last = now;
+  }
+  return valueOf(slider);
+}
+
 function controlTests() {
   test("scrub: the date label follows the scroll from the first to the last capture", async ({ page }) => {
     const { story, ch } = await open(page, "scrub");
@@ -44,6 +55,7 @@ function controlTests() {
     const slider = section(page, ch).getByRole("slider").first();
     await expect(slider).toBeVisible();
     await slider.scrollIntoViewIfNeeded();
+    await expect(slider).toHaveAttribute("aria-valuenow", /\d/); // enhanced by the runtime
     await expect(slider).toHaveAttribute("aria-valuemin", "0");
     await expect(slider).toHaveAttribute("aria-valuemax", "100");
     await slider.focus();
@@ -52,15 +64,12 @@ function controlTests() {
     const atStart = await slider.getAttribute("aria-valuetext");
     await page.keyboard.press("End");
     await expect(slider).toHaveAttribute("aria-valuenow", "100");
-    expect(await slider.getAttribute("aria-valuetext"), "aria-valuetext should name the dates").not.toBe(atStart);
-    await page.keyboard.press("ArrowLeft");
-    const left = await valueOf(slider);
-    expect(left).toBeLessThan(100);
-    await page.keyboard.press("PageDown");
-    const paged = await valueOf(slider);
-    expect(paged).toBeLessThan(left);
-    await page.keyboard.press("ArrowRight");
-    expect(await valueOf(slider)).toBeGreaterThan(paged);
+    await expect.poll(() => slider.getAttribute("aria-valuetext"), { message: "aria-valuetext names the dates" }).not.toBe(atStart);
+    for (const [key, direction] of [["ArrowLeft", -1], ["PageDown", -1], ["ArrowRight", 1]]) {
+      const from = await settled(slider);
+      await page.keyboard.press(key);
+      await expect.poll(async () => Math.sign((await settled(slider)) - from), { message: key }).toBe(direction);
+    }
   });
 
   test("compare: dragging the curtain moves it", async ({ page }) => {
@@ -68,7 +77,8 @@ function controlTests() {
     const slider = section(page, ch).getByRole("slider").first();
     await expect(slider).toBeVisible();
     await slider.scrollIntoViewIfNeeded();
-    const before = await valueOf(slider);
+    await expect(slider).toHaveAttribute("aria-valuenow", /\d/);
+    const before = await settled(slider);
     const box = await slider.boundingBox();
     // Grab the handle: the slider is either the handle itself or the whole stage.
     const x = box.width > 88 ? box.x + (box.width * before) / 100 : box.x + box.width / 2;
@@ -79,8 +89,7 @@ function controlTests() {
     await page.mouse.move(x + dx / 2, y, { steps: 4 });
     await page.mouse.move(x + dx, y, { steps: 4 });
     await page.mouse.up();
-    await expect.poll(() => valueOf(slider)).not.toBe(before);
-    expect(Math.sign((await valueOf(slider)) - before)).toBe(Math.sign(dx));
+    await expect.poll(async () => Math.sign((await settled(slider)) - before)).toBe(Math.sign(dx));
   });
 
   test("compare: scrolling through the steps sweeps the curtain", async ({ page }) => {
@@ -91,7 +100,7 @@ function controlTests() {
     await expect(slider).toBeVisible();
     const { top, height, vh } = await geometry(sec);
     await scrollToY(page, top + 1);
-    const start = await valueOf(slider);
+    const start = await settled(slider);
     await scrollToY(page, top + height - vh - 1);
     const travel = Math.abs(splits.at(-1) - splits[0]);
     await expect.poll(async () => Math.abs((await valueOf(slider)) - start)).toBeGreaterThanOrEqual(travel / 2);
