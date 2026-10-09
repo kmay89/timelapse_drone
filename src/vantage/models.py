@@ -8,12 +8,14 @@ index.json      masters → build / film
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 T = TypeVar("T", bound="Artifact")
+_REL_FILE = re.compile(r"[\w.-]+(?:/[\w.-]+)*")  # matched in full: relative, POSIX separators
 
 
 class Artifact(BaseModel):
@@ -132,6 +134,14 @@ class MasterCapture(_M):
     source: str
     t: float = 0.0
     align: AlignInfo
+
+    # build, film and caption open masters/<file> and publish it, so it must stay inside masters/.
+    @field_validator("file")
+    @classmethod
+    def _inside_masters(cls, value: str) -> str:
+        if not _REL_FILE.fullmatch(value) or any(p in (".", "..") for p in value.split("/")):
+            raise ValueError(f"file must be a relative path inside masters/, got {value!r}")
+        return value
 
 
 class MastersVantage(_M):

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from vantage.config import BrandKit
-from vantage.site.theme import contrast, ensure_contrast, mix, oklch, palette, theme_css
+from vantage.site.theme import _family, contrast, ensure_contrast, mix, oklch, palette, theme_css
 
 TEXT_TOKENS = {
     "text-on-night": ("night", "night-2"),
@@ -168,3 +168,64 @@ def test_hostile_client_fonts_and_shared_files(tmp_path: Path):
     assert 'font-family:"Inter";' in theme.css and 'font-family:"Inter \\"Tab\\"";' in theme.css
     assert '--v-font-numeric:"Inter \\"Tab\\"", ' in theme.css
     assert [f.dest for f in theme.fonts].count("assets/fonts/inter-latin-opsz-normal.woff2") == 1
+    # a file name that would close the url("…") string
+    (tmp_path / "brand" / 'x"),url(y.woff2').write_bytes(b"wOF2")
+    with pytest.raises(ValueError, match="rename the file"):
+        theme_css(brand(display={"family": "Q", "files": ['x"),url(y.woff2']}))
+
+
+HOSTILE_FONT_FIELDS = [
+    # a brand kit from a third party must not be able to add CSS rules to every edition
+    ("fallback", 'serif;--x:url("assets/../../secret.txt")} body{background:url(https://tracker.example/p.gif)} :root{--y:0'),
+    ("fallback", "serif}.v-disclosure{display:none"),
+    ("fallback", "'Brand\nSans', serif"),
+    ("fallback", "'url(\"assets/../x\")', serif"),
+    ("fallback", "serif\\;x"),
+    ("weight", "400;src:url(https://tracker.example/f.woff2)"),
+    ("weight", "400}body{color:red"),
+    ("weight", "400\n"),
+    ("features", "normal}body{color:red"),
+    ("features", "'ss01' 1;--x:url(https://tracker.example/p.gif)"),
+    ("features", "'ss01' 1\n"),
+    ("family", "Brand\n}body{color:red}"),
+    ("family", "Brand\x00"),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("field", "value"), HOSTILE_FONT_FIELDS)
+def test_brand_font_fields_cannot_inject_css(field, value):
+    spec = {"family": "Brand", "bundled": "inter", field: value}
+    with pytest.raises(ValueError, match=f"typography.*{field}"):
+        BrandKit.model_validate({"name": "X", "typography": {"text": spec}})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fallback", "system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif"),
+        ("fallback", 'Georgia, "Times New Roman", serif'),
+        ("fallback", "Helvetica Neue,ui-sans-serif"),
+        ("fallback", "'Noto Sans JP', Söhne, sans-serif"),
+        ("weight", "400"),
+        ("weight", "100 1000"),
+        ("weight", "normal bold"),
+        ("features", "normal"),
+        ("features", "'tnum' 1, 'lnum' 1"),
+        ("features", '"ss01"'),
+        ("features", "'liga' off,'kern'"),
+        ("family", 'Inter "Tab"'),
+        ("family", "Söhne Breit"),
+    ],
+)
+def test_brand_font_fields_accept_css_values(field, value):
+    spec = {"family": "Brand", "bundled": "inter", field: value}
+    css = theme_css(BrandKit.model_validate({"name": "X", "typography": {"text": spec}})).css
+    root, *faces = css.strip().split("\n")
+    assert re.fullmatch(r":root\{[^{}]*\}", root) and all(
+        re.fullmatch(r"@font-face\{[^{}]*\}", f) for f in faces
+    )
+
+
+def test_family_names_are_escaped_as_css_strings():
+    assert _family('A "B" \\ C') == '"A \\"B\\" \\\\ C"'
+    assert _family("A\nB\x7f") == '"A\\a B\\7f "'  # a newline can't end the string (or the rule)

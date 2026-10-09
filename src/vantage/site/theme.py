@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -191,6 +192,8 @@ def _faces(spec: FontSpec, styles: set[str], brand: BrandKit) -> list[_Face]:
             raise ValueError(f"brand.yaml: font {rel!r} is outside the brand folder {brand.root}")
         if path.suffix.lower() != ".woff2":
             raise ValueError(f"brand.yaml: font {rel!r} is not a .woff2 file")
+        if re.search(r'["\\\x00-\x1f\x7f]', path.name):  # it goes into url("…") in the CSS
+            raise ValueError(f"brand.yaml: font {rel!r} has a quote or control character; rename the file")
         style = "italic" if "italic" in path.stem.lower() else spec.style
         if style in styles:
             faces.append(_Face(spec.family, path, style, spec.weight, None))
@@ -209,8 +212,9 @@ def font_file(brand: BrandKit, role: str) -> Path:
 
 
 def _family(name: str) -> str:
-    """A family name as a CSS string."""
-    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """A family name as a CSS string: quotes, backslashes and control characters (\\n → \\a) escaped."""
+    text = name.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + re.sub(r"[\x00-\x1f\x7f]", lambda m: f"\\{ord(m[0]):x} ", text) + '"'
 
 
 def _stack(spec: FontSpec) -> str:

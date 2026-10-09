@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import cv2
 import numpy as np
+import pytest
 from PIL import Image
+from pydantic import ValidationError
 
 from test_align import WORLD, make_world, random_homography, reference_view, render_view
 from test_select import SITE, Shot, build_project
-from vantage.models import FramePick, MastersIndex
+from vantage.config import Vantage
+from vantage.models import FramePick, MastersIndex, Selection, VantageSelection
 from vantage.process.masters import make_masters
 from vantage.process.select import select_frames
 
@@ -118,3 +122,67 @@ def test_visit_unlike_the_reference_is_chained_through_its_neighbour(tmp_path):
         master = cv2.imread(str(project.masters_dir / by_date[date].file))
         shifts = _tile_shifts(truth, master)
         assert shifts.max() < tolerance, (date, shifts)
+
+
+@pytest.mark.parametrize(
+    "vid", ["/tmp/elsewhere", "../../footage/2025-06-14", "a/b", "..", "Overview", "", "-x"]
+)
+def test_vantage_ids_are_plain_folder_names(vid):
+    with pytest.raises(ValidationError, match="vantage id"):
+        Vantage.model_validate({"id": vid, "name": "V"})
+    assert Vantage.model_validate({"id": "north_2-b", "name": "V"}).id == "north_2-b"
+
+
+def test_pick_keys_are_flight_dates():
+    ref = {"source": "2025-06-14/DJI_0007.JPG"}
+    for key in ("../../victim/x", "/tmp/x", "2025-6-14", "2025-02-30", "latest"):
+        with pytest.raises(ValidationError, match="pick key"):
+            Vantage.model_validate({"id": "v", "name": "V", "picks": {key: ref}})
+    # Quoted or not in the YAML (an unquoted key loads as a date), the key is 'YYYY-MM-DD'.
+    v = Vantage.model_validate(
+        {"id": "v", "name": "V", "picks": {dt.date(2025, 6, 14): ref, "2025-07-02": ref}}
+    )
+    assert list(v.picks) == ["2025-06-14", "2025-07-02"]
+
+
+def test_process_never_writes_or_clears_files_outside_the_project(tmp_path):
+    """story.yaml and work/selection.json cannot steer masters/ or work/review/ writes and deletes elsewhere."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    for name in ("holiday-1.jpg", "holiday-2.jpg"):
+        (victim / name).write_bytes(b"keep me")
+    shots = {"ref": Shot("2025-09-01/DJI_0100.JPG", reference_view(make_world(seed=3)), 900.0, np.eye(3))}
+
+    with pytest.raises(ValidationError, match="vantage id"):
+        build_project(tmp_path / "abs", shots=shots, vantage={"id": str(victim)})
+    with pytest.raises(ValidationError, match="pick key"):
+        build_project(
+            tmp_path / "rel", shots=shots, vantage={"picks": {"../../../victim/x": {"source": "a.jpg"}}}
+        )
+
+    # A hand-edited selection.json, or a story changed in memory, is refused before anything is touched.
+    project, _, shots = build_project(tmp_path / "ok", shots=shots)
+    pick = FramePick(source=shots["ref"].source.id, date="2025-09-01")
+    tampered = Selection(
+        vantages={"overview": VantageSelection(reference=pick, picks={"../../../victim/x": pick})}
+    )
+    with pytest.raises(ValueError, match="not YYYY-MM-DD dates"):
+        make_masters(project, tampered)
+    project.story.vantages[0].id = str(victim)
+    with pytest.raises(ValueError, match="not a plain folder name"):
+        make_masters(project, Selection(vantages={str(victim): VantageSelection(reference=pick, picks={})}))
+    assert sorted(p.name for p in victim.iterdir()) == ["holiday-1.jpg", "holiday-2.jpg"]
+    assert not project.masters_dir.exists() and not (project.work_dir / "review").exists()
+
+
+@pytest.mark.parametrize(
+    "file", ["../../secret.jpg", "/etc/secret.jpg", "overview/../../x.jpg", "a\\..\\b.jpg", ""]
+)
+def test_index_json_files_stay_inside_masters(file):
+    """build, film and caption open masters/<file> and publish it."""
+    capture = {"date": "2025-06-14", "file": file, "source": "s", "align": {"method": "reference"}}
+    index = {"vantages": {"overview": {"name": "O", "width": 4, "height": 3, "captures": [capture]}}}
+    with pytest.raises(ValidationError, match="inside masters/"):
+        MastersIndex.model_validate(index)
+    capture["file"] = "overview/2025-06-14.jpg"
+    assert MastersIndex.model_validate(index).vantages["overview"].captures[0].file == capture["file"]

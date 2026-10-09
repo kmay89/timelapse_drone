@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image, ImageCms
 
 from vantage import log
-from vantage.config import Project, Vantage
+from vantage.config import ISO_DATE_RE, VANTAGE_ID_RE, Project, Vantage
 from vantage.models import (
     AlignInfo,
     Catalog,
@@ -290,12 +290,28 @@ def _make_vantage(
     return MastersVantage(name=vantage.name, width=out_w, height=out_h, captures=entries)
 
 
+def _check_names(vantage: Vantage, vs: VantageSelection | None) -> None:
+    """Refuse an id or date that would write or clear files outside masters/<id>/ and work/review/<id>/.
+
+    story.yaml is checked when it loads; this also covers a hand-edited work/selection.json.
+    """
+    if not VANTAGE_ID_RE.fullmatch(vantage.id):
+        raise ValueError(f"vantage id {vantage.id!r} is not a plain folder name (a-z, 0-9, '-', '_')")
+    bad = sorted(d for d in (vs.picks if vs else {}) if not ISO_DATE_RE.fullmatch(d))
+    if bad:
+        raise ValueError(
+            f"{vantage.id}: selection picks {bad} are not YYYY-MM-DD dates; re-run `vantage select`"
+        )
+
+
 def make_masters(project: Project, selection: Selection | None = None) -> MastersIndex:
     """Write masters/<vantage>/<date>.jpg, masters/index.json and work/review/** for every vantage."""
     if selection is None:
         selection = Selection.load(project.work_dir / "selection.json")
     catalog = Catalog.load(project.work_dir / "catalog.json")
     sources = {s.id: s for s in catalog.sources}
+    for vantage in project.story.vantages:
+        _check_names(vantage, selection.vantages.get(vantage.id))
     index = MastersIndex()
     for vantage in project.story.vantages:
         vs = selection.vantages.get(vantage.id)

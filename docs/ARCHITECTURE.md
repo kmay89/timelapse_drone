@@ -150,6 +150,10 @@ JPEGs are ≤1600 px wide. Dates are local calendar dates of the flight.
         { "date": "2025-06-14", "file": "overview/2025-06-14.jpg", "source": "…", "t": 3.0,
           "align": { "method": "homography", "inliers": 412, "rmse_px": 0.8, "ok": true } } ] } } }
 ```
+Vantage ids name folders and pick dates name files that `vantage process` writes and clears, so
+`config.py` accepts only ids matching `[a-z0-9][a-z0-9_-]*` and `picks` keys that are real
+`YYYY-MM-DD` dates (quoted or not); `make_masters` re-checks both against `selection.json`.
+A capture's `file` must be a relative path inside `masters/` (no `..`, no absolute path).
 
 ## StoryJSON (the runtime contract)
 
@@ -323,6 +327,9 @@ Bundled fonts: `runtime/fonts/fonts.json` maps a key (`fraunces`, `inter`,
 `{family, category, axes, weight, license, unicode_range, faces: [{file, style, weight}]}`
 with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
 `bundled: <key>` or its own `files` (client-licensed woff2).
+Its `fallback`, `weight` and `features` go into the theme CSS, so `config.py` accepts only
+values of that kind (a list of font names, a weight or range, `font-feature-settings` tags) and
+a `family` without control characters: a brand kit cannot add CSS rules or `url()`s.
 
 ### StoryJSON v1 additions (blueprint round 1)
 
@@ -382,4 +389,4 @@ and `<slug>-lite.html` (email). `<html data-edition>` is `site` (hosted), `offli
   `output.single_file_max_mb`; otherwise hero `video` is removed and video chapters keep
   `sources: []`. Lite never carries video.
 * Fonts are inlined as `data:font/woff2` in the theme CSS; `meta.shareImage` is dropped unless
-  it is an absolute URL.
+  it is an absolute URL. Packaging reads only files inside `site/`; a path that leads outside it is an error.

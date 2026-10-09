@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,22 @@ def test_offline_zip_is_deterministic(packaged, tmp_path, monkeypatch):
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "1767225600")  # 2026-01-01
     with zipfile.ZipFile(package_project(project, dist)["zip"]) as zf:
         assert zf.infolist()[0].date_time == (2026, 1, 1, 0, 0, 0)
+
+
+def test_package_reads_only_files_inside_the_site(packaged, tmp_path):
+    """A tampered theme can't pull a local file from outside the site into the single files."""
+    project, dist, _ = packaged
+    shutil.copytree(dist / "site", tmp_path / "dist" / "site")
+    secret = tmp_path / "dist" / "secret.txt"
+    secret.write_text("aws_secret_access_key = not-for-email")
+    index = tmp_path / "dist" / "site" / "index.html"
+    page = index.read_text(encoding="utf-8")
+    index.write_text(page.replace(":root{", ':root{--x:url("assets/../../secret.txt");', 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="outside"):
+        package_project(project, tmp_path / "dist")
+    leaked = base64.b64encode(secret.read_bytes()).decode()
+    for html in (tmp_path / "dist").glob("*.html"):
+        assert leaked not in html.read_text(encoding="utf-8")
 
 
 def test_release_package_is_gated(tmp_path):
