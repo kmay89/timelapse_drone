@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from html.parser import HTMLParser
 from typing import Any
 
 import pytest
@@ -158,7 +159,7 @@ def test_every_chapter_is_a_semantic_section(no_runtime_js):
     assert '<sup class="v-note-ref"><a href="#v-note-1" aria-label="Note 1">1</a></sup>' in html
     assert '<li class="v-tl" data-status="planned">' in html
     assert (
-        '<ul class="v-strip" aria-label="Gallery">' in html
+        '<ul class="v-strip" aria-label="Gallery" tabindex="0">' in html
         and '<span class="v-credit">Archive</span>' in html
     )
     assert (
@@ -220,3 +221,28 @@ def test_runtime_js_is_one_strict_iife(monkeypatch, tmp_path):
     html = render_page(story(), theme_css="")
     assert "var b = '<\\/script>';" in html and '<script id="vantage-runtime">' in html
     assert json.loads(json.dumps(read_story(html))) == story()
+
+
+def test_raw_style_and_script_cannot_be_closed_in_any_case(monkeypatch):
+    monkeypatch.setattr(render, "runtime_js", lambda: "var s = '</SCRIPT><img src=x onerror=alert(1)>';")
+    monkeypatch.setattr(render, "runtime_css", lambda: "a{}</Style><script>alert(2)</script>")
+    html = render_page(story(), theme_css='@font-face{font-family:"x</sTyLe><script>alert(3)</script>"}')
+
+    class Tags(HTMLParser):  # the browser's view: which elements does the page really open?
+        def __init__(self) -> None:
+            super().__init__()
+            self.opened: list[tuple[str, str | None]] = []
+            self.handlers = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            self.opened.append((tag, dict(attrs).get("id")))
+            self.handlers += any(name.startswith("on") for name, _ in attrs)
+
+    parser = Tags()
+    parser.feed(html)
+    assert parser.handlers == 0
+    assert [t for t in parser.opened if t[0] in ("script", "style")] == [
+        ("script", None), ("style", "vantage-theme"), ("style", "vantage-css"),
+        ("script", "vantage-story"), ("script", "vantage-runtime"),
+    ]  # fmt: skip
+    assert read_story(html) == story()

@@ -15,6 +15,7 @@ import base64
 import copy
 import datetime as dt
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -26,12 +27,13 @@ from pathlib import Path
 from typing import Any
 
 import PIL
+from PIL import Image
 
 from vantage import __version__, log
 from vantage.config import Project
 from vantage.site.build import ReleaseError, build_site
 from vantage.site.facts import check_release
-from vantage.site.images import data_uri, jpeg_bytes
+from vantage.site.images import data_uri, encode, jpeg_bytes, resize
 from vantage.site.render import Edition, render_page
 
 MIB = 1024 * 1024
@@ -46,6 +48,7 @@ _MIME = {".woff2": "font/woff2", ".avif": "image/avif", ".webp": "image/webp", "
 # (width, JPEG quality) steps tried until an edition fits its budget; None = the site's own ~1600 px JPEG.
 _FULL_LADDER: tuple[tuple[int, int] | None, ...] = (None, (1280, 78), (1080, 72), (900, 66))
 _LITE_LADDER: tuple[tuple[int, int], ...] = ((1080, 70), (960, 64), (800, 58), (640, 52))
+_REPEAT = (960, 66)  # (width, quality) cap for a picture the static essay shows a second time
 
 
 def mime_type(path: str | Path) -> str:
@@ -93,10 +96,12 @@ def _essential(story: dict[str, Any]) -> set[int]:
 class _Assets:
     """Bytes for every site-relative path an edition references, re-encoded on demand."""
 
-    def __init__(self, site: Path) -> None:
+    def __init__(self, site: Path, step: tuple[int, int] | None) -> None:
         self.site = site
         self.files: dict[str, bytes] = {}
         self._uris: dict[str, str] = {}
+        # repeats follow the edition down its ladder, never above the cap
+        self._repeat = _REPEAT if step is None else (min(_REPEAT[0], step[0]), min(_REPEAT[1], step[1]))
 
     def add_file(self, path: str) -> str:
         self.files.setdefault(path, (self.site / path).read_bytes())
@@ -121,6 +126,15 @@ class _Assets:
         img["sources"] = [{"type": "image/jpeg", "srcset": [[path, width]]}]
         img["fallback"] = path
 
+    def repeat(self, path: str) -> str:
+        """A smaller copy of a JPEG the page has already shown (it is never the asset itself)."""
+        width, quality = self._repeat
+        again = path.removesuffix(".jpg") + f"-again{width}q{quality}.jpg"
+        if again not in self.files:
+            with Image.open(io.BytesIO(self.files[path])) as im:
+                self.files[again] = encode(resize(im.convert("RGB"), width), "jpeg", quality)
+        return again
+
     def uri(self, path: str) -> str:
         if path not in self._uris:
             self._uris[path] = data_uri(self.files[path], mime_type(path))
@@ -128,16 +142,21 @@ class _Assets:
 
 
 def _inline(html: str, assets: _Assets) -> tuple[str, set[str]]:
-    """Every assets/… attribute → data: URI (an <img> keeps its path in data-asset)."""
-    used: set[str] = set()
+    """Every assets/… attribute → data: URI. The first <img> of a path carries it (data-asset);
+    a JPEG shown again (the explore grid, a strip, a thumbnail) gets a smaller copy instead, so
+    the asset's bytes are in the document once."""
+    carried: set[str] = set()
 
     def sub(m: re.Match[str]) -> str:
         attr, path = m.groups()
-        used.add(path)
-        tag = f' data-asset="{path}"' if attr == "src" else ""
-        return f'{attr}="{assets.uri(path)}"{tag}'
+        if attr == "src" and path not in carried:
+            carried.add(path)
+            return f'src="{assets.uri(path)}" data-asset="{path}"'
+        if attr == "src" and path.endswith(".jpg"):
+            path = assets.repeat(path)
+        return f'{attr}="{assets.uri(path)}"'
 
-    return _ASSET_ATTR.sub(sub, html), used
+    return _ASSET_ATTR.sub(sub, html), carried
 
 
 def _referenced(story: dict[str, Any]) -> list[str]:
@@ -167,7 +186,7 @@ def _edition(
     story = copy.deepcopy(story)
     if not story["meta"].get("shareImage", "").startswith(("http://", "https://")):
         story["meta"].pop("shareImage", None)  # share.jpg doesn't travel with a lone file
-    assets = _Assets(site)
+    assets = _Assets(site, step)
     keep = _essential(story) if edition == "lite" else None
     for img in _imgs(story):
         if keep is not None and id(img) not in keep:

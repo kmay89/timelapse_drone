@@ -15,7 +15,6 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
 
   const canvas = h("canvas", { class: "v-canvas", role: "img" });
   const ctx = canvas.getContext("2d", { alpha: false });
-  ctx.imageSmoothingQuality = "high";
   const reset = h("button", { class: "v-btn v-btn--glass v-x__reset", type: "button", "aria-label": "Reset zoom", hidden: true }, [icon("reset")]);
   const tags = [0, 1].map((k) => h("span", { class: `v-cmp__tag v-label v-cmp__tag--${k ? "a" : "b"}` }));
   const grip = h("div", { class: "v-cmp__grip", role: "slider", tabindex: "0", "aria-label": "Divider", "aria-valuemin": "0", "aria-valuemax": "100" }, [icon("grip")]);
@@ -231,6 +230,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   stage.addEventListener("pointerdown", (/** @type {PointerEvent} */ e) => {
     if (/** @type {HTMLElement} */ (e.target).closest("button") || e.button > 0) return;
     box = stage.getBoundingClientRect();
+    if (e.pointerType === "mouse") stage.setPointerCapture(e.pointerId); // a release outside still ends the gesture
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
     if (pts.size === 2) {
       const [a, b] = [...pts.values()];

@@ -23,7 +23,9 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     const img = pic.tagName === "IMG" ? pic : pic.querySelector("img");
     img.loading = "eager";
     const box = h("div", { class: "v-cmp__img" }, [pic]);
-    return { el: h("div", { class: `v-cmp__layer${k ? " v-cmp__after" : ""}` }, [box]), box, img };
+    // The browser takes `sizes` from the chosen <source>, so all of them follow the stage.
+    const sized = [img, ...$$("source", pic)];
+    return { el: h("div", { class: `v-cmp__layer${k ? " v-cmp__after" : ""}` }, [box]), box, sized };
   });
   const tags = sides.map((c, k) =>
     h("span", { class: `v-cmp__tag v-label v-cmp__tag--${k ? "a" : "b"}` }, [
@@ -140,7 +142,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       for (const l of layers) {
         l.box.style.width = `${home.w}px`;
         l.box.style.height = `${home.h}px`;
-        l.img.sizes = `${Math.ceil(widest)}px`;
+        for (const el of l.sized) el.sizes = `${Math.ceil(widest)}px`;
       }
       tagW = tags.map((t) => t.offsetWidth);
       pins.measure();
@@ -156,7 +158,10 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       if (!nudged && !blink && p > 0.002 && !reduced) {
         nudged = true;
         const dir = split > 0.85 ? -1 : 1;
-        tween(900, (t) => (nudge = 0.08 * dir * Math.sin(Math.PI * t)));
+        tween(900, (t) => {
+          nudge = t < 1 ? 0.08 * dir * Math.sin(Math.PI * t) : 0;
+          kick(); // tweens run after the updates: one more frame draws this value (the last one included)
+        });
       }
       const r = frameRect(W, H, v.aspect, steps.length ? keyed(wins, cams, x, mixCam) : homeCam(v, W, H));
       const X = clamp(split + nudge) * W;

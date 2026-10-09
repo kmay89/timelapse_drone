@@ -133,6 +133,7 @@ const scrollToY = (/** @type {number} */ y, smoothly = true) =>
 /**
  * Horizontal drags on an element whose touch-action is pan-y: vertical swipes stay native scrolling;
  * travel > 8px and > 1.7× the vertical captures the pointer. Taps (no travel) go to `tap`.
+ * A mouse is captured at once (touch is, implicitly): released outside, it must not leave a drag armed.
  * @param {HTMLElement} el
  * @param {{start?(e: PointerEvent): void, move(e: PointerEvent, dx: number): void, end?(e: PointerEvent): void, tap?(e: PointerEvent): void, down?(e: PointerEvent): boolean | void}} cb
  */
@@ -142,6 +143,7 @@ function hdrag(el, cb) {
   el.addEventListener("pointerdown", (e) => {
     if (s || e.button > 0 || cb.down?.(e) === false) return;
     s = { id: e.pointerId, x: e.clientX, y: e.clientY, drag: false };
+    if (e.pointerType === "mouse") el.setPointerCapture(e.pointerId);
   });
   el.addEventListener("pointermove", (e) => {
     if (!s || e.pointerId !== s.id) return;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import re
 import zipfile
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from test_build import make_project
 from vantage.config import load_project
@@ -86,7 +88,8 @@ def test_single_files_are_self_contained(packaged, edition):
     html = files[edition].read_text()
     assert _external(html) == []
     assert 'rel="manifest"' not in html and "data-sw=" not in html and 'rel="icon"' not in html
-    assert "<source" not in html  # one JPEG per image; videos come from embedded blobs
+    markup = re.sub(r"<script\b.*?</script>", "", html, flags=re.S)
+    assert "<source" not in markup  # one JPEG per image; videos come from embedded blobs
     story = read_story(html)
     assert story["meta"].get("shareImage") is None or story["meta"]["shareImage"].startswith("http")
     # every asset path the StoryJSON uses has its bytes in the document exactly once
@@ -164,3 +167,18 @@ def test_release_package_is_gated(tmp_path):
     with pytest.raises(ReleaseError, match="draft: true"):
         package_project(load_project(root), tmp_path / "dist", release=True)
     assert not (tmp_path / "dist").exists()
+
+
+@pytest.mark.parametrize("edition", ["single_file", "lite"])
+def test_no_image_bytes_are_carried_twice(packaged, edition):
+    _, _, files = packaged
+    html = files[edition].read_text()
+    carriers = re.findall(r'<img src="(data:[^"]+)" data-asset="([^"]+)"', html)
+    assert len({path for _, path in carriers}) == len(carriers)  # the runtime finds each asset in one place
+    assert all(html.count(uri) == 1 for uri, _ in carriers), "an asset's bytes are in the file twice"
+    # the explore grid shows pictures the essay already showed: as smaller copies of their own
+    repeats = re.findall(r'<img src="data:image/jpeg;base64,([^"]+)" width', html)
+    assert repeats
+    for b64 in repeats:
+        with Image.open(io.BytesIO(base64.b64decode(b64))) as im:
+            assert im.width <= 960

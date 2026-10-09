@@ -45,7 +45,7 @@
 <thead><tr><th scope="col">Flight</th>{% for v in vantages.values() %}<th scope="col" title="{{ v.name }}">{{ v.id|replace("-", " ")|capitalize }}</th>{% endfor %}</tr></thead>
 <tbody>
 {% for d in dates %}
-<tr><th scope="row"><time datetime="{{ d }}">{{ d|date }}</time></th>{% for v in vantages.values() %}<td>{% if d in v.captures|map(attribute="date") %}<span aria-label="captured">●</span>{% else %}<span class="v-sr">not flown</span>{% endif %}</td>{% endfor %}</tr>
+<tr><th scope="row"><time datetime="{{ d }}">{{ d|date }}</time></th>{% for v in vantages.values() %}<td>{% if d in v.captures|map(attribute="date") %}<span aria-hidden="true">●</span><span class="v-sr">flown</span>{% else %}<span class="v-sr">not flown</span>{% endif %}</td>{% endfor %}</tr>
 {% endfor %}
 </tbody>
 </table>

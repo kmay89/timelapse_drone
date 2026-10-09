@@ -34,6 +34,7 @@ function fitCanvas(/** @type {HTMLCanvasElement} */ canvas, /** @type {number} *
   const s = Math.min(devicePixelRatio || 1, 2, Math.sqrt(2.2e6 / Math.max(1, W * H)));
   canvas.width = Math.round(W * s);
   canvas.height = Math.round(H * s);
+  /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d")).imageSmoothingQuality = "high"; // resizing reset it
   return s;
 }
 
@@ -56,14 +57,17 @@ function decodeWidth(/** @type {any} */ img, /** @type {number} */ rectW, /** @t
 }
 
 /**
- * Hold windows in "v" units: key k holds over [k, k + hold]; keys sharing a k split its hold.
+ * Hold windows in "v" units: key k holds over [k, k + hold]. Keys sharing a k split its hold into
+ * equal slots, each still for its first half and easing into the next one over the second (the last
+ * holds to the end), so a camera push on one capture moves instead of cutting.
  * @returns {{a: number, b: number}[]}
  */
 function holdWindows(/** @type {number[]} */ keys, /** @type {number} */ hold) {
   return keys.map((k, idx) => {
     const n = keys.filter((x) => x === k).length;
     const j = keys.slice(0, idx).filter((x) => x === k).length;
-    return { a: k + (hold * j) / n, b: k + (hold * (j + 1)) / n };
+    const a = k + (hold * j) / n;
+    return { a, b: j === n - 1 ? k + hold : a + hold / n / 2 };
   });
 }
 

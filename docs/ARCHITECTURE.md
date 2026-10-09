@@ -324,8 +324,9 @@ and `<slug>-lite.html` (email). `<html data-edition>` is `site` (hosted), `offli
   `sources: []` and `fallback === lqip` is a placeholder only (lite: everything except the hero,
   compare pairs, one image per scrub step and video posters).
 * The bytes of every path the StoryJSON references are in the document exactly once, either as
-  the `src` data: URI of an element carrying `data-asset="<path>"` (images the static essay
-  shows), or as base64 inside
+  the `src` data: URI of the one element carrying `data-asset="<path>"` (images the static essay
+  shows; where the essay shows a picture again, e.g. in the explore grid, that `<img>` gets a
+  smaller JPEG copy of its own, ≤ 960 px, and no `data-asset`), or as base64 inside
   `<script type="application/octet-stream" data-asset="<path>" data-type="<mime>">`, placed
   before the runtime script. The runtime resolves a path by looking up `[data-asset="<path>"]`:
   a `<script>` becomes `URL.createObjectURL(new Blob([bytes], {type: data-type}))` (create it

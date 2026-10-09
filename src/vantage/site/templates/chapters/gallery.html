@@ -4,7 +4,8 @@
 <div class="v-flow">
 {{ head(ch) }}
 </div>
-<ul class="v-strip" aria-label="{{ ch.title or 'Gallery' }}">
+{# tabindex: a focus stop, so keyboard readers can scroll the strip #}
+<ul class="v-strip" aria-label="{{ ch.title or 'Gallery' }}" tabindex="0">
 {% if v %}
 {% for i in ch.captures if v.captures[i].img is not placeholder %}
 {% set c = v.captures[i] %}

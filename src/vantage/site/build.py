@@ -16,11 +16,12 @@ import os
 import re
 import shutil
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from markdown_it import MarkdownIt
 
@@ -55,6 +56,8 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _NIGHT_TYPES = {"hero", "scrub", "compare", "video", "explore"}
 _CLIP_VERSION = 1
 _SW_CONFIG = re.compile(r"/\*@config\*/.*?/\*@end\*/", re.S)
+_LINK_SCHEMES = {"", "http", "https", "mailto", "tel"}
+_LOGO_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"}
 
 
 class ReleaseError(ValueError):
@@ -119,6 +122,23 @@ def markdown() -> MarkdownIt:
 
     md.add_render_rule("link_open", link_open)
     return md
+
+
+def safe_url(url: str | None, where: str) -> str | None:
+    """A YAML-supplied link target, or None (with a warning) for javascript:, data: and other schemes."""
+    if not url:
+        return None
+    if urlsplit(url.strip()).scheme.lower() in _LINK_SCHEMES:
+        return url.strip()
+    log.warn(f"{where}: link {url!r} dropped (only http, https, mailto and tel links are published)")
+    return None
+
+
+def inside(path: Path, root: Path, what: str) -> Path:
+    """`path`, after checking it lies within `root`: YAML must not publish files from elsewhere."""
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"{what} {path} is outside {root}; keep the files it names in that folder")
+    return path
 
 
 # --------------------------------------------------------------------------- #
@@ -201,7 +221,7 @@ def encode_clip(project: Project, ref: FrameRef, clip_s: float, *, hevc: bool = 
 
     Encodes from footage when present; otherwise reuses a cached encode; None when neither exists.
     """
-    src = project.footage_dir / ref.source
+    src = inside(project.footage_dir / ref.source, project.footage_dir, "clip source")
     key = hashlib.sha1(f"{_CLIP_VERSION}|{ref.source}|{ref.t:.3f}|{clip_s:.3f}".encode()).hexdigest()[:12]
     base = project.work_dir / "clips" / f"{Path(ref.source).stem}-{key}"
     h264, h265, poster = (
@@ -337,6 +357,10 @@ class StoryBuilder:
         path = brand.resolve(rel)
         if path is None:
             return None
+        if brand.root is not None:
+            inside(path, brand.root, "brand.yaml: logo")
+        if path.suffix.lower() not in _LOGO_TYPES:
+            raise ValueError(f"brand.yaml: logo {rel!r} is not an image ({', '.join(sorted(_LOGO_TYPES))})")
         if not path.is_file():
             log.warn(f"brand file {path} is missing")
             return None
@@ -408,7 +432,10 @@ class StoryBuilder:
 
     def _hero(self, ch: HeroChapter, base: dict[str, Any], where: str) -> dict[str, Any]:
         cfg = self.project.config
-        out = base | {"kicker": base["kicker"] or self.plain(cfg.kicker), "title": base["title"] or cfg.title}
+        out = base | {
+            "kicker": base["kicker"] or self.plain(cfg.kicker),
+            "title": base["title"] or self.plain(cfg.title),
+        }
         v = self.vantage(ch.vantage, where)
         if v is not None:
             out |= {"vantage": v.id, "capture": self.ref(v, ch.capture, len(v.captures) - 1, where)}
@@ -470,7 +497,7 @@ class StoryBuilder:
         for item in ch.items:
             entry: dict[str, Any] = {
                 "date": self.plain(item.date), "title": self.plain(item.title), "html": self.md(item.body),
-                "status": item.status, "source": item.source,
+                "status": item.status, "source": safe_url(item.source, f"{where} item {item.title!r}"),
             }  # fmt: skip
             v = self.vantage(item.vantage, f"{where} item {item.title!r}") if item.capture else None
             if v is not None:
@@ -488,13 +515,16 @@ class StoryBuilder:
             refs = ch.captures or [f"#{i}" for i in range(len(v.captures))]
             out |= {"vantage": v.id, "captures": [self.ref(v, r, 0, where) for r in refs]}
         for gi in ch.images:
-            path = self.project.root / gi.file
+            path = inside(
+                self.project.root / gi.file, self.project.root, f"story.yaml {where}: gallery image"
+            )
             if not path.is_file():
                 log.warn(f"{where}: gallery image {gi.file} is missing; skipped")
                 continue
             alt = gi.alt or self.plain(gi.caption) or Path(gi.file).stem.replace("-", " ")
+            name = Path(gi.file).with_suffix("").as_posix()  # the whole path: two folders may share a name
             out["images"].append(_compact({
-                "img": self.img(path, _dest("assets", "img", "gallery", base["id"], Path(gi.file).stem), alt),
+                "img": self.img(path, _dest("assets", "img", "gallery", base["id"], name), alt),
                 "caption": self.inline(gi.caption), "date": self.plain(gi.date), "credit": self.plain(gi.credit),
             }))  # fmt: skip
         return out if out["captures"] or out["images"] else None
@@ -505,7 +535,10 @@ class StoryBuilder:
 
     def _credits(self, ch: CreditsChapter, base: dict[str, Any], where: str) -> dict[str, Any]:
         return base | {
-            "sources": [_compact({"label": self.plain(s.label), "url": s.url}) for s in ch.sources],
+            "sources": [
+                _compact({"label": self.plain(s.label), "url": safe_url(s.url, f"{where} source")})
+                for s in ch.sources
+            ],
             "notes": [self.inline(n) or "" for n in ch.notes],
         }
 
@@ -514,7 +547,7 @@ class StoryBuilder:
     def meta(self) -> dict[str, Any]:
         cfg = self.project.config
         dates = sorted({c.date for v in self.vantages.values() for c in v.captures})
-        url = cfg.output.base_url
+        url = safe_url(cfg.output.base_url, "project.yaml output.base_url")
         return _compact({
             "slug": cfg.slug, "title": self.plain(cfg.title), "subtitle": self.plain(cfg.subtitle),
             "kicker": self.plain(cfg.kicker), "byline": self.plain(cfg.byline), "lang": cfg.lang,
@@ -533,14 +566,15 @@ class StoryBuilder:
     def brand(self) -> dict[str, Any]:
         b = self.project.brand
         return _compact({
-            "name": b.name, "url": b.url, "alt": b.logos.alt or b.name, "theme": b.theme, "grain": b.grain,
+            "name": b.name, "url": safe_url(b.url, "brand.yaml url"), "alt": b.logos.alt or b.name,
+            "theme": b.theme, "grain": b.grain,
             "logos": _compact({
                 "primary": self.brand_file(b.logos.primary), "onDark": self.brand_file(b.logos.on_dark),
                 "mark": self.brand_file(b.logos.mark),
             }),
             "partners": [
-                _compact({"name": p.name, "role": p.role, "url": p.url, "logo": self.brand_file(p.logo),
-                          "logoOnDark": self.brand_file(p.logo_on_dark)})
+                _compact({"name": p.name, "role": p.role, "url": safe_url(p.url, f"brand.yaml {p.name!r} url"),
+                          "logo": self.brand_file(p.logo), "logoOnDark": self.brand_file(p.logo_on_dark)})
                 for p in b.partners
             ],
             "creditLine": b.credit_line, "copyright": b.copyright, "disclaimer": b.disclaimer,
@@ -617,6 +651,18 @@ def _site_files(site: Path) -> list[Path]:
     return sorted((p for p in site.rglob("*") if p.is_file()), key=lambda p: p.relative_to(site).as_posix())
 
 
+def _fallbacks(node: Any) -> Iterator[str]:
+    """The fallback JPEG of every Img in the story (posters included)."""
+    if isinstance(node, dict):
+        if "fallback" in node and "lqip" in node:
+            yield node["fallback"]
+        for value in node.values():
+            yield from _fallbacks(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _fallbacks(value)
+
+
 def _service_worker(site: Path, story: dict[str, Any]) -> Path:
     files = [p for p in _site_files(site) if p.name != "sw.js"]
     rel = [p.relative_to(site).as_posix() for p in files]
@@ -632,7 +678,7 @@ def _service_worker(site: Path, story: dict[str, Any]) -> Path:
         "apple-touch-icon.png",
     }
     core |= {r for r in rel if r.startswith(("assets/fonts/", "assets/brand/"))}
-    core |= {u for u in re.findall(r'"(assets/img/[^"]+\.jpg)"', json.dumps(story)) if u in rel}
+    core |= set(_fallbacks(story))  # one JPEG per image; the rest is fetched by "Save for offline"
     config = {
         "cache": f"vantage-{story['meta']['slug']}-{digest.hexdigest()[:12]}",
         "core": sorted(core & ({"./"} | set(rel))),

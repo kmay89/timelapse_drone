@@ -29,7 +29,6 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
 
   const canvas = h("canvas", { class: "v-canvas", role: "img", "aria-label": `${v.name}, ${caps[0].label}` });
   const ctx = canvas.getContext("2d", { alpha: false });
-  ctx.imageSmoothingQuality = "high";
   const odo = new Odometer(pad(n));
   const cards = new Cards(steps.map((/** @type {any} */ s) => s.html));
   const layer = h("div", { class: "v-hs-layer" });

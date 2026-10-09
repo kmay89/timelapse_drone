@@ -4,7 +4,8 @@
  * - message {type: "vantage:save"}: cache every remaining file ("Save for offline"), posting
  *   {type: "vantage:progress", done, total, bytes, totalBytes} and finally {type: "vantage:saved"};
  *   {type: "vantage:status"} answers {type: "vantage:status", cached, total}
- * - index.html: network first (3 s), cache fallback; everything else: cache first
+ * - the page (./, index.html): network first (3 s), cache fallback; everything else: cache first
+ * - caches are named per scope, so stories sharing an origin never delete each other's
  * - Range requests (iOS <video>) are answered with 206 slices of the cached file
  * - offline image misses fall back to any cached variant of the same image (another width/format)
  * The page only registers this worker over http(s); it never runs from file://.
@@ -12,8 +13,8 @@
 "use strict";
 
 const CONFIG = /*@config*/ { cache: "vantage-dev", core: ["./"], assets: [] } /*@end*/;
-const PREFIX = CONFIG.cache.replace(/-[^-]+$/, "-");
 const SCOPE = self.registration.scope;
+const CACHE = `${CONFIG.cache} ${SCOPE}`;
 const url = (path) => new URL(path, SCOPE).href;
 const ASSETS = new Map(CONFIG.assets.map(([path, bytes]) => [url(path), bytes]));
 const IMG_VARIANT = /-(\d+)\.(avif|webp|jpg)$/;
@@ -21,7 +22,7 @@ const IMG_VARIANT = /-(\d+)\.(avif|webp|jpg)$/;
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
-      .open(CONFIG.cache)
+      .open(CACHE)
       .then((cache) => cache.addAll(CONFIG.core.map((p) => new Request(url(p), { cache: "reload" }))))
       .then(() => self.skipWaiting()),
   );
@@ -31,7 +32,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith(PREFIX) && k !== CONFIG.cache).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith("vantage-") && k.endsWith(` ${SCOPE}`) && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -42,7 +43,7 @@ self.addEventListener("message", (event) => {
   if (type === "vantage:save") event.waitUntil(saveAll(reply));
   if (type === "vantage:status") {
     event.waitUntil(
-      caches.open(CONFIG.cache).then(async (cache) => {
+      caches.open(CACHE).then(async (cache) => {
         const cached = (await cache.keys()).filter((r) => ASSETS.has(r.url)).length;
         reply({ type: "vantage:status", cached, total: ASSETS.size });
       }),
@@ -51,7 +52,7 @@ self.addEventListener("message", (event) => {
 });
 
 async function saveAll(reply) {
-  const cache = await caches.open(CONFIG.cache);
+  const cache = await caches.open(CACHE);
   const totalBytes = [...ASSETS.values()].reduce((a, b) => a + b, 0);
   let done = 0;
   let bytes = 0;
@@ -76,7 +77,7 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET" || !req.url.startsWith(SCOPE)) return;
   const href = req.url.split("#")[0].split("?")[0];
-  if (req.mode === "navigate" || href === url("./") || href === url("index.html")) {
+  if (href === url("./") || href === url("index.html")) {
     event.respondWith(networkFirst(req));
   } else if (req.headers.has("range")) {
     event.respondWith(ranged(req, href));
@@ -86,21 +87,28 @@ self.addEventListener("fetch", (event) => {
 });
 
 async function networkFirst(req) {
-  const cache = await caches.open(CONFIG.cache);
+  const cache = await caches.open(CACHE);
   try {
     const res = await Promise.race([
       fetch(req),
       new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
     ]);
-    if (res.ok) await cache.put(url("index.html"), res.clone());
+    if (res.ok) await cache.put(url("./"), res.clone());
     return res;
   } catch (err) {
-    return (await cache.match(url("index.html"))) || (await cache.match(url("./"))) || Response.error();
+    return unredirect((await cache.match(url("./"))) || (await cache.match(url("index.html")))) || Response.error();
   }
 }
 
+/* WebKit fails a navigation answered with a redirected response ("Response served by service worker
+ * has redirections"); hosts that redirect index.html to ./ (Cloudflare Pages) leave one in the cache. */
+function unredirect(res) {
+  if (!res || !res.redirected) return res;
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers });
+}
+
 async function cacheFirst(req, href) {
-  const cache = await caches.open(CONFIG.cache);
+  const cache = await caches.open(CACHE);
   const hit = await cache.match(href);
   if (hit) return hit;
   try {
@@ -130,7 +138,7 @@ async function anyVariant(cache, href) {
 }
 
 async function ranged(req, href) {
-  const cache = await caches.open(CONFIG.cache);
+  const cache = await caches.open(CACHE);
   const hit = await cache.match(href);
   if (!hit) return fetch(req);
   const blob = await hit.blob();

@@ -500,3 +500,80 @@ def test_image_variants_fast_mode_and_never_upscale(tmp_path, monkeypatch):
         "a-320.jpg",
         "a-320.webp",
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Hostile YAML: files from outside the project, script links, colliding names
+# --------------------------------------------------------------------------- #
+
+
+def _edit_yaml(path: Path, change: Any) -> None:
+    data = yaml.safe_load(path.read_text())
+    change(data)
+    path.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+@pytest.mark.parametrize(
+    ("file", "edit", "error"),
+    [
+        ("brand/brand.yaml", lambda b: b["logos"].update(mark="../../secret.svg"), "outside"),
+        ("brand/brand.yaml", lambda b: b["partners"][0].update(logo="brand.yaml"), "not an image"),
+        ("story.yaml", lambda s: s["chapters"][6]["images"][0].update(file="../secret.jpg"), "outside"),
+        (
+            "story.yaml",
+            lambda s: s["chapters"].append({"type": "video", "clip": {"source": "../../secret.mp4"}}),
+            "outside",
+        ),
+    ],
+)
+def test_yaml_cannot_publish_files_from_outside(tmp_path, file, edit, error):
+    root = make_project(tmp_path / "p")
+    _master(tmp_path / "secret.jpg", seed=1)
+    (tmp_path / "secret.svg").write_text("<svg/>")
+    (tmp_path / "secret.mp4").write_bytes(b"\0" * 64)
+    _edit_yaml(root / file, edit)
+    with pytest.raises(ValueError, match=error):
+        build_site(load_project(root), tmp_path / "site")
+    assert not any("secret" in p.name for p in (tmp_path / "site").rglob("*"))
+
+
+def test_script_links_are_dropped_and_gallery_names_do_not_collide(tmp_path):
+    story = json.loads(json.dumps(STORY))
+    credits, timeline, gallery = story["chapters"][-1], story["chapters"][5], story["chapters"][6]
+    credits["sources"] += [
+        {"label": "Evil", "url": " JavaScript:alert(1)"},
+        {"label": "Mail", "url": "mailto:a@b.c"},
+    ]
+    timeline["items"][0]["source"] = "java\tscript:alert(2)"
+    gallery["images"].append({"file": "archive/1960/postcard.jpg", "caption": "Later"})
+    root = make_project(tmp_path / "p", story=story)
+    _master(root / "archive" / "1960" / "postcard.jpg", seed=60)
+    _edit_yaml(root / "brand/brand.yaml", lambda b: b.update(url="data:text/html,<script>alert(3)</script>"))
+    _edit_yaml(root / "brand/brand.yaml", lambda b: b["partners"][0].update(url="vbscript:msgbox"))
+    site = tmp_path / "site"
+    built = read_story(build_site(load_project(root), site).read_text())
+    html = (site / "index.html").read_text().lower()
+    assert "script:" not in html and "data:text/html" not in html
+    chapters = {c["id"]: c for c in built["chapters"]}
+    assert [s.get("url") for s in chapters["credits"]["sources"]] == [
+        "https://example.org/plan",
+        None,
+        "mailto:a@b.c",
+    ]
+    assert "source" not in chapters["tl"]["items"][0] and "url" not in built["brand"]
+    assert "url" not in built["brand"]["partners"][0]
+    first, second = (g["img"]["fallback"] for g in chapters["archive"]["images"])
+    assert first != second  # same file name, two folders: two images
+    assert (site / first).read_bytes() != (site / second).read_bytes()
+
+
+def test_service_worker_installs_one_jpeg_per_image(built):
+    _, site, story = built
+    config = json.loads(re.search(r"const CONFIG = (\{.*?\});", (site / "sw.js").read_text()).group(1))
+    images = [c for c in config["core"] if c.startswith("assets/img/")]
+    stems = [re.sub(r"-\d+\.jpg$", "", c) for c in images]
+    assert len(stems) == len(set(stems)) and all(c.endswith(".jpg") for c in images)
+    fallbacks = {c["img"]["fallback"] for v in story["vantages"] for c in v["captures"]}
+    assert fallbacks <= set(images)
+    js = (site / "sw.js").read_text()
+    assert "const CACHE = `${CONFIG.cache} ${SCOPE}`" in js  # stories sharing an origin keep their caches

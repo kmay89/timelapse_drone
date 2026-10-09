@@ -141,3 +141,30 @@ def test_unknown_bundled_font_is_an_error():
     )
     with pytest.raises(ValueError, match="unknown bundled font 'nope'"):
         theme_css(brand)
+
+
+def test_hostile_client_fonts_and_shared_files(tmp_path: Path):
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "secret.woff2").write_bytes(b"wOF2")
+    (tmp_path / "brand" / "notes.txt").write_text("not a font")
+
+    def brand(**typography: object) -> BrandKit:
+        kit = BrandKit.model_validate({"name": "X", "typography": typography})
+        kit.root = tmp_path / "brand"
+        return kit
+
+    with pytest.raises(ValueError, match="outside the brand folder"):
+        theme_css(brand(display={"family": "Leak", "files": ["../secret.woff2"]}))
+    with pytest.raises(ValueError, match=r"not a \.woff2 file"):
+        theme_css(brand(display={"family": "Txt", "files": ["notes.txt"]}))
+    # two roles on one bundled file under different names: each family gets its face, the file ships once
+    theme = theme_css(
+        brand(
+            text={"family": "Inter", "bundled": "inter"},
+            numeric={"family": 'Inter "Tab"', "bundled": "inter"},
+        ),
+        italic=False,
+    )
+    assert 'font-family:"Inter";' in theme.css and 'font-family:"Inter \\"Tab\\"";' in theme.css
+    assert '--v-font-numeric:"Inter \\"Tab\\"", ' in theme.css
+    assert [f.dest for f in theme.fonts].count("assets/fonts/inter-latin-opsz-normal.woff2") == 1

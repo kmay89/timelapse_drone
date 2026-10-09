@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal
@@ -52,6 +53,11 @@ SIZES = {
     "small": "22rem",
     "full": "100vw",
 }
+
+
+def _raw(text: str, tag: str) -> Markup:
+    """Text for a raw <style>/<script> element: no "</tag" (any case) can end it early."""
+    return Markup(re.sub(f"</({tag})", r"<\\/\1", text, flags=re.IGNORECASE))
 
 
 def story_json(story: dict[str, Any]) -> str:
@@ -176,9 +182,9 @@ def render_page(
             share_image=share,
             base_href=base_href,
             dropcap=first_text,
-            theme_css=Markup(theme_css.replace("</style", "<\\/style")),
-            runtime_css=Markup(runtime_css().replace("</style", "<\\/style")),
-            runtime_js=Markup(runtime_js().replace("</script", "<\\/script")),
+            theme_css=_raw(theme_css, "style"),
+            runtime_css=_raw(runtime_css(), "style"),
+            runtime_js=_raw(runtime_js(), "script"),
             story_json=Markup(story_json(story)),
             has_credits=any(c["type"] == "credits" for c in story["chapters"]),
         )
