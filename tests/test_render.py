@@ -185,11 +185,16 @@ def _headings(html: str) -> list[tuple[str, str]]:
     return re.findall(r'<(h[12]) class="([^"]+)"', html)
 
 
+def _main(html: str) -> str:
+    """The rendered story, without the inlined CSS (which names every class too)."""
+    return html[html.index('<main id="v-main">') : html.index("</main>")]
+
+
 def test_story_without_a_lead_hero_still_has_a_title_and_dek(no_runtime_js):
     s = story()
     s["chapters"] = s["chapters"][1:]  # opens with a text chapter
     html = render_page(s, theme_css="")
-    main = html[html.index('<main id="v-main">') :]
+    main = _main(html)
     assert html.count("<h1") == 1 and _headings(html)[0] == ("h1", "v-sr")
     assert main.startswith(
         '<main id="v-main">\n<section class="v-intro v-surface-paper" aria-labelledby="v-story-title">\n'
@@ -198,14 +203,13 @@ def test_story_without_a_lead_hero_still_has_a_title_and_dek(no_runtime_js):
     )
     assert html.count("A <em>dek</em>") == 1 and main.index("v-standfirst") < main.index('id="t"')
     assert "simulated: a demonstration of the format" in main[: main.index('id="t"')]
-    assert len(re.findall(r'<section class="v-chapter ', html)) == len(
-        s["chapters"]
-    )  # the intro is no chapter
+    chapters = re.findall(r'<section class="v-chapter ', html)
+    assert len(chapters) == len(s["chapters"])  # the intro is not a chapter
 
     bare = story(simulated=False, dek=None, dekHtml=None)
     bare["chapters"] = bare["chapters"][2:]  # opens with a scrub; nothing to put in a standfirst
     html = render_page(bare, theme_css="")
-    assert "v-intro" not in html and "v-standfirst" not in html
+    assert "v-intro" not in html and "v-standfirst" not in _main(html)
     assert (
         '<main id="v-main">\n<h1 class="v-sr" id="v-story-title">The Title</h1>\n<section class="v-chapter v-scrub'
         in html
@@ -224,7 +228,7 @@ def test_a_second_hero_is_a_part_opener(no_runtime_js):
     assert '<p class="v-kicker">Later</p>' in second and "<p>Next</p>" in second
     for once in ("A <em>dek</em>", '<span class="v-badge">Preview</span>', "Simulated imagery", "v-hero__cue",
                  'class="v-logo"', "v-standfirst"):  # fmt: skip
-        assert html.count(once) == 1, once
+        assert _main(html).count(once) == 1, once
 
 
 def test_pictures_are_responsive_and_stable():

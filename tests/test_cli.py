@@ -6,6 +6,7 @@ import shutil
 import sys
 import threading
 import types
+import typing
 from collections.abc import Iterator
 from pathlib import Path
 from xml.etree import ElementTree
@@ -16,7 +17,7 @@ from PIL import Image
 from typer.testing import CliRunner
 
 from vantage.cli import app, make_server, parse_byte_range
-from vantage.config import Project, load_project
+from vantage.config import FACT_TOKEN_RE, Facts, FactStatus, Project, load_project
 from vantage.models import MastersIndex, MastersVantage
 
 runner = CliRunner()
@@ -64,6 +65,8 @@ def test_new_creates_a_valid_project(tmp_path: Path, project_dir: Path) -> None:
     assert types_ == ["hero", "text", "scrub", "compare", "stats", "timeline", "explore", "credits"]
     assert (project_dir / ".gitignore").read_text().split()[-2:] == ["footage/", "work/"]
     assert (project_dir / "footage").is_dir()
+    cited = FACT_TOKEN_RE.findall(project.story.model_dump_json())
+    assert cited == ["site-area"] and project.facts.facts["site-area"].status == "needs-client"
     assert "{{" not in "".join(p.read_text() for p in project_dir.rglob("*") if p.is_file())
 
     again = _invoke(tmp_path, "new", "riverside-park")
@@ -72,10 +75,29 @@ def test_new_creates_a_valid_project(tmp_path: Path, project_dir: Path) -> None:
     assert bad.exit_code == 1 and "invalid slug" in bad.output
 
 
+def test_new_facts_yaml_documents_one_example_per_status(project_dir: Path) -> None:
+    text = (project_dir / "facts.yaml").read_text()
+    header = text.split("\nfacts:")[0]
+    assert all(f" {status} " in header for status in typing.get_args(FactStatus))  # each one explained
+    examples = "\n".join(  # the commented-out examples, uncommented: they must be valid facts too
+        line.replace("  # ", "  ", 1)
+        for line in text.splitlines()
+        if line.startswith(("facts:", "  # ")) and ":" in line
+    )
+    facts = Facts.model_validate(yaml.safe_load(examples)).facts
+    assert sorted(f.status for f in facts.values()) == sorted(typing.get_args(FactStatus))
+    assert [f.releasable for f in facts.values()] == [True, True, True, False, False]
+
+
 def test_validate_passes_on_a_new_project(tmp_path: Path, project_dir: Path) -> None:
     by_slug = _invoke(tmp_path, "validate", "riverside-park")
     assert by_slug.exit_code == 0, by_slug.output
     assert "riverside-park is valid" in by_slug.output and "TODO markers left" in by_slug.output
+    assert "facts.yaml 3" in by_slug.output
+    assert (
+        "1 fact(s) not releasable yet" in by_slug.output
+        and "'site-area' has status 'needs-client'" in by_slug.output
+    )
     by_path = runner.invoke(app, ["validate", str(project_dir)])
     assert by_path.exit_code == 0, by_path.output
 
@@ -88,7 +110,18 @@ def test_validate_reports_cross_check_errors(tmp_path: Path, project_dir: Path) 
     story["chapters"][0]["capture"] = "yesterday"
     story["chapters"][1]["id"] = story["chapters"][0]["id"]
     story["chapters"][5]["items"][1]["vantage"] = "nowhere"
+    story["chapters"][1]["body"] = "Opened in {fact:opening-year}."
     story_path.write_text(yaml.safe_dump(story, sort_keys=False))
+    brand_path = project_dir / "brand" / "brand.yaml"
+    brand = yaml.safe_load(brand_path.read_text())
+    brand |= {"name": "Parks {fact:site-area}", "copyright": "© {fact:site-area}"}  # copyright resolves facts
+    brand_path.write_text(yaml.safe_dump(brand, sort_keys=False))
+    (project_dir / "brand" / "logo-on-dark.svg").write_text(
+        '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg">&x;</svg>'
+    )
+    (project_dir / "brand" / "mark.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script></svg>'
+    )
     footage = project_dir / "footage" / "2025-01-01"
     footage.mkdir(parents=True)
     Image.new("RGB", (8, 8)).save(footage / "still.jpg")
@@ -101,8 +134,14 @@ def test_validate_reports_cross_check_errors(tmp_path: Path, project_dir: Path) 
         "duplicate chapter id",
         "'nowhere'",
         "missing.MP4",
+        "story.yaml.chapters[1].body: unknown fact {fact:opening-year}",
+        "brand.yaml name: {fact:…} tokens only resolve in credit_line, disclaimer, copyright",
+        "brand.yaml logos.on_dark (",
+        "refusing to publish this SVG: it has a DOCTYPE internal subset",
+        "brand.yaml logos.mark: the published copy leaves out <script>, onload=…",
     ):
-        assert needle in result.output
+        assert needle in result.output, needle
+    assert "brand.yaml copyright" not in result.output
 
 
 def test_schema_errors_are_friendly(tmp_path: Path, project_dir: Path) -> None:

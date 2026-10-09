@@ -16,8 +16,14 @@ function onceVisible(/** @type {Element[]} */ els, /** @type {(el: any) => void}
   els.forEach((el) => obs.observe(el));
 }
 
-/** STATS: "$5.3M", "1,700", "47" count up from zero in 900 ms, keeping their prefix, suffix and format. */
+/** STATS: "$5.3M", "1,700", "47" count up from zero in 900 ms, keeping their prefix, suffix and format.
+ * Each figure's length (separators count less) lets CSS shrink a long one to its column (--n) instead of
+ * breaking it. */
 function stats(/** @type {HTMLElement} */ sec) {
+  for (const el of $$(".v-stat__value", sec)) {
+    const t = el.firstChild?.nodeType === 3 ? el.firstChild.data.trim() : "";
+    if (t && !/\s/.test(t)) el.style.setProperty("--n", String(t.length - 0.6 * (t.match(/[,.]/g) || []).length));
+  }
   if (reduced) return;
   const items = $$(".v-stat__value", sec).flatMap((el) => {
     const node = el.firstChild;

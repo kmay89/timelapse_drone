@@ -228,7 +228,7 @@ figcaption .v-date { display: block; margin-bottom: .2rem; color: var(--v-fg); f
 }
 .v-stat { border-top: 1px solid var(--v-fg); padding: .9rem 0 2rem; min-width: 0; container-type: inline-size; }
 .v-stat__value {
-  display: block; font-size: clamp(2.6rem, 1.7rem + 4vw, 5rem); font-size: min(clamp(2.6rem, 1.7rem + 4vw, 5rem), 26cqi);
+  display: block; font-size: clamp(2.6rem, 1.7rem + 4vw, 5rem); font-size: min(clamp(2.6rem, 1.7rem + 4vw, 5rem), 26cqi, 100cqi / (.6 * var(--n, 1)));
   line-height: 1; font-weight: 340; letter-spacing: -.03em; font-variant-numeric: lining-nums; overflow-wrap: anywhere;
 }
 .v-stat__unit { display: inline-block; font-size: .36em; letter-spacing: 0; margin-left: .15em; color: var(--v-fg-2); }
