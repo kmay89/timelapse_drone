@@ -202,8 +202,9 @@ function scrubState(p, n, hold = 0.55) {
   `aria-valuemin=0`, `aria-valuemax=100`, `aria-valuenow`, `aria-valuetext` naming both dates; arrows
   ±2 %, PageUp/PageDown ±10 %, Home/End.
 - Scroll-linked first (steps set `split`), then direct manipulation: `touch-action: pan-y`; a drag
-  that is more than 8 px and 1.7× more horizontal than vertical captures the pointer; after the first
-  drag, scroll stops driving the curtain until the chapter is left.
+  that is more than 8 px and 1.7× more horizontal than vertical captures the pointer, and a single tap
+  moves the curtain to the tap (WCAG 2.2 SC 2.5.7: no drag-only control); after the first drag or tap,
+  scroll stops driving the curtain until the chapter is left.
 - One affordance nudge on first entry (skipped under reduced motion).
 - Hotspots in normalized master coordinates, transformed with the image; a tap opens a bottom sheet
   inside the safe area, never a hover tooltip.

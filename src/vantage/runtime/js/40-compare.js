@@ -1,8 +1,8 @@
 // @ts-check
 /* COMPARE: two aligned captures in a sticky stage. "curtain": the after layer is clipped at the split;
- * scrolling sweeps the split through the steps' values until the reader drags (then the reader owns it
- * until the chapter is left). "blink": press and hold to see before, release for after. The pictures
- * are the pre-rendered <picture> elements, moved into the stage, so nothing is fetched twice. */
+ * scrolling sweeps the split through the steps' values until the reader drags or taps (then the reader
+ * owns it until the chapter is left). "blink": press and hold to see before, release for after. The
+ * pictures are the pre-rendered <picture> elements, moved into the stage, so nothing is fetched twice. */
 
 /** @returns {Component | null} */
 function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
@@ -88,12 +88,14 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     manual = true;
     kick();
   };
+  const at = (/** @type {PointerEvent} */ e) => setSplit((e.clientX - stage.getBoundingClientRect().left) / W);
 
   if (!blink) {
     stage.append(handle);
     hdrag(stage, {
       down: (e) => !/** @type {HTMLElement} */ (e.target).closest(".v-hs, .v-card"),
-      move: (e) => setSplit((e.clientX - stage.getBoundingClientRect().left) / W),
+      move: at,
+      tap: at, // no drag-only control (WCAG 2.5.7)
     });
     grip.addEventListener("keydown", (/** @type {KeyboardEvent} */ e) => {
       const d = { ArrowLeft: -0.02, ArrowDown: -0.02, ArrowRight: 0.02, ArrowUp: 0.02, PageDown: -0.1, PageUp: 0.1 }[e.key];
@@ -215,7 +217,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         grip.setAttribute("aria-valuenow", String(now));
         grip.setAttribute("aria-valuetext", valueText(now));
       }
-      cards.set(steps[0].html ? cardAlphas(wins, x) : wins.map(() => 0));
+      cards.set(cardAlphas(wins, x)); // a step without text has an empty card, never shown
       const side = (/** @type {number} */ px) => px < X;
       const off = (/** @type {number} */ px) => (blink ? 1 : clamp((Math.abs(px - X) - 14) / 22)); // clear of the rule
       pins.place(r, W, H, (hs, px) => vis(hs, (blink ? before : side(px)) ? ch.before : ch.after) * off(px), top, 24, cards, blink ? undefined : side);

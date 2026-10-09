@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 import {
   chapterCheckpoints,
   currentDate,
+  effectiveOpacity,
   escapeRe,
   geometry,
   readStory,
@@ -36,6 +37,29 @@ async function settled(slider) {
     last = now;
   }
   return valueOf(slider);
+}
+
+/**
+ * One tap (a touch on phones, a mouse click elsewhere) on `area`, at a spot on the far side of the
+ * curtain where nothing (a pin, a card, a button) lies on top of the picture: WCAG 2.2 SC 2.5.7 asks
+ * that what a drag does also works without one. Returns the slider value the tap points at.
+ */
+async function tapAcross(page, area, slider) {
+  const box = await area.boundingBox();
+  const grip = await slider.boundingBox();
+  const y = grip.y + grip.height / 2;
+  for (const f of (await settled(slider)) > 50 ? [0.2, 0.3, 0.12, 0.4] : [0.8, 0.7, 0.88, 0.6]) {
+    const x = box.x + f * box.width;
+    const clear = await slider.evaluate((el, [x, y]) => {
+      const hit = document.elementFromPoint(x, y);
+      return !!hit && (hit.contains(el) || hit.getAttribute("role") === "img");
+    }, [x, y]);
+    if (!clear) continue;
+    if (test.info().project.use.hasTouch) await page.touchscreen.tap(x, y);
+    else await page.mouse.click(x, y);
+    return f * 100;
+  }
+  throw new Error("no clear spot on the picture to tap");
 }
 
 function controlTests() {
@@ -92,6 +116,17 @@ function controlTests() {
     await expect.poll(async () => Math.sign((await settled(slider)) - before)).toBe(Math.sign(dx));
   });
 
+  test("compare: a tap on the picture moves the curtain there", async ({ page }) => {
+    const { ch } = await open(page, "compare", curtain);
+    const sec = section(page, ch);
+    const slider = sec.getByRole("slider").first();
+    await expect(slider).toBeVisible();
+    await slider.scrollIntoViewIfNeeded();
+    await expect(slider).toHaveAttribute("aria-valuenow", /\d/);
+    const want = await tapAcross(page, sec, slider); // the curtain spans the section's width
+    await expect.poll(async () => Math.abs((await settled(slider)) - want)).toBeLessThanOrEqual(3);
+  });
+
   test("compare: scrolling through the steps sweeps the curtain", async ({ page }) => {
     const { ch } = await open(page, "compare", (c) => curtain(c) && c.steps.filter((s) => s.split != null).length > 1);
     const splits = ch.steps.filter((s) => s.split != null).map((s) => s.split * 100);
@@ -143,6 +178,22 @@ function controlTests() {
     await expect(toggle).toBeHidden();
   });
 
+  test("explore: in Curtain mode a tap on the picture moves the divider there", async ({ page }) => {
+    const { story, ch } = await open(page, "explore");
+    const sec = section(page, ch);
+    const mode = sec.getByRole("button", { name: "Curtain", exact: true });
+    test.skip(!(await mode.count()), "this explore chapter has no two-flight modes");
+    await mode.scrollIntoViewIfNeeded();
+    await mode.click();
+    const v = story.vantages.find((x) => x.id === ch.vantages[0]);
+    const stage = sec.getByRole("img", { name: new RegExp(`^${escapeRe(v.name)}, `) });
+    const slider = sec.getByRole("slider", { name: /divider/i });
+    await expect(slider).toBeVisible();
+    await stage.scrollIntoViewIfNeeded();
+    const want = await tapAcross(page, stage, slider);
+    await expect.poll(async () => Math.abs((await settled(slider)) - want)).toBeLessThanOrEqual(3);
+  });
+
   test("chapter index: opens, lists the chapters, and jumps to one", async ({ page }) => {
     await page.goto("./");
     const story = await readStory(page);
@@ -169,6 +220,34 @@ test.describe("interactions", () => {
       tops.push(await canvas.evaluate((c) => c.getBoundingClientRect().top));
     }
     expect(Math.abs(tops[0] - tops[1]), "the stage moved: it is not pinned").toBeLessThan(2);
+  });
+
+  test("compare: a first step with no text still lets the next step's card show", async ({ page }) => {
+    // A step may only move the curtain ({text: "", split}). The StoryJSON is edited in flight to make one.
+    const marker = "The card of the step after a step with no text";
+    await page.route(/\/(index\.html)?$/, async (route) => {
+      const res = await route.fetch();
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      const body = (await res.text()).replace(/(<script id="vantage-story" type="application\/json">)(.*?)(<\/script>)/s, (_, a, json, c) => {
+        const story = JSON.parse(json);
+        const ch = story.chapters.find((x) => x.type === "compare" && x.steps.length > 1);
+        if (ch) [ch.steps[0].html, ch.steps[1].html] = ["", `<p>${marker}</p>`];
+        return a + JSON.stringify(story).replace(/</g, "\\u003c") + c;
+      });
+      await route.fulfill({ response: res, headers, body });
+    });
+    const { ch } = await open(page, "compare", (c) => c.steps.length > 1 && c.steps[0].html === "");
+    const sec = section(page, ch);
+    const card = sec.getByText(marker);
+    const { top, height, vh } = await geometry(sec);
+    let most = 0;
+    for (let k = 0; k <= 16 && most < 0.9; k++) {
+      await scrollToY(page, top + (k / 16) * (height - vh));
+      most = Math.max(most, await effectiveOpacity(card));
+    }
+    expect(most, "scrolling through the chapter never showed the second step's card").toBeGreaterThan(0.9);
   });
 
   test("hero: the ambient motion has a pause button, remembered for the session", async ({ page }) => {

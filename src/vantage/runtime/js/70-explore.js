@@ -231,7 +231,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     redraw();
   });
 
-  /* Gestures inside the stage: pinch / drag-pan / curtain drag / blink hold / double-tap zoom. */
+  /* Gestures inside the stage: pinch / drag-pan / curtain drag or tap / blink hold / double-tap zoom. */
   /** @type {Map<number, {x: number, y: number, x0: number, y0: number}>} */
   const pts = new Map();
   /** @type {any} */
@@ -297,7 +297,13 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         const z0 = z;
         tween(280, (t) => zoomAt(lerp(z0, z0 > 1.2 ? 1 : 2.5, easeOut(t)), x, y));
         lastTap.t = 0;
-      } else lastTap = { t: e.timeStamp, x, y };
+      } else {
+        lastTap = { t: e.timeStamp, x, y };
+        if (mode === "curtain" && z <= 1.01) {
+          split = clamp(x / W); // a tap sets it too (WCAG 2.5.7)
+          redraw();
+        }
+      }
     }
     if (!pts.size) g = null;
   };
