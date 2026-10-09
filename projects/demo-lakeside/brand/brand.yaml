@@ -1,0 +1,69 @@
+# Brand kit for the fictional Lakeside Parks Conservancy (demo only).
+# Every organization, logo and place here is invented; the logos are hand-built SVG paths.
+name: Lakeside Parks Conservancy
+short_name: Lakeside Parks
+
+logos:
+  primary: logo.svg
+  on_dark: logo-on-dark.svg
+  mark: mark.svg
+  alt: Lakeside Parks Conservancy
+
+# A sunset over dark water: signal orange for progress and highlights, lake teal for the
+# "after" side and charts, near-black green for the cinematic night surface.
+colors:
+  accent: "#E07A3F"
+  accent_2: "#3E8E8A"
+  ink: "#13201F"
+  paper: "#F2EEE6"
+  night: "#0B1414"
+  muted: "#8A9A97"
+  extra:
+    lake: "#1F5F63"
+    reed: "#7E9A68"
+    sand: "#D9C7A3"
+
+typography:
+  display:
+    family: Fraunces
+    bundled: fraunces
+    fallback: "Georgia, 'Times New Roman', serif"
+  text:
+    family: Inter
+    bundled: inter
+  numeric:
+    family: Inter
+    bundled: inter
+    features: "'tnum' 1, 'lnum' 1"
+
+voice:
+  tone: Plainspoken and exact, warm without boosterism. Show the change; let the neighbors' words carry the feeling.
+  reading_level: General public (grade 8)
+  avoid:
+    - "world-class"
+    - "transformational"
+    - "game-changer"
+    - exclamation points
+  examples:
+    - "The deep end is now the shallow end of a beach."
+    - "Concrete from the old walkways was crushed on site and went back under the new ones."
+
+partners:
+  - name: City of Lakeside
+    role: Owner
+    logo: partners/city-of-lakeside.svg
+    logo_on_dark: partners/city-of-lakeside-on-dark.svg
+  - name: Field & Form Studio
+    role: Landscape Architecture
+    logo: partners/field-and-form.svg
+    logo_on_dark: partners/field-and-form-on-dark.svg
+  - name: Northcoast Builders
+    role: General Contractor
+    logo: partners/northcoast-builders.svg
+    logo_on_dark: partners/northcoast-builders-on-dark.svg
+
+credit_line: An aerial progress story for the Lakeside Parks Conservancy.
+copyright: "© 2026 Lakeside Parks Conservancy. A fictional organization; all imagery simulated."
+disclaimer: A demonstration project. The site, the organizations, the people quoted and every figure are fictional, and all imagery is computer-generated.
+theme: dark
+grain: true

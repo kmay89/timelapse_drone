@@ -28,6 +28,7 @@ THRESHOLD_FRAC = 0.0015  # robust-fit inlier threshold, as a fraction of the det
 ECC_WIDTH = 1024
 ECC_ITERATIONS = 60
 ECC_MAX_SHIFT_FRAC = 0.01  # ECC may move an image corner by at most 1% of the reference width
+ECC_MAX_RMSE_GAIN = 1.1  # ...and may raise the feature inliers' reprojection RMSE by at most 10%
 ECC_MARGIN_FRAC = 0.01  # ignore a thin frame (blur edges, encoder padding) around both images
 MAX_PERSPECTIVE = 2.0  # max ratio of the homogeneous coordinate across the image corners
 MAX_ANISOTROPY = 2.0  # max singular-value ratio of the local Jacobian at the image center
@@ -272,12 +273,19 @@ def _correlation(
 
 
 def _refine_ecc(
-    ref_bgr: np.ndarray, img_bgr: np.ndarray, H: np.ndarray, kind: Method
+    ref_bgr: np.ndarray,
+    img_bgr: np.ndarray,
+    H: np.ndarray,
+    kind: Method,
+    anchors: tuple[np.ndarray, np.ndarray],
 ) -> tuple[np.ndarray, float, bool]:
     """ECC-refine H within its model class; returns (H, correlation, refined).
 
-    The refined H is kept only if it raises the correlation over the overlap and
-    stays within a few pixels of the feature fit (ECC can lock onto changed content).
+    ECC maximizes correlation, so a higher correlation alone proves nothing: on
+    changed content (new construction, moved shadows) it happily drifts several
+    pixels. The refined H is kept only if it raises the correlation, stays within
+    a few pixels of the feature fit, and keeps agreeing with the feature inliers
+    (`anchors`: full-resolution image and reference points).
     """
     ref_g, ref_m, Sr = _ecc_image(ref_bgr)
     img_g, img_m, Si = _ecc_image(img_bgr)
@@ -301,7 +309,8 @@ def _refine_ecc(
     corners = _corners(_size(img_bgr))
     shift = np.linalg.norm(_project(H2, corners) - _project(H, corners), axis=1).max()
     after = _correlation((ref_g, ref_m), (img_g, img_m), W)
-    if after > before and shift <= ECC_MAX_SHIFT_FRAC * ref_bgr.shape[1]:
+    consistent = _rmse(H2, *anchors) <= ECC_MAX_RMSE_GAIN * _rmse(H, *anchors)
+    if after > before and shift <= ECC_MAX_SHIFT_FRAC * ref_bgr.shape[1] and consistent:
         return H2, after, True
     return H, before, False
 
@@ -321,19 +330,20 @@ def register(
     settings: AlignSettings,
     *,
     ref_features: Features | None = None,
+    img_features: Features | None = None,
 ) -> Registration:
     """Estimate the homography mapping img onto ref (full-resolution pixels).
 
-    `ref_features` (from `detect(ref_bgr, settings)`) avoids re-detecting the
-    reference when many images are registered against it. Never raises on
-    unmatched content: failures come back with ok=False and a note.
+    `ref_features` / `img_features` (from `detect(..., settings)`) avoid re-detecting
+    an image that takes part in several registrations. Never raises on unmatched
+    content: failures come back with ok=False and a note.
     """
     ref_size, img_size = _size(ref_bgr), _size(img_bgr)
     fallback = resize_homography(img_size, ref_size)
     if settings.method == "none":
         return Registration(fallback, "none", ok=True, note="alignment disabled")
     ref_f = ref_features if ref_features is not None else detect(ref_bgr, settings)
-    img_f = detect(img_bgr, settings)
+    img_f = img_features if img_features is not None else detect(img_bgr, settings)
     src, dst = match(img_f, ref_f)
     thr = max(1.0, THRESHOLD_FRAC * ref_f.det_size[0])
     notes = [img_f.note] if img_f.note else []
@@ -363,7 +373,8 @@ def register(
     H /= H[2, 2]
     ecc = None
     if settings.ecc_refine and ok:
-        H, ecc, refined = _refine_ecc(ref_bgr, img_bgr, H, kind)
+        anchors = (_project(np.linalg.inv(img_f.S), src[inl]), _project(np.linalg.inv(ref_f.S), dst[inl]))
+        H, ecc, refined = _refine_ecc(ref_bgr, img_bgr, H, kind, anchors)
         if refined:
             notes.append("ecc refined")
     return Registration(

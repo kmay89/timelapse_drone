@@ -1,0 +1,25 @@
+# Every figure the story prints through a {fact:id} token. The site is fictional: measured figures
+# come from the generator's site plan; backstory is "approved" by the fictional client.
+facts:
+  last-season:
+    text: "2007"
+    sources: ["Lakeside Parks Conservancy project brief (fictional)"]
+    status: client-approved
+    note: Fictional backstory for the demo.
+  opening-day:
+    text: Aug. 1, 2026
+    sources: ["Lakeside Parks Conservancy project brief (fictional)"]
+    status: client-approved
+    note: Fictional; consistent with the 2026-08-08 flight showing the park open.
+  new-trees:
+    text: 78 trees
+    sources: ["Synthetic site plan (vantage.demo.synth layout)"]
+    status: verified
+  boardwalk:
+    text: 138 meters of boardwalk
+    sources: ["Synthetic site plan (vantage.demo.synth layout)"]
+    status: verified
+  stalls-to-meadow:
+    text: 135 parking spaces
+    sources: ["Synthetic site plan (vantage.demo.synth layout)"]
+    status: verified

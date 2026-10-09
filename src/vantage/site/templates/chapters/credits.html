@@ -1,0 +1,67 @@
+{% from "macros.html" import attrs, head %}
+{% set paper = ch.surface == "paper" %}
+{% set dates = vantages.values()|map(attribute="captures")|sum(start=[])|map(attribute="date")|unique|sort %}
+<section {{ attrs(ch, index) }}>
+<div class="v-flow">
+{{ head(ch, "v-wide") }}
+<div class="v-cols v-wide v-small">
+<div>
+{% if brand.creditLine %}
+<p class="v-dek">{{ brand.creditLine }}</p>
+{% endif %}
+{% if brand.partners %}
+<h3 class="v-label">Partners</h3>
+<ul class="v-partners">
+{% for p in brand.partners %}
+{% set logo = p.logo or p.logoOnDark if paper else p.logoOnDark or p.logo %}
+<li><span class="v-label">{{ p.role }}</span>{% if p.url %}<a href="{{ p.url }}" rel="noopener">{% endif %}{% if logo %}<img src="{{ logo }}" alt="{{ p.name }}" loading="lazy">{% else %}<b>{{ p.name }}</b>{% endif %}{% if p.url %}</a>{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if ch.notes %}
+<h3 class="v-label">How this was made</h3>
+<ul class="v-method">
+{% for n in ch.notes %}
+<li>{{ n|safe }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+</div>
+<div>
+{% if notes %}
+<h3 class="v-label">Notes</h3>
+{% include "refs.html" %}
+{% endif %}
+{% if ch.sources %}
+<h3 class="v-label">Sources</h3>
+<ul class="v-refs v-sources">
+{% for s in ch.sources %}
+<li>{% if s.url %}<a href="{{ s.url }}" rel="noopener">{{ s.label }}</a>{% else %}{{ s.label }}{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+<h3 class="v-label">Flight log</h3>
+<table class="v-log">
+<thead><tr><th scope="col">Flight</th>{% for v in vantages.values() %}<th scope="col" title="{{ v.name }}">{{ v.id|replace("-", " ")|capitalize }}</th>{% endfor %}</tr></thead>
+<tbody>
+{% for d in dates %}
+<tr><th scope="row"><time datetime="{{ d }}">{{ d|date }}</time></th>{% for v in vantages.values() %}<td>{% if d in v.captures|map(attribute="date") %}<span aria-label="captured">●</span>{% else %}<span class="v-sr">not flown</span>{% endif %}</td>{% endfor %}</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</div>
+<footer class="v-colophon v-wide v-meta">
+{% if brand.disclaimer %}
+<p>{{ brand.disclaimer }}</p>
+{% endif %}
+{% if meta.simulated and not brand.disclaimer %}
+<p>The imagery in this story is simulated.</p>
+{% endif %}
+{% if brand.copyright %}
+<p>{{ brand.copyright }}</p>
+{% endif %}
+<p>Generated <time datetime="{{ meta.generatedAt }}">{{ meta.generatedAt|date }}</time> · Made with Vantage</p>
+</footer>
+</div>
+</section>

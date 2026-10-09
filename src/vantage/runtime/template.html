@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="{{ meta.lang }}" class="no-js" data-edition="{{ edition }}" data-theme="{{ brand.theme }}"{% if service_worker %} data-sw="sw.js"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+{% if base_href %}
+<base href="{{ base_href }}">
+{% endif %}
+<title>{{ meta.title }}{% if meta.subtitle %}: {{ meta.subtitle }}{% endif %}</title>
+{% block meta %}
+<meta name="description" content="{{ meta.dek or meta.subtitle or meta.title }}">
+<meta name="theme-color" content="{{ brand.themeColor }}">
+<meta name="color-scheme" content="{{ 'dark light' if brand.theme == 'dark' else 'light dark' }}">
+{% if meta.draft %}
+<meta name="robots" content="noindex">
+{% endif %}
+{% if meta.url %}
+<link rel="canonical" href="{{ meta.url }}">
+<meta property="og:url" content="{{ meta.url }}">
+{% endif %}
+<meta property="og:type" content="article">
+<meta property="og:title" content="{{ meta.title }}">
+<meta property="og:description" content="{{ meta.dek or meta.subtitle or meta.title }}">
+<meta property="og:site_name" content="{{ brand.name }}">
+{% if share_image %}
+<meta property="og:image" content="{{ share_image }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{{ meta.title }}">
+{% endif %}
+<meta name="twitter:card" content="{{ 'summary_large_image' if share_image else 'summary' }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{{ meta.shortTitle or meta.title }}">
+{% if not embedded %}
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+{% endif %}
+{% if hosted %}
+<link rel="manifest" href="manifest.webmanifest">
+{% endif %}
+{% endblock %}
+<script>document.documentElement.classList.replace("no-js", "js")</script>
+<style id="vantage-theme">{{ theme_css }}</style>
+<style id="vantage-css">{{ runtime_css }}</style>
+</head>
+<body class="v-surface-{{ 'night' if brand.theme == 'dark' else 'paper' }}{{ ' v-grain' if brand.grain }}">
+<a class="v-skip" href="#v-main">Skip to the story</a>
+<main id="v-main">
+{% block chapters %}
+{% for ch in chapters %}
+{% set index = loop.index0 %}
+{% include "chapters/" ~ ch.type ~ ".html" %}
+{% endfor %}
+{% if notes and not has_credits %}
+{% include "notes.html" %}
+{% endif %}
+{% endblock %}
+</main>
+<script id="vantage-story" type="application/json">{{ story_json }}</script>
+{% if runtime_js %}
+<script id="vantage-runtime">{{ runtime_js }}</script>
+{% endif %}
+</body>
+</html>

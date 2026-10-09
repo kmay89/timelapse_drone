@@ -1,8 +1,10 @@
 """Aligned, cropped and graded masters for every vantage.
 
 For each vantage: register every selected frame to the full-resolution
-reference, intersect their valid regions, crop all of them to the largest
-common rectangle, color-match to the reference and write
+reference (or, when the site changed too much for that, to the registered visit
+nearest in time, composing the transforms), intersect their valid regions, crop
+all of them to the largest common rectangle, color-match to the reference and
+write
 
     masters/<vantage>/<date>.jpg      (sRGB, progressive, ≤ master_width)
     masters/index.json                (MastersIndex)
@@ -37,7 +39,7 @@ from vantage.models import (
     VantageSelection,
 )
 from vantage.process import align, grade
-from vantage.process.select import load_frame
+from vantage.process.select import chain_by_date, load_frame
 
 JPEG_QUALITY = 92
 MIN_OVERLAP = (
@@ -57,10 +59,16 @@ class _Capture:
     date: str
     pick: FramePick
     source: Source
-    H: np.ndarray
+    shape: tuple[int, ...]  # full-resolution frame shape
+    H: np.ndarray  # frame → reference pixels
     info: AlignInfo
-    overlap: float
-    included: bool
+    overlap: float  # share of the reference the warped frame covers
+    included: bool = True
+    features: align.Features | None = None  # kept while chaining
+
+    @property
+    def registered(self) -> bool:
+        return self.info.ok and self.overlap >= MIN_OVERLAP
 
 
 def _write_jpeg(path: Path, bgr: np.ndarray) -> None:
@@ -121,34 +129,71 @@ def _register_all(
     settings = project.config.align
     ref_size = (ref.shape[1], ref.shape[0])
     features = align.detect(ref, settings) if settings.method != "none" else None
-    common = np.ones(ref.shape[:2], bool)
     captures: list[_Capture] = []
     for date, pick in sorted(vs.picks.items()):
         src = sources[pick.source]
         if pick.source == vs.reference.source and abs(pick.t - vs.reference.t) < 1e-3:
-            info = AlignInfo(method="reference")
-            captures.append(_Capture(date, pick, src, np.eye(3), info, 1.0, True))
+            captures.append(
+                _Capture(date, pick, src, ref.shape, np.eye(3), AlignInfo(method="reference"), 1.0)
+            )
             continue
         img = load_frame(project, src, pick.t)
-        reg = align.register(ref, img, settings, ref_features=features)
-        mask = align.valid_mask(img.shape, reg.H, ref_size)
-        overlap = float(mask.mean())
-        info = reg.info()
-        problem = None if reg.ok else f"registration failed ({reg.note or 'too few inliers'})"
-        if problem is None and overlap < MIN_OVERLAP:
-            problem = f"covers only {overlap:.0%} of the reference"
-        included = problem is None or pick.manual
-        if problem and included:
-            log.warn(f"{date}: manual pick kept although {problem}")
-            info = info.model_copy(update={"ok": False, "note": f"manual pick kept: {problem}"})
+        own = align.detect(img, settings) if features is not None else None
+        reg = align.register(ref, img, settings, ref_features=features, img_features=own)
+        overlap = float(align.valid_mask(img.shape, reg.H, ref_size).mean())
+        captures.append(_Capture(date, pick, src, img.shape, reg.H, reg.info(), overlap, features=own))
+    if features is not None:
+        _chain(project, captures, ref_size)
+    for cap in captures:
+        cap.features = None
+
+    common = np.ones(ref.shape[:2], bool)
+    for cap in captures:
+        info = cap.info
+        problem = None if info.ok else f"registration failed ({info.note or 'too few inliers'})"
+        if problem is None and cap.overlap < MIN_OVERLAP:
+            problem = f"covers only {cap.overlap:.0%} of the reference"
+        cap.included = problem is None or cap.pick.manual
+        if problem and cap.included:
+            log.warn(f"{cap.date}: manual pick kept although {problem}")
+            cap.info = info.model_copy(update={"ok": False, "note": f"manual pick kept: {problem}"})
         elif problem:
-            log.warn(f"{date}: excluded, {problem}")
-            info = info.model_copy(update={"ok": False, "note": f"excluded: {problem}"})
-        if included and overlap >= MIN_OVERLAP:  # a stray manual pick must not shrink every master
-            common &= mask
-        log.debug(f"{date}: {info.method} inliers={info.inliers} rmse={info.rmse_px}px ecc={info.ecc}")
-        captures.append(_Capture(date, pick, src, reg.H, info, overlap, included))
+            log.warn(f"{cap.date}: excluded, {problem}")
+            cap.info = info.model_copy(update={"ok": False, "note": f"excluded: {problem}"})
+        # Only registered frames shape the crop: a stray manual pick must not shrink every master.
+        if cap.registered and cap.info.method != "reference":
+            common &= align.valid_mask(cap.shape, cap.H, ref_size)
+        log.debug(f"{cap.date}: {info.method} inliers={info.inliers} rmse={info.rmse_px}px ecc={info.ecc}")
     return captures, common
+
+
+def _chain(project: Project, captures: list[_Capture], ref_size: tuple[int, int]) -> None:
+    """Register captures that miss the reference to registered captures nearest in time (in place)."""
+    by_date = {c.date: c for c in captures}
+    anchors = [c.date for c in captures if c.registered and c.info.method != "reference"]
+    pending = [c.date for c in captures if not c.info.ok]
+
+    def attempt(date: str, via: str) -> bool:
+        cap, stone = by_date[date], by_date[via]
+        stone_img = load_frame(project, stone.source, stone.pick.t)
+        img = load_frame(project, cap.source, cap.pick.t)
+        reg = align.register(
+            stone_img, img, project.config.align, ref_features=stone.features, img_features=cap.features
+        )
+        if not reg.ok:
+            return False
+        H = stone.H @ reg.H
+        H /= H[2, 2]
+        overlap = float(align.valid_mask(img.shape, H, ref_size).mean())
+        if overlap < MIN_OVERLAP:
+            return False
+        note = "; ".join(filter(None, [f"chained via {via}", reg.note]))
+        cap.H, cap.overlap, cap.info = H, overlap, reg.info().model_copy(update={"note": note})
+        log.info(f"{date}: registered via {via} ({reg.inliers} inliers)")
+        return True
+
+    if pending and anchors:
+        chain_by_date(pending, anchors, attempt)
 
 
 def _make_vantage(

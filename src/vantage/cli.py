@@ -25,6 +25,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, BinaryIO, TypeVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import typer
 
@@ -61,6 +62,12 @@ ProjectArg = Annotated[
 ]
 ForceOpt = Annotated[
     bool, typer.Option("--force", help="Re-sample every source instead of reusing candidates.")
+]
+ReleaseOpt = Annotated[
+    bool,
+    typer.Option(
+        "--release", help="Release build: fail on draft: true, unknown or unapproved {fact:…} tokens."
+    ),
 ]
 
 
@@ -213,12 +220,12 @@ def _process(project: Project, *, force: bool = False) -> None:
     _align(project)
 
 
-def _build(project: Project, out: Path | None = None) -> Path:
+def _build(project: Project, out: Path | None = None, *, release: bool = False) -> Path:
     from vantage.site.build import build_site
 
     out = out or _dist(project) / "site"
     with log.step("build site"):
-        index = build_site(project, out)
+        index = build_site(project, out, **({"release": True} if release else {}))
     log.ok(f"site → {_show(index)} ({_human(_size(out))})")
     return index
 
@@ -232,16 +239,16 @@ def _film(project: Project) -> list[Path]:
     return films
 
 
-def _package(project: Project) -> dict[str, Path]:
+def _package(project: Project, *, release: bool = False) -> dict[str, Path]:
     from vantage.site.package import package_project
 
     with log.step("package"):
-        packages = package_project(project, _dist(project))
+        packages = package_project(project, _dist(project), **({"release": True} if release else {}))
     log.ok("packages → " + ", ".join(f"{_show(p)} ({_human(_size(p))})" for p in packages.values()))
     return packages
 
 
-def _all(project: Project, *, film: bool = True, force: bool = False) -> None:
+def _all(project: Project, *, film: bool = True, force: bool = False, release: bool = False) -> None:
     if _has_media(project.footage_dir):
         _process(project, force=force)
     elif (project.masters_dir / "index.json").is_file():
@@ -250,13 +257,13 @@ def _all(project: Project, *, film: bool = True, force: bool = False) -> None:
         raise FileNotFoundError(
             f"no footage in {project.footage_dir} and no masters/index.json to build from"
         )
-    index = _build(project)
+    index = _build(project, release=release)
     outputs: list[tuple[str, Path]] = [("site", index.parent)]
     if film and project.config.output.film.enabled:
         outputs += [("film", f) for f in _film(project)]
     elif film:
         log.info("films disabled in project.yaml (output.film.enabled: false)")
-    outputs += [(name.replace("_", " "), p) for name, p in _package(project).items()]
+    outputs += [(name.replace("_", " "), p) for name, p in _package(project, release=release).items()]
     width = max(len(_show(p)) for _, p in outputs)
     for label, path in outputs:
         typer.echo(f"  {label:<12} {_show(path):<{width}}  {_human(_size(path)):>9}")
@@ -316,7 +323,14 @@ def _check_brand(project: Project, errors: list[str], warnings: list[str]) -> No
 
 
 def _check_story(project: Project, errors: list[str], warnings: list[str]) -> None:
-    from vantage.config import CompareChapter, HeroChapter, ScrubChapter, TimelineChapter, VideoChapter
+    from vantage.config import (
+        CompareChapter,
+        GalleryChapter,
+        HeroChapter,
+        ScrubChapter,
+        TimelineChapter,
+        VideoChapter,
+    )
 
     story = project.story
     vantage_ids = {v.id for v in story.vantages}
@@ -348,6 +362,13 @@ def _check_story(project: Project, errors: list[str], warnings: list[str]) -> No
                 refs += [(f"{name} hotspot {h.id}", h.from_), (f"{name} hotspot {h.id}", h.to)]
         elif isinstance(ch, VideoChapter):
             frames.append((f"chapter {name} clip", ch.clip.source))
+        elif isinstance(ch, GalleryChapter):
+            refs += [(f"{name} gallery", r) for r in ch.captures]
+            errors += [
+                f"story.yaml {name}: gallery image {img.file!r} not found in the project folder"
+                for img in ch.images
+                if not (project.root / img.file).is_file()
+            ]
         elif isinstance(ch, TimelineChapter):
             for item in ch.items:
                 refs.append((f"{name} item {item.title!r}", item.capture))
@@ -394,6 +415,12 @@ def check_project(project: Project) -> tuple[list[str], list[str]]:
     warnings: list[str] = []
     if project.root.name != project.slug:
         warnings.append(f"folder name {project.root.name!r} differs from slug {project.slug!r}")
+    try:
+        ZoneInfo(project.config.timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        errors.append(
+            f"project.yaml timezone: {project.config.timezone!r} is not an IANA zone like America/New_York"
+        )
     _check_brand(project, errors, warnings)
     _check_story(project, errors, warnings)
     _check_outputs(project, warnings)
@@ -698,9 +725,10 @@ def build_cmd(
     out: Annotated[
         Path | None, typer.Option("--out", "-o", help="Output folder (default: dist/<slug>/site).")
     ] = None,
+    release: ReleaseOpt = False,
 ) -> None:
     """Build the interactive site from masters + YAML."""
-    _build(_load(project), out.expanduser().resolve() if out else None)
+    _build(_load(project), out.expanduser().resolve() if out else None, release=release)
 
 
 @_command("film")
@@ -710,9 +738,9 @@ def film_cmd(project: ProjectArg) -> None:
 
 
 @_command("package")
-def package_cmd(project: ProjectArg) -> None:
+def package_cmd(project: ProjectArg, release: ReleaseOpt = False) -> None:
     """Single-file HTML + offline zip from the built site."""
-    _package(_load(project))
+    _package(_load(project), release=release)
 
 
 @_command("all")
@@ -720,9 +748,10 @@ def all_cmd(
     project: ProjectArg,
     no_film: Annotated[bool, typer.Option("--no-film", help="Skip rendering the MP4 films.")] = False,
     force: ForceOpt = False,
+    release: ReleaseOpt = False,
 ) -> None:
     """process → build → film → package."""
-    _all(_load(project), film=not no_film, force=force)
+    _all(_load(project), film=not no_film, force=force, release=release)
 
 
 @_command("preview")

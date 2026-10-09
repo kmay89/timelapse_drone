@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import cv2
 import numpy as np
+from PIL import Image
 from pydantic import ValidationError
 
 from vantage import log
@@ -188,7 +189,7 @@ class _Ingester:
             if job.path.suffix.lower() in VIDEO_EXTS:
                 return self._video(job)
             return self._photo(job)
-        except (OSError, ValueError, ffmpeg.FFmpegError, cv2.error) as exc:
+        except (OSError, ValueError, ffmpeg.FFmpegError, cv2.error, Image.DecompressionBombError) as exc:
             reason = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
             if job.path.suffix.lower() in HEIF_EXTS:
                 reason += " (HEIC needs the pillow-heif plugin; export JPEG instead)"

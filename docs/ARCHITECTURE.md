@@ -312,3 +312,28 @@ with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
   (`.v-fact[data-releasable="false"]`); `vantage build --release` fails if any fact used in the
   story is not releasable (`Fact.releasable`), if a token references an unknown fact, or if the
   project is `draft: true`.
+
+### Single-file assets
+
+`vantage package` writes two self-contained editions from the built site: `<slug>.html` (full)
+and `<slug>-lite.html` (email). `<html data-edition>` is `site` (hosted), `offline` (the zip),
+`single` or `lite`; only `site` carries `data-sw="sw.js"` and the manifest link.
+
+* StoryJSON URLs stay site-relative paths (`assets/…`). Each `Img` is collapsed to one JPEG:
+  `sources: [{type: "image/jpeg", srcset: [[path, w]]}]`, `fallback: path`. An `Img` with
+  `sources: []` and `fallback === lqip` is a placeholder only (lite: everything except the hero,
+  compare pairs, one image per scrub step and video posters).
+* The bytes of every path the StoryJSON references are in the document exactly once, either as
+  the `src` data: URI of an element carrying `data-asset="<path>"` (images the static essay
+  shows), or as base64 inside
+  `<script type="application/octet-stream" data-asset="<path>" data-type="<mime>">`, placed
+  before the runtime script. The runtime resolves a path by looking up `[data-asset="<path>"]`:
+  a `<script>` becomes `URL.createObjectURL(new Blob([bytes], {type: data-type}))` (create it
+  lazily, revoke it when unused); an element with `src` lends its data: URI.
+* Videos are never `data:` sources. `render.py` emits no `<video>` in these editions (the poster
+  is a plain picture); the runtime builds the player from `chapter.video.sources` (H.264 only
+  here) once the blob URL exists. Videos are kept only while the file fits
+  `output.single_file_max_mb`; otherwise hero `video` is removed and video chapters keep
+  `sources: []`. Lite never carries video.
+* Fonts are inlined as `data:font/woff2` in the theme CSS; `meta.shareImage` is dropped unless
+  it is an absolute URL.

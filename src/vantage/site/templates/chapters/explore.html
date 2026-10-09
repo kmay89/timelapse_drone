@@ -1,0 +1,26 @@
+{% from "macros.html" import attrs, head %}
+<section {{ attrs(ch, index) }}>
+<div class="v-flow">
+{{ head(ch, "v-wide") }}
+{% for vid in ch.vantages %}
+{% set v = vantages[vid] %}
+<div class="v-sheet v-wide" data-vantage="{{ v.id }}">
+<h3 class="v-label">{{ v.name }} <span class="v-meta">· {{ v.captures|length }} flights</span></h3>
+{% set hidden = v.captures|selectattr("img", "placeholder")|list %}
+{% if hidden|length < v.captures|length %}
+<ul class="v-grid">
+{% for c in v.captures if c.img is not placeholder %}
+<li><figure class="v-fig v-media">{{ picture(c.img, "thumb") }}<figcaption><time class="v-date" datetime="{{ c.date }}">{{ c.label }}</time></figcaption></figure></li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if hidden %}
+<p class="v-meta v-also">{{ "Also flown" if hidden|length < v.captures|length else "Flown" }}: {{ hidden|map(attribute="label")|join(", ") }}.</p>
+{% endif %}
+</div>
+{% endfor %}
+{% if edition == "lite" %}
+<p class="v-meta v-lite-note">This lightweight edition carries key frames only; open the web edition to explore every flight at full resolution.</p>
+{% endif %}
+</div>
+</section>

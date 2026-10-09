@@ -8,7 +8,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from test_select import build_project
+from test_align import WORLD, make_world, random_homography, reference_view, render_view
+from test_select import Shot, build_project
 from vantage.models import FramePick, MastersIndex
 from vantage.process.masters import make_masters
 from vantage.process.select import select_frames
@@ -79,3 +80,41 @@ def test_make_masters_end_to_end(tmp_path):
     assert rows["2025-08-10"]["included"] is True and rows["2025-08-10"]["manual"] is True
     assert (review_dir / "contact.jpg").exists()
     assert sorted(p.name for p in review_dir.glob("20*.jpg")) == [f"{d}.jpg" for d in by_date]
+
+
+def test_visit_unlike_the_reference_is_chained_through_its_neighbour(tmp_path):
+    """Before → during → after: 'before' shares nothing with the reference, half its frame with 'during'.
+
+    Also crops to a portrait aspect, as a phone-first story might.
+    """
+    before, after = make_world(seed=3), make_world(seed=5)
+    during = np.hstack([before[:, : WORLD[0] // 2], after[:, WORLD[0] // 2 :]])
+    rng = np.random.default_rng(8)
+    h_before, h_during = random_homography(rng), random_homography(rng)
+    shots = {
+        "after": Shot("2025-09-01/DJI_0300.JPG", reference_view(after), 900.0, np.eye(3)),
+        "during": Shot("2025-06-01/DJI_0200.JPG", render_view(during, h_during, rng), 800.0, h_during),
+        "before": Shot("2025-03-01/DJI_0100.JPG", render_view(before, h_before, rng), 700.0, h_before),
+    }
+    config = {"align": {"max_features": 4000, "ecc_refine": False, "output_aspect": 0.8}}
+    project, catalog, _ = build_project(tmp_path, shots=shots, config=config)
+    selection = select_frames(project, catalog)
+    assert sorted(selection.vantages["overview"].picks) == ["2025-03-01", "2025-06-01", "2025-09-01"]
+
+    mv = make_masters(project, selection).vantages["overview"]
+    by_date = {c.date: c for c in mv.captures}
+    assert list(by_date) == ["2025-03-01", "2025-06-01", "2025-09-01"]
+    assert by_date["2025-03-01"].align.ok
+    assert "chained via 2025-06-01" in (by_date["2025-03-01"].align.note or "")
+    assert abs(mv.width / mv.height - 0.8) < 0.01
+
+    crop = json.loads((project.work_dir / "review" / "overview" / "review.json").read_text())["crop"]
+    x, y, w, h = (crop[k] for k in "xywh")
+    # 'before' is fitted on the half it shares with 'during', so its far side is extrapolated.
+    for date, world, tolerance in (("2025-03-01", before, 1.0), ("2025-06-01", during, 0.3)):
+        truth = cv2.resize(
+            reference_view(world)[y : y + h, x : x + w], (mv.width, mv.height), interpolation=cv2.INTER_AREA
+        )
+        master = cv2.imread(str(project.masters_dir / by_date[date].file))
+        shifts = _tile_shifts(truth, master)
+        assert shifts.max() < tolerance, (date, shifts)

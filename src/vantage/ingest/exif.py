@@ -109,7 +109,8 @@ def read_still_metadata(path: Path) -> StillMeta:
     with Image.open(path) as im:
         width, height = im.size
         exif = im.getexif()
-    if exif.get(ExifTags.Base.Orientation) in (5, 6, 7, 8):
+        upright = im.format == "TIFF"  # Pillow already reports TIFF sizes with orientation applied
+    if not upright and exif.get(ExifTags.Base.Orientation) in (5, 6, 7, 8):
         width, height = height, width
     sub = exif.get_ifd(ExifTags.IFD.Exif)
     gps = exif.get_ifd(ExifTags.IFD.GPSInfo)

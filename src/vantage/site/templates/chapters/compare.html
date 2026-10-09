@@ -1,0 +1,23 @@
+{% from "macros.html" import attrs, head, pins, legend %}
+{% set v = vantages[ch.vantage] %}
+<section {{ attrs(ch, index) }} data-vantage="{{ v.id }}" data-mode="{{ ch.mode }}">
+<div class="v-flow">
+{{ head(ch) }}
+<div class="v-pair v-bleed">
+{% for side, i, label in (("Before", ch.before, ch.beforeLabel), ("After", ch.after, ch.afterLabel)) %}
+<figure class="v-fig" data-side="{{ side|lower }}">
+<div class="v-media">{{ picture(v.captures[i].img, "half") }}{{ pins(ch.hotspots, i) }}</div>
+<figcaption class="v-tag v-label"><b>{{ side }}</b><time datetime="{{ v.captures[i].date }}">{{ label }}</time></figcaption>
+</figure>
+{% endfor %}
+</div>
+{% if ch.steps %}
+<ol class="v-notes-list">
+{% for s in ch.steps %}
+<li><div class="v-prose">{{ s.html|safe }}</div></li>
+{% endfor %}
+</ol>
+{% endif %}
+{{ legend(ch.hotspots) }}
+</div>
+</section>

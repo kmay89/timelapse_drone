@@ -21,6 +21,7 @@ from vantage.ingest.catalog import (
     source_id,
 )
 from vantage.media.ffmpeg import FrameWriter
+from vantage.media.ffmpeg import run as ffmpeg_run
 from vantage.models import Catalog
 from vantage.scaffold import create_project
 
@@ -219,3 +220,31 @@ def test_folder_date_and_quicktime() -> None:
     assert quicktime_datetime("1970-01-01T00:00:00Z", zone) is None
     assert quicktime_datetime("garbage", zone) is None
     assert quicktime_datetime(None, zone) is None
+
+
+def test_portrait_rotated_video_capped_candidates_and_oversized_still(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = create_project(tmp_path / "portrait", "portrait")
+    day = root / "footage" / "2025-06-14"
+    landscape = tmp_path / "landscape.mp4"
+    _video(landscape, seed=9, seconds=6.0)
+    day.mkdir(parents=True)
+    ffmpeg_run(["-display_rotation", "90", "-i", landscape, "-c", "copy", day / "DJI_0001.MP4"])
+    no_fix = "[latitude: 0.000000] [longitude: 0.000000] [rel_alt: 0.000 abs_alt: 0.000]"
+    (day / "DJI_0001.SRT").write_text(f"1\n00:00:00,000 --> 00:00:06,000\n{no_fix}\n")
+    _photo(day / "ortho.jpg", seed=10)
+    project = load_project(root)
+    project.config.select.max_candidates_per_source = 3
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)  # ortho.jpg now trips Pillow's bomb guard
+
+    catalog = build_catalog(project)
+    (video,) = catalog.sources  # the oversized still is skipped, not fatal
+    assert (video.width, video.height) == (96, 160)
+    assert (video.lat, video.lon) == (None, None)
+    cands = catalog.candidates
+    assert len(cands) == 3
+    assert cands[0].t < 2.0 < 4.0 < cands[-1].t  # spread over the whole clip, not its first seconds
+    for cand in cands:
+        assert cv2.imread(str(project.work_dir / cand.file)).shape[:2] == (160, 96)
+        assert cand.lat is None
