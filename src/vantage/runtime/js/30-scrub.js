@@ -167,10 +167,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       cards.set(alphas);
       const shade = String(1 - Math.max(0, ...alphas));
       if (odo.note.style.opacity !== shade) odo.note.style.opacity = shade;
-      pins.place(r, W, H, (hs, px) => {
-        if (cards.covers(px, r.y + hs.y * r.h)) return 0;
-        return (inRange(hs, lo) ? 1 - a : 0) + (inRange(hs, hi) && hi !== lo ? a : 0);
-      }, top, bottom);
+      pins.place(r, W, H, (hs) => (inRange(hs, lo) ? 1 - a : 0) + (inRange(hs, hi) && hi !== lo ? a : 0), top, bottom, cards);
 
       const f = where(caps[lo].date) + (where(caps[hi].date) - where(caps[lo].date)) * a;
       if (f !== railF) {

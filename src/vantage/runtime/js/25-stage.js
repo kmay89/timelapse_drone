@@ -109,9 +109,9 @@ class Cards {
     }
   }
 
-  /** True when stage point (x, y) lies under a showing card. */
-  covers(/** @type {number} */ x, /** @type {number} */ y) {
-    return this.items.some(({ o, box: b }) => o > 0.1 && x > b.left && x < b.right && y > b.top && y < b.bottom);
+  /** True when the stage box [x0, x1] × [y0, y1] overlaps a showing card. */
+  covers(/** @type {number} */ x0, /** @type {number} */ y0, /** @type {number} */ x1, /** @type {number} */ y1) {
+    return this.items.some(({ o, box: b }) => o > 0.1 && x0 < b.right && x1 > b.left && y0 < b.bottom && y1 > b.top);
   }
 
   /** @param {number[]} alphas */
@@ -139,27 +139,35 @@ class Pins {
         openSheet({ kicker: "Point of interest", title: hs.label, html: hs.html || "", from: el }),
       );
       layer.append(el);
-      return { hs, el, x: -1e4, y: -1e4, o: -1, w: 0, flip: false };
+      return { hs, el, x: -1e4, y: -1e4, o: -1, w: 0, hh: 0, flip: false };
     });
   }
 
-  /** Cache each pin's width (dot + label) for edge-aware label placement; call on resize. */
+  /** Cache each pin's size (dot + label) for edge- and card-aware label placement; call on resize. */
   measure() {
-    for (const it of this.items) it.w = it.el.offsetWidth;
+    for (const it of this.items) [it.w, it.hh] = [it.el.offsetWidth, it.el.offsetHeight / 2];
   }
 
   /**
    * @param {any} r image rect @param {number} W @param {number} H
    * @param {(hs: any, x: number) => number} vis opacity for a hotspot at stage x
    * @param {number} top @param {number} bottom pins outside [top, H - bottom] hide (odometer, rail)
+   * @param {Cards} cards a pin hides rather than sit under a showing card
    * @param {(x: number) => boolean} [left] preferred label side where both fit; default: the right.
-   *   A label that fits on one side only always goes there (never clipped by the stage edge).
+   *   A label that fits on one side only goes there (never clipped by the stage edge), and one that
+   *   would run under a card takes the other side when that is clear.
    */
-  place(r, W, H, vis, top, bottom, left) {
+  place(r, W, H, vis, top, bottom, cards, left) {
     for (const it of this.items) {
       const x = r.x + it.hs.x * r.w;
       const y = r.y + it.hs.y * r.h;
-      const inside = x > 14 && x < W - 14 && y > top && y < H - bottom;
+      const reach = it.w - 22;
+      const fitR = x + reach <= W - 12;
+      const fitL = x - reach >= 12;
+      let flip = fitR !== fitL ? fitL : left ? left(x) : !fitR && x > W / 2;
+      const under = (/** @type {boolean} */ l) => cards.covers(l ? x - reach : x - 22, y - it.hh, l ? x + 22 : x + reach, y + it.hh);
+      if (under(flip) && (flip ? fitR : fitL) && !under(!flip)) flip = !flip;
+      const inside = x > 14 && x < W - 14 && y > top && y < H - bottom && !under(flip);
       const o = inside ? Math.round(clamp(vis(it.hs, x)) * 100) / 100 : 0;
       if (Math.abs(x - it.x) + Math.abs(y - it.y) > 0.2) {
         it.x = x;
@@ -174,10 +182,6 @@ class Pins {
         it.o = o;
         it.el.style.opacity = String(o);
       }
-      const reach = it.w - 22;
-      const fitR = x + reach <= W - 12;
-      const fitL = x - reach >= 12;
-      const flip = fitR !== fitL ? fitL : left ? left(x) : !fitR && x > W / 2;
       if (flip !== it.flip) it.el.classList.toggle("v-hs--l", (it.flip = flip));
     }
   }

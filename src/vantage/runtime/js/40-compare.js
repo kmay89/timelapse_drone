@@ -60,6 +60,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let drawn = "";
   let valueNow = -1;
   let tagW = [0, 0];
+  let top = 0; // pins hide above this line (the date tags)
   const after = layers[1].el;
 
   /* Curtain: handle (1px rule + 44pt grip, a role=slider), dates riding on either side. */
@@ -146,7 +147,9 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       }
       tagW = tags.map((t) => t.offsetWidth);
       pins.measure();
-      cards.measure(stage.getBoundingClientRect());
+      const box = stage.getBoundingClientRect();
+      cards.measure(box);
+      top = Math.max(...tags.map((t) => t.getBoundingClientRect().bottom)) - box.top + 8;
       drawn = "";
     },
     enter() {
@@ -189,10 +192,8 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         grip.setAttribute("aria-valuetext", `${100 - now}% ${labels[1]}, ${now}% ${labels[0]}`);
       }
       cards.set(steps[0].html ? cardAlphas(wins, x) : wins.map(() => 0));
-      pins.place(r, W, H, (hs, px) => {
-        if (cards.covers(px, r.y + hs.y * r.h)) return 0;
-        return vis(hs, (blink ? before : px < X) ? ch.before : ch.after);
-      }, 72, 24, blink ? undefined : (px) => px < X);
+      const side = (/** @type {number} */ px) => px < X;
+      pins.place(r, W, H, (hs, px) => vis(hs, (blink ? before : side(px)) ? ch.before : ch.after), top, 24, cards, blink ? undefined : side);
       return false;
     },
   };

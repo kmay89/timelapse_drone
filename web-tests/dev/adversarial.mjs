@@ -238,8 +238,9 @@ for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
 }
 
 /* 8. Hotspot labels never run off the stage, whichever side of the curtain their pin is on, and no
- *    pin shows under a step card (scrub and compare alike). */
-for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
+ *    pin shows under a step card or over a date (odometer, curtain tags); portrait, landscape, desktop. */
+const LANDSCAPE = { ...IPHONE, viewport: { width: 852, height: 393 }, deviceScaleFactor: 2 };
+for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE], ["landscape", LANDSCAPE]]) {
   const { ctx, page } = await open(browser, opts);
   const clipped = [];
   const covered = [];
@@ -248,11 +249,15 @@ for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
       await go(page, await trackY(page, id, p), 900);
       const [off, under] = await page.evaluate((id) => {
         const pins = [...document.querySelectorAll(`#${id} .v-hs.v-on`)];
-        const cards = [...document.querySelectorAll(`#${id} .v-card`)].filter((c) => +c.style.opacity > 0.1).map((c) => c.getBoundingClientRect());
+        const shown = (el) => +getComputedStyle(el).opacity > 0.1 && getComputedStyle(el).display !== "none";
+        const cards = [...document.querySelectorAll(`#${id} :is(.v-card, .v-cmp__tag, .v-odo__date)`)].filter(shown).map((c) => c.getBoundingClientRect());
         const off = pins.map((e) => e.querySelector(".v-hs__label").getBoundingClientRect()).filter((r) => r.left < -0.5 || r.right > innerWidth + 0.5);
-        const under = pins.map((e) => e.querySelector(".v-hs__dot").getBoundingClientRect()).filter((d) => {
-          const [x, y] = [d.left + d.width / 2, d.top + d.height / 2];
-          return cards.some((c) => x > c.left && x < c.right && y > c.top && y < c.bottom);
+        const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+        const under = pins.filter((e) => {
+          const label = e.querySelector(".v-hs__label").getBoundingClientRect();
+          const d = e.querySelector(".v-hs__dot").getBoundingClientRect();
+          const dot = new DOMRect(d.left + d.width / 2 - 8, d.top + d.height / 2 - 8, 16, 16);
+          return cards.some((c) => hit(label, c) || hit(dot, c));
         });
         return [off.length, under.length];
       }, id);
@@ -260,7 +265,7 @@ for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
       if (under) covered.push(`${id}@${p}: ${under}`);
     }
   check(`${name}: hotspot labels stay on the stage`, !clipped.length, clipped.join(", "));
-  check(`${name}: no hotspot shows under a step card`, !covered.length, covered.join(", "));
+  check(`${name}: no hotspot overlaps a card or a date`, !covered.length, covered.join(", "));
   await ctx.close();
 }
 
