@@ -44,6 +44,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   );
   const where = dateTicks(ticks, caps);
   const tickEls = $$(".v-tick:not(.v-tick--year)", ticks);
+  odo.set(caps[0].label, 0, "");
   const live = liveRegion();
   const stage = h("div", { class: "v-stage" }, [canvas, h("div", { class: "v-scrim" }), layer, odo.el, cards.el, rail, live]);
   const track = h("div", { class: "v-track", style: `--len:${Math.max(ch.scrollVh || 75 * n, 200)}` }, [stage]);
@@ -112,7 +113,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       const widest = Math.max(...[homeCam(v, W, H), ...cams].map((c) => frameRect(W, H, v.aspect, c).w));
       need = decodeWidth(imgs[0], widest, s, v.aspect);
       const box = stage.getBoundingClientRect();
-      top = odo.el.getBoundingClientRect().bottom - box.top + 8;
+      top = odo.date.getBoundingClientRect().bottom - box.top + 8;
       bottom = box.bottom - rail.getBoundingClientRect().top + 8;
       cardBoxes = cards.items.map((it) => {
         const r = it.el.getBoundingClientRect();

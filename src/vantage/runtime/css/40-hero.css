@@ -19,7 +19,7 @@
 }
 .js .v-hero__cue::after { content: ""; position: absolute; left: 0; top: 0; width: 1px; height: 45%; background: var(--v-paper); animation: v-cue 2.2s var(--v-ease) infinite; }
 .js .v-cue .v-hero__cue { opacity: 1; }
-@media (min-width: 48em) { .js .v-hero__cue { bottom: calc(var(--v-safe-b) + 1.5rem); height: 3.5rem; } }
+@media (min-width: 48em) { .js .v-hero__cue { left: auto; right: var(--v-gutter); bottom: calc(var(--v-safe-b) + 1.5rem); height: 3.5rem; } }
 
 @keyframes v-fade { from { opacity: 0; } }
 @keyframes v-rise { from { opacity: 0; transform: translate3d(0, 1.1rem, 0); } }

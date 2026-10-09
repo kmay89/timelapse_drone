@@ -117,7 +117,7 @@ class Pins {
         openSheet({ kicker: "Point of interest", title: hs.label, html: hs.html || "", from: el }),
       );
       layer.append(el);
-      return { hs, el, x: NaN, y: NaN, o: -1, flip: false };
+      return { hs, el, x: -1e4, y: -1e4, o: -1, flip: false };
     });
   }
 
@@ -164,20 +164,20 @@ class Odometer {
         this.count,
         story.meta.simulated && h("span", { class: "v-odo__sim", text: "Simulated" }),
       ]),
-      h("div", { class: "v-odo__date" }, [this.month, " ", this.year]),
+      (this.date = h("div", { class: "v-odo__date" }, [this.month, " ", this.year])),
       this.note,
     ]);
     this.label = "";
   }
 
   set(/** @type {string} */ label, /** @type {number} */ index, /** @type {string} */ note, dir = 1) {
+    this.count.textContent = `${pad(index + 1)} / ${this.total}`;
+    this.note.textContent = note;
     if (label === this.label) return;
     const [m, y] = splitLabel(label);
     const [m0, y0] = splitLabel(this.label);
     const x0 = this.year.offsetLeft;
     this.label = label;
-    this.count.textContent = `${pad(index + 1)} / ${this.total}`;
-    this.note.textContent = note;
     if (m !== m0) roll(this.month, m, dir);
     if (y !== y0) roll(this.year, y, dir);
     const dx = x0 - this.year.offsetLeft;

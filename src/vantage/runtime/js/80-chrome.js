@@ -91,16 +91,18 @@ function chrome() {
   const fillEl = h("span");
   const menu = h("button", { class: "v-btn v-btn--glass", type: "button", "aria-label": "Contents", "aria-haspopup": "dialog" }, [icon("menu")]);
   menu.addEventListener("click", () => contents(menu));
-  doc.body.append(
-    h("div", { class: "v-progress", "aria-hidden": "true" }, [fillEl]),
-    h("nav", { class: "v-chrome", "aria-label": "Story" }, [
-      story.meta.draft && h("span", { class: "v-badge v-chrome__badge", text: "Preview" }),
-      shareURL && h("button", { class: "v-btn v-btn--glass", type: "button", "aria-label": "Share this story", onclick: share }, [icon("share")]),
-      menu,
-    ]),
-    sheetWrap,
-    toastEl,
+  const nav = h("nav", { class: "v-chrome", "aria-label": "Story" }, [
+    story.meta.draft && h("span", { class: "v-badge v-chrome__badge", text: "Preview" }),
+    shareURL && h("button", { class: "v-btn v-btn--glass", type: "button", "aria-label": "Share this story", onclick: share }, [icon("share")]),
+    menu,
+  ]);
+  doc.body.append(h("div", { class: "v-progress", "aria-hidden": "true" }, [fillEl]), nav, sheetWrap, toastEl);
+  // The buttons take the colour of whichever surface passes under them (a band at the top 6%).
+  const band = new IntersectionObserver(
+    (entries) => entries.forEach((e) => e.isIntersecting && nav.classList.toggle("v-on-paper", e.target.classList.contains("v-surface-paper"))),
+    { rootMargin: "0px 0px -94% 0px" },
   );
+  $$("main > section").forEach((s) => band.observe(s));
   let last = -1;
   actives.add({
     measure: () => scrollY / Math.max(1, root.scrollHeight - innerHeight),

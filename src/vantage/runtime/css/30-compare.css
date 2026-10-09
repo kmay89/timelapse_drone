@@ -23,8 +23,12 @@
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: inset 0 0 0 1px rgb(var(--v-paper-rgb) / .12);
 }
 .v-cmp__tag b { margin-right: .5em; font-weight: 700; color: var(--v-accent-on-night); }
-.v-cmp__handle .v-cmp__tag--b { right: 14px; }
+.v-cmp__handle .v-cmp__tag--b { right: 14px; text-align: right; }
 .v-cmp__handle .v-cmp__tag--a { left: 14px; }
+@media (max-width: 47.99em) {
+  .v-cmp__handle .v-cmp__tag { border-radius: 12px; padding: .6em .75em .55em; }
+  .v-cmp__handle .v-cmp__tag b { display: block; margin: 0 0 .3em; }
+}
 
 /* Blink (and explore's two-flight modes): tags sit in the corners, the visible side lit. */
 .v-stage > .v-cmp__tag, .v-x__stage > .v-cmp__tag { transition: opacity .15s; opacity: .45; }
