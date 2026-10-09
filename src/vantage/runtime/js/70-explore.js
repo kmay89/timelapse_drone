@@ -16,7 +16,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const canvas = h("canvas", { class: "v-canvas", role: "img" });
   const ctx = canvas.getContext("2d", { alpha: false });
   ctx.imageSmoothingQuality = "high";
-  const reset = h("button", { class: "v-btn v-x__reset", type: "button", "aria-label": "Reset zoom", hidden: true }, [icon("reset")]);
+  const reset = h("button", { class: "v-btn v-btn--glass v-x__reset", type: "button", "aria-label": "Reset zoom", hidden: true }, [icon("reset")]);
   const tags = [0, 1].map((k) => h("span", { class: `v-cmp__tag v-label v-cmp__tag--${k ? "a" : "b"}` }));
   const grip = h("div", { class: "v-cmp__grip", role: "slider", tabindex: "0", "aria-label": "Divider", "aria-valuemin": "0", "aria-valuemax": "100" }, [icon("grip")]);
   const handle = h("div", { class: "v-cmp__handle" }, [h("span", { class: "v-cmp__rule" }), grip]);
@@ -53,7 +53,6 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let days = [];
   /** @type {ImageStore} */
   let store;
-  let where = (/** @type {string} */ _) => 0;
   let mode = "single";
   let u = 0; // continuous position in seq (single mode)
   let pick = [0, 0];
@@ -87,7 +86,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     store?.clear();
     store = new ImageStore(caps.map((c) => c.img), redraw);
     ticks.replaceChildren();
-    where = dateTicks(ticks, caps);
+    dateTicks(ticks, caps);
     input.max = String(days[days.length - 1] - days[0]);
     for (const sel of selects) sel.replaceChildren(...caps.map((c, k) => h("option", { value: String(k), text: c.label })));
     pick = [0, seq.length - 1];
@@ -376,6 +375,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         const dir = shownK < cur ? -1 : 1;
         cur = shownK;
         odo.set(caps[shownK].label, shownK, "", dir);
+        canvas.setAttribute("aria-label", `${v.name}, ${caps[shownK].label}`);
       }
       if (dirty) {
         dirty = false;

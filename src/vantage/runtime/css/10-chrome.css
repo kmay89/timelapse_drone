@@ -8,13 +8,14 @@
 .v-btn:disabled { cursor: default; opacity: .55; }
 .v-ico svg { display: block; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .v-btn--glass {
-  width: 44px; height: 44px; color: var(--v-text-on-night); background: rgb(var(--v-night-rgb) / .46);
+  width: 44px; height: 44px; color: var(--v-text-on-night); background: rgb(var(--v-night-rgb) / .58);
   -webkit-backdrop-filter: blur(16px) saturate(1.5); backdrop-filter: blur(16px) saturate(1.5);
   box-shadow: inset 0 0 0 1px rgb(var(--v-paper-rgb) / .16);
 }
 .v-btn--glass { transition: background-color .3s, color .3s, box-shadow .3s; }
 .v-on-paper .v-btn--glass { color: var(--v-ink); background: rgb(var(--v-paper-rgb) / .66); box-shadow: inset 0 0 0 1px rgb(var(--v-night-rgb) / .14); }
 .v-btn--pill { padding: 0 1.15rem 0 .95rem; background: var(--v-accent); color: var(--v-on-accent); font-weight: 600; font-size: .9375rem; }
+.v-btn--pill.v-done { opacity: 1; background: none; color: var(--v-acc); box-shadow: inset 0 0 0 1px var(--v-rule); }
 .v-btn--text { padding: 0 1rem; font-weight: 600; font-size: .9375rem; box-shadow: inset 0 0 0 1px var(--v-rule); }
 .v-btn--accent { color: var(--v-acc); }
 .v-btn--text .v-ico svg { width: 18px; height: 18px; }

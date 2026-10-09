@@ -54,14 +54,26 @@ const trackY = (page, id, p) =>
     return r.top + scrollY + p * (t.offsetHeight - t.querySelector(".v-stage").offsetHeight);
   }, [id, p]);
 const odoDate = (page, id) => page.$eval(`#${id} .v-odo__date`, (el) => el.textContent.replace(/\s+/g, " ").trim());
-/** Mean luminance of the centre of a canvas (0 = black / never drawn). */
-const canvasLum = (page, sel) =>
-  page.$eval(sel, (c) => {
-    const x = c.getContext("2d").getImageData(c.width / 2 - 20, c.height / 2 - 20, 40, 40).data;
-    let s = 0;
-    for (let i = 0; i < x.length; i += 4) s += x[i] + x[i + 1] + x[i + 2];
-    return s / (x.length / 4) / 3;
-  });
+/** True when a canvas shows an image: pixel variance where readable; file:// taints the canvas, so
+ * there a centre crop must not compress like a flat fill. */
+async function painted(page, sel) {
+  const spread = await page
+    .$eval(sel, (c) => {
+      const x = c.getContext("2d").getImageData(c.width / 2 - 40, c.height / 2 - 40, 80, 80).data;
+      let lo = 255;
+      let hi = 0;
+      for (let i = 0; i < x.length; i += 4) {
+        lo = Math.min(lo, x[i + 1]);
+        hi = Math.max(hi, x[i + 1]);
+      }
+      return hi - lo;
+    })
+    .catch(() => null);
+  if (spread !== null) return spread > 30;
+  const b = await page.locator(sel).boundingBox();
+  const png = await page.screenshot({ clip: { x: b.x + b.width / 2 - 60, y: b.y + b.height / 2 - 60, width: 120, height: 120 } });
+  return png.length > 30000;
+}
 
 const browser = await chromium.launch();
 
@@ -82,7 +94,7 @@ const browser = await chromium.launch();
   await touchDrag(page, [rb.x + rb.width - 4, rb.y + 4], [rb.x + 2, rb.y + 6], 14);
   await page.waitForTimeout(1500);
   check("rail drag scrubs back to the first flight", (await odoDate(page, "twelve-flights")) === "April 2025", await odoDate(page, "twelve-flights"));
-  check("scrub canvas painted", (await canvasLum(page, "#twelve-flights canvas")) > 10);
+  check("scrub canvas painted", await painted(page, "#twelve-flights canvas"));
 
   // Hotspot: tap a visible pin → sheet; swipe down → closed.
   const pin = page.locator("#twelve-flights .v-hs.v-on").first();
@@ -188,7 +200,7 @@ const browser = await chromium.launch();
   await page.reload({ waitUntil: "load" });
   await page.evaluate((y) => scrollTo(0, y), await trackY(page, "twelve-flights", 0.5));
   await page.waitForTimeout(1200);
-  check("offline reload renders the scrub", (await canvasLum(page, "#twelve-flights canvas")) > 10);
+  check("offline reload renders the scrub", await painted(page, "#twelve-flights canvas"));
   await page.screenshot({ path: path.join(out, "iphone-offline-scrub.png") });
   check("no console errors (offline)", errors.length === 0, errors.join(" | "));
   await ctx.close();
@@ -206,7 +218,62 @@ const browser = await chromium.launch();
   await ctx.close();
 }
 
-/* 4. JavaScript off: the photo essay. */
+/* 4. Variants the demo doesn't author: a blink compare and a draft, by rewriting the StoryJSON in flight. */
+{
+  const ctx = await browser.newContext(IPHONE);
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  await page.route(/\/(index\.html)?$/, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace('"mode":"curtain"', '"mode":"blink"').replace('"draft":false', '"draft":true');
+    await route.fulfill({ response: res, body });
+  });
+  await page.goto(url, { waitUntil: "load" });
+  check("draft: Preview badge in the chrome", await page.locator(".v-chrome__badge").isVisible());
+  await page.evaluate((y) => scrollTo(0, y), await trackY(page, "before-after", 0.3));
+  await page.waitForTimeout(600);
+  const after = page.locator("#before-after .v-cmp__after");
+  const toggle = page.getByRole("button", { name: /Show April 2025/ });
+  check("blink: toggle button, after side showing", (await toggle.isVisible()) && (await after.evaluate((e) => e.style.opacity)) === "1");
+  await toggle.tap();
+  await page.waitForTimeout(300);
+  check("blink: toggle shows before", (await toggle.getAttribute("aria-pressed")) === "true" && (await after.evaluate((e) => e.style.opacity)) === "0");
+  await page.screenshot({ path: path.join(out, "iphone-blink-before.png") });
+  await toggle.tap();
+  const sb = await page.locator("#before-after .v-stage").boundingBox();
+  await page.mouse.move(sb.x + 200, sb.y + 300);
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  const held = await after.evaluate((e) => e.style.opacity);
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  check("blink: press and hold shows before, release shows after", held === "0" && (await after.evaluate((e) => e.style.opacity)) === "1");
+  await page.getByRole("button", { name: "Blink automatically" }).tap();
+  const seen = new Set();
+  for (let i = 0; i < 12; i++) {
+    seen.add(await after.evaluate((e) => e.style.opacity));
+    await page.waitForTimeout(150);
+  }
+  check("blink: auto-blink alternates", seen.size === 2);
+  check("no console errors (variants)", errors.length === 0, errors.join(" | "));
+
+  // Explore vantage chips and gallery dots.
+  await page.locator("#explore .v-chip").nth(1).scrollIntoViewIfNeeded();
+  await page.locator("#explore .v-chip").nth(1).tap();
+  await page.waitForTimeout(800);
+  check("explore: chip switches vantage", (await page.locator("#explore canvas").getAttribute("aria-label")).startsWith("From over the water"));
+  check("explore: ticks follow the vantage", (await page.locator("#explore .v-x__ticks .v-tick:not(.v-tick--year)").count()) === 10);
+  await page.locator("#from-the-water .v-dot").nth(4).scrollIntoViewIfNeeded();
+  await page.locator("#from-the-water .v-dot").nth(4).tap();
+  await page.waitForTimeout(900);
+  check("gallery: a dot scrolls the strip", (await page.locator("#from-the-water .v-dot").nth(4).getAttribute("aria-current")) === "true");
+  await page.screenshot({ path: path.join(out, "iphone-gallery-dot.png") });
+  await ctx.close();
+}
+
+/* 5. JavaScript off: the photo essay. */
 {
   const ctx = await browser.newContext({ ...IPHONE, javaScriptEnabled: false });
   const page = await ctx.newPage();
@@ -217,19 +284,24 @@ const browser = await chromium.launch();
   await ctx.close();
 }
 
-/* 5. file:// editions */
+/* 6. file:// editions */
 for (const [name, file] of [["file site", "site/index.html"], ["single file", "demo-lakeside.html"], ["lite file", "demo-lakeside-lite.html"]]) {
   const { ctx, page, errors } = await open(browser, pathToFileURL(path.join(dist, file)).href);
   check(`${name}: no save button, no share without a URL`, (await page.getByRole("button", { name: "Save for offline" }).count()) === 0);
   await page.evaluate((y) => scrollTo(0, y), await trackY(page, "twelve-flights", 0.5));
   await page.waitForTimeout(1500);
-  check(`${name}: scrub canvas painted`, (await canvasLum(page, "#twelve-flights canvas")) > 10);
+  check(`${name}: scrub canvas painted`, await painted(page, "#twelve-flights canvas"));
   await page.screenshot({ path: path.join(out, `iphone-${name.replace(/ /g, "-")}-scrub.png`) });
   if (file.endsWith("demo-lakeside.html")) {
     check("single file: hero video built from the embedded blob", await page.$eval(".v-hero__media video", (v) => v.src.startsWith("blob:")).catch(() => false));
     await page.locator("#last-evening").scrollIntoViewIfNeeded();
     await page.waitForTimeout(1500);
-    check("single file: chapter video plays", await page.$eval("#last-evening video", (v) => !v.paused && v.currentTime > 0).catch(() => false));
+    // Playwright's Chromium has no H.264 decoder: there, check the player exists with its blob source.
+    const h264 = await page.evaluate(() => document.createElement("video").canPlayType('video/mp4; codecs="avc1.640028"') !== "");
+    check(
+      `single file: chapter video ${h264 ? "plays" : "built (no H.264 in this browser)"}`,
+      await page.$eval("#last-evening video", (v, h264) => (h264 ? !v.paused && v.currentTime > 0 : v.src.startsWith("blob:")), h264).catch(() => false),
+    );
   }
   check(`no console errors (${name})`, errors.length === 0, errors.join(" | "));
   await ctx.close();

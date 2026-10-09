@@ -95,6 +95,11 @@ function mount(/** @type {Element} */ el, /** @type {Component} */ c) {
 }
 
 let resizeTimer = 0;
+// Web fonts arriving change text metrics the stages measured (odometer, cards, pin labels).
+doc.fonts?.ready.then(() => {
+  sized.forEach((c) => c.resize?.());
+  kick();
+});
 let lastWidth = innerWidth;
 addEventListener("scroll", kick, passive);
 addEventListener(

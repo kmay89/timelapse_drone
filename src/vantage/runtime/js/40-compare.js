@@ -182,7 +182,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         grip.setAttribute("aria-valuenow", String(now));
         grip.setAttribute("aria-valuetext", `${100 - now}% ${labels[1]}, ${now}% ${labels[0]}`);
       }
-      cards.set(wins.map((w) => (steps[0].html ? cardAlpha(w, x) : 0)));
+      cards.set(steps[0].html ? cardAlphas(wins, x) : wins.map(() => 0));
       pins.place(r, W, H, (hs, px) => (blink ? vis(hs, before ? ch.before : ch.after) : vis(hs, px < X ? ch.before : ch.after)), 72, 24, blink ? undefined : (px) => px < X);
       return false;
     },

@@ -60,7 +60,7 @@ def dist_checks(dist: Path, *, css_kb: float, lite_mb: float, single_mb: float) 
     files = [p for p in site.rglob("*") if p.is_file()]
     largest = max(files, key=lambda p: p.stat().st_size)
     page = (site / "index.html").read_text(encoding="utf-8")
-    checks = [
+    return [
         Check(f"{slug} page css (gzip)", gz("".join(_PAGE_CSS.findall(page))), round(css_kb * KB)),
         Check(
             f"{slug} largest hosted file",
@@ -74,9 +74,6 @@ def dist_checks(dist: Path, *, css_kb: float, lite_mb: float, single_mb: float) 
             PAGES_SITE_LIMIT,
             f"{len(files)} files",
         ),
-    ]
-    return [
-        *checks,
         Check(f"{slug} lite html", (dist / f"{slug}-lite.html").stat().st_size, round(lite_mb * MB)),
         Check(f"{slug} single html", (dist / f"{slug}.html").stat().st_size, round(single_mb * MB)),
     ]

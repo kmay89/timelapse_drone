@@ -77,9 +77,14 @@ function keyed(/** @type {{a: number, b: number}[]} */ wins, /** @type {any[]} *
   return mix(vals[i], vals[i + 1], reduced ? +(t >= 0.5) : smooth(t));
 }
 
-/** Visibility of a card whose window is w: fades over `f` v-units on either side. */
-const cardAlpha = (/** @type {{a: number, b: number}} */ w, /** @type {number} */ v, f = 0.3) =>
-  clamp((v - w.a + f) / f) * clamp((w.b + f - v) / f);
+/** Card visibilities at v: each fades over up to `f` v-units, never overlapping its neighbours' fades. */
+function cardAlphas(/** @type {{a: number, b: number}[]} */ wins, /** @type {number} */ v, f = 0.3) {
+  return wins.map((w, i) => {
+    const lo = i ? Math.max(w.a - f, (wins[i - 1].b + w.a) / 2) : w.a - f;
+    const hi = i < wins.length - 1 ? Math.min(w.b + f, (w.b + wins[i + 1].a) / 2) : w.b + f;
+    return clamp((v - lo) / Math.max(1e-3, w.a - lo)) * clamp((hi - v) / Math.max(1e-3, hi - w.b));
+  });
+}
 
 /** Step text cards: bottom sheets on phones, a side column on wide screens. Only opacity/transform move. */
 class Cards {
@@ -183,7 +188,7 @@ class Odometer {
     if (label === this.label) return;
     const [m, y] = splitLabel(label);
     const [m0, y0] = splitLabel(this.label);
-    const x0 = this.year.offsetLeft;
+    const x0 = this.year.offsetLeft; // one forced layout per date change (not per frame) for the year's slide
     this.label = label;
     if (m !== m0) roll(this.month, m, dir);
     if (y !== y0) roll(this.year, y, dir);

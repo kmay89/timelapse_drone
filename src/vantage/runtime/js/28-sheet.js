@@ -48,6 +48,7 @@ function closeSheet() {
 }
 
 sheetClose.addEventListener("click", closeSheet);
+sheetBody.addEventListener("click", (e) => /** @type {HTMLElement} */ (e.target).closest('a[href^="#"]') && closeSheet());
 sheetBack.addEventListener("click", closeSheet);
 doc.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !sheetWrap.hidden) closeSheet();

@@ -116,7 +116,8 @@ function gallery(/** @type {HTMLElement} */ sec) {
 function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let el = $("video", sec);
   const media = $(".v-clip .v-media", sec);
-  if (!el && media && ch.video.sources.length) {
+  const built = !el && media && ch.video.sources.length;
+  if (built) {
     el = buildVideo(ch.video, { controls: true, loop: ch.loop, width: ch.video.poster.w, height: ch.video.poster.h });
     media.replaceChildren(el);
   }
@@ -130,6 +131,7 @@ function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   el.addEventListener("play", () => (userPaused = false));
   new IntersectionObserver(
     ([e]) => {
+      if (e.isIntersecting && built) loadVideo(el, ch.video);
       if (e.isIntersecting && !userPaused && !reduced) tryPlay(el);
       else if (!e.isIntersecting && !el.paused) {
         auto = true;

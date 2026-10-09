@@ -3,14 +3,16 @@
  * scrolled, and the ambient loop: muted, inline, attempted autoplay. A rejected play() (Low Power Mode,
  * thermal limits) keeps the still, which also carries a slow Ken Burns drift. Both pause off screen. */
 
-/** Muted inline <video> for a chapter's sources; single-file editions read them from the page. */
+/** Muted inline <video> for a single-file edition; loadVideo() gives it its blob on first use. */
 function buildVideo(/** @type {any} */ video, /** @type {Record<string, any>} */ attrs) {
-  const src = video.sources[video.sources.length - 1].src; // H.264 is last (and only, when embedded)
   const el = h("video", { playsinline: true, muted: true, preload: "metadata", ...attrs });
   el.poster = assetURL(video.poster.fallback);
-  el.src = assetURL(src);
   return el;
 }
+
+/** Decode a built video's blob once (H.264 is the last source, and the only one in single files). */
+const loadVideo = (/** @type {HTMLVideoElement} */ el, /** @type {any} */ video) =>
+  el.src || (el.src = assetURL(video.sources[video.sources.length - 1].src));
 
 /** Play muted and inline; resolves false when the browser refuses (the poster stays). */
 function tryPlay(/** @type {HTMLVideoElement} */ el) {
@@ -28,6 +30,7 @@ function hero(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let video = $("video", sec);
   if (!video && media && ch.video?.sources.length) {
     video = buildVideo(ch.video, { loop: true, "aria-hidden": "true", tabindex: "-1" });
+    loadVideo(video, ch.video);
     media.append(video);
   }
   if (video) {

@@ -67,6 +67,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let drawn = "";
   let cur = -1;
   let range = "";
+  let railF = -1;
   let shown = 0; // reduced motion: the capture faded to, from `faded`, starting at fadeT0
   let faded = 0;
   let fadeT0 = 0;
@@ -122,9 +123,11 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       });
       dirty = true;
       range = "";
+      railF = -1;
     },
     warm(on) {
-      if (on) store.want([0, 1, 2], need);
+      const k = Math.round(pinProgress(track, trackH, H) * (n - 1)); // arriving from below starts at the end
+      if (on) store.want([k, k + 1, k - 1], need);
       else store.clear();
     },
     measure: () => pinProgress(track, trackH, H),
@@ -166,11 +169,11 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         if (hi !== lo) paint(ctx, store.get(hi) || lqip(imgs[hi]), r, W, H, s, a);
       }
 
-      const alphas = wins.map((w) => (reduced ? +(w.a - 0.15 <= x && x <= w.b + 0.15) : cardAlpha(w, x)));
+      const alphas = cardAlphas(wins, x).map((o) => (reduced ? +(o >= 0.5) : o));
       cards.set(alphas);
-      const shade = Math.max(0, ...alphas);
-      odo.note.style.opacity = String(1 - shade);
-      const covered = cardBoxes.filter((_, j) => alphas[j] > 0.3);
+      const shade = String(1 - Math.max(0, ...alphas));
+      if (odo.note.style.opacity !== shade) odo.note.style.opacity = shade;
+      const covered = cardBoxes.filter((_, j) => alphas[j] > 0.1);
       pins.place(r, W, H, (hs, px) => {
         const py = r.y + hs.y * r.h;
         if (covered.some((b) => px > b.left && px < b.right && py > b.top && py < b.bottom)) return 0;
@@ -178,8 +181,11 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       }, top, bottom);
 
       const f = where(caps[lo].date) + (where(caps[hi].date) - where(caps[lo].date)) * a;
-      knob.style.transform = `translate3d(${(f * railW).toFixed(1)}px,0,0)`;
-      fill.style.transform = `scaleX(${f.toFixed(4)})`;
+      if (f !== railF) {
+        railF = f;
+        knob.style.transform = `translate3d(${(f * railW).toFixed(1)}px,0,0)`;
+        fill.style.transform = `scaleX(${f.toFixed(4)})`;
+      }
       if (k !== cur) {
         const dir = k < cur ? -1 : 1;
         cur = k;

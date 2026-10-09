@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const SLUG = process.env.VANTAGE_STORY || "demo-lakeside";
-export const DIST = path.join(path.resolve(here, "..", process.env.VANTAGE_DIST || "dist"), SLUG);
+const DIST = path.join(path.resolve(here, "..", process.env.VANTAGE_DIST || "dist"), SLUG);
 
 /** file:// URL of a file under dist/<slug>/. */
 export const distUrl = (rel) => pathToFileURL(path.join(DIST, rel)).href;
@@ -62,7 +62,7 @@ export const geometry = (locator) =>
  * True once `predicate` (run in the page) holds, polling from Node: with JavaScript off the page runs
  * neither timers nor requestAnimationFrame, so page.waitForFunction() would never re-check.
  */
-export async function until(page, predicate, arg, timeout = 15_000) {
+async function until(page, predicate, arg, timeout = 15_000) {
   for (const end = Date.now() + timeout; ; await page.waitForTimeout(100)) {
     if (await page.evaluate(predicate, arg)) return true;
     if (Date.now() > end) return false;
@@ -87,7 +87,7 @@ export async function scrollToY(page, y) {
 }
 
 /** On-screen images that are still loading or loaded without pixels, as their URLs. */
-export const brokenImages = (page) =>
+const brokenImages = (page) =>
   page.evaluate(() =>
     [...document.images]
       .filter((i) => onScreen(i) && !(i.complete && i.naturalWidth > 0))
@@ -125,7 +125,7 @@ export const effectiveOpacity = (locator) =>
   });
 
 /** Screenshot into .results/test-results/shots/<project>/<name>.jpg and attach it to the report. */
-export async function checkpoint(page, testInfo, name) {
+async function checkpoint(page, testInfo, name) {
   const file = path.join(testInfo.project.outputDir, "shots", testInfo.project.name, `${name}.jpg`);
   await until(page, () => document.fonts.status === "loaded");
   await page.screenshot({ path: file, type: "jpeg", quality: 80 }); // ~5× smaller than PNG at DPR 3

@@ -28,6 +28,8 @@ const offline = h("div", { class: "v-offline" }, [saveBtn, saveMeter, saveStatus
 async function saved() {
   saveMeter.hidden = true;
   saveBtn.disabled = true;
+  saveBtn.classList.add("v-done");
+  saveBtn.replaceChildren(icon("check"), "Saved for offline");
   const persisted = await navigator.storage?.persist?.().catch(() => false);
   const est = await navigator.storage?.estimate?.().catch(() => null);
   saveStatus.textContent = `Saved for offline${est?.usage ? `, ${MB(est.usage)} on this device` : ""}.${persisted ? "" : " Open it now and then so the browser keeps it."}`;

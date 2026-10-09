@@ -58,6 +58,7 @@ const ICONS = {
   save: "M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14",
   grip: "M10 8l-4 4 4 4M14 8l4 4-4 4",
   arrow: "M5 12h13m-5-5 5 5-5 5",
+  check: "M5 12.5l4.5 4.5L19 7",
 };
 /** Inline stroke icon (24px grid). @param {keyof ICONS} name */
 const icon = (name) =>
