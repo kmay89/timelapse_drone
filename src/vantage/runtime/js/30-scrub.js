@@ -60,8 +60,6 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let bottom = 0;
   /** @type {number[][]} */
   let cams = [];
-  /** @type {DOMRect[]} */
-  let cardBoxes = [];
   let dirty = true;
   let drawn = "";
   let cur = -1;
@@ -116,10 +114,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       const box = stage.getBoundingClientRect();
       top = odo.date.getBoundingClientRect().bottom - box.top + 8;
       bottom = box.bottom - rail.getBoundingClientRect().top + 8;
-      cardBoxes = cards.items.map((it) => {
-        const r = it.el.getBoundingClientRect();
-        return new DOMRect(r.left - box.left - 8, r.top - box.top - 8, r.width + 16, r.height + 16);
-      });
+      cards.measure(box);
       dirty = true;
       range = "";
       railF = -1;
@@ -172,10 +167,8 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       cards.set(alphas);
       const shade = String(1 - Math.max(0, ...alphas));
       if (odo.note.style.opacity !== shade) odo.note.style.opacity = shade;
-      const covered = cardBoxes.filter((_, j) => alphas[j] > 0.1);
       pins.place(r, W, H, (hs, px) => {
-        const py = r.y + hs.y * r.h;
-        if (covered.some((b) => px > b.left && px < b.right && py > b.top && py < b.bottom)) return 0;
+        if (cards.covers(px, r.y + hs.y * r.h)) return 0;
         return (inRange(hs, lo) ? 1 - a : 0) + (inRange(hs, hi) && hi !== lo ? a : 0);
       }, top, bottom);
 

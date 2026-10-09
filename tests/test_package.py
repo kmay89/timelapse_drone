@@ -170,15 +170,28 @@ def test_release_package_is_gated(tmp_path):
 
 
 @pytest.mark.parametrize("edition", ["single_file", "lite"])
-def test_no_image_bytes_are_carried_twice(packaged, edition):
+def test_pictures_shown_again_reuse_or_shrink_their_bytes(packaged, edition):
     _, _, files = packaged
     html = files[edition].read_text()
-    carriers = re.findall(r'<img src="(data:[^"]+)" data-asset="([^"]+)"', html)
-    assert len({path for _, path in carriers}) == len(carriers)  # the runtime finds each asset in one place
-    assert all(html.count(uri) == 1 for uri, _ in carriers), "an asset's bytes are in the file twice"
-    # the explore grid shows pictures the essay already showed: as smaller copies of their own
-    repeats = re.findall(r'<img src="data:image/jpeg;base64,([^"]+)" width', html)
-    assert repeats
-    for b64 in repeats:
-        with Image.open(io.BytesIO(base64.b64decode(b64))) as im:
-            assert im.width <= 960
+    imgs = re.findall(
+        r'<img src="(data:image/jpeg;base64,[^"]+)"( data-asset="[^"]+")?[^>]*? alt="([^"]*)"', html
+    )
+    carriers = [(uri, alt) for uri, carrier, alt in imgs if carrier]
+    assert len(carriers) == len({alt for _, alt in carriers})  # one carrier per picture
+    by_alt = {alt: uri for uri, alt in carriers}
+    sections = {
+        kind: body
+        for kind, body in re.findall(r'<section class="v-chapter v-(\w+)(.*?)</section>', html, flags=re.S)
+    }
+    # the explore grid repeats pictures as small copies of their own...
+    grid = re.findall(
+        r'<img src="(data:image/jpeg;base64,[^"]+)" width[^>]*? alt="([^"]*)"', sections["explore"]
+    )
+    assert grid
+    for uri, alt in grid:
+        assert uri != by_alt[alt]
+        with Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1]))) as im:
+            assert im.width <= 720
+    # ...while the compare pair, which the runtime moves into its stage, keeps the full picture
+    pair = re.findall(r'<img src="(data:image/jpeg;base64,[^"]+)"[^>]*? alt="([^"]*)"', sections["compare"])
+    assert len(pair) == 2 and all(uri == by_alt[alt] for uri, alt in pair)

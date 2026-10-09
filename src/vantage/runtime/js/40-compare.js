@@ -146,6 +146,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       }
       tagW = tags.map((t) => t.offsetWidth);
       pins.measure();
+      cards.measure(stage.getBoundingClientRect());
       drawn = "";
     },
     enter() {
@@ -188,7 +189,10 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         grip.setAttribute("aria-valuetext", `${100 - now}% ${labels[1]}, ${now}% ${labels[0]}`);
       }
       cards.set(steps[0].html ? cardAlphas(wins, x) : wins.map(() => 0));
-      pins.place(r, W, H, (hs, px) => (blink ? vis(hs, before ? ch.before : ch.after) : vis(hs, px < X ? ch.before : ch.after)), 72, 24, blink ? undefined : (px) => px < X);
+      pins.place(r, W, H, (hs, px) => {
+        if (cards.covers(px, r.y + hs.y * r.h)) return 0;
+        return vis(hs, (blink ? before : px < X) ? ch.before : ch.after);
+      }, 72, 24, blink ? undefined : (px) => px < X);
       return false;
     },
   };

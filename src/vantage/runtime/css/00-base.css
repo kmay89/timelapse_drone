@@ -4,7 +4,8 @@
   --v-ease: cubic-bezier(.2, .7, .2, 1);
   --v-dur-ui: 240ms;
   --v-dur-reveal: 600ms;
-  --v-gutter: clamp(1.25rem, 5vw, 3.5rem);
+  /* viewport-fit=cover: in landscape the gutters clear the sensor housing on either side. */
+  --v-gutter: max(clamp(1.25rem, 5vw, 3.5rem), env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
   --v-measure: 34rem;
   --v-wide: 1400px;
   --v-fs-display: clamp(2.75rem, 1.55rem + 5vw, 5rem);

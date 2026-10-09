@@ -33,10 +33,6 @@ function hero(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     loadVideo(video, ch.video);
     media.append(video);
   }
-  if (video && reduced) {
-    video.autoplay = false; // the hosted page's <video autoplay> would otherwise loop anyway
-    video.pause();
-  }
   if (video) {
     video.addEventListener("playing", () => media.classList.add("v-playing"));
     if (!video.paused) media.classList.add("v-playing");

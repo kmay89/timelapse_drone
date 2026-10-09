@@ -97,8 +97,21 @@ class Cards {
     this.items = htmls.map((html) => {
       const el = h("div", { class: "v-card v-prose", html });
       this.el.append(el);
-      return { el, o: -1 };
+      return { el, o: -1, box: new DOMRect() };
     });
+  }
+
+  /** Cache each card's box in stage px (8px margin) for hiding the pins under it; call on resize. */
+  measure(/** @type {DOMRect} */ stage) {
+    for (const it of this.items) {
+      const r = it.el.getBoundingClientRect();
+      it.box = new DOMRect(r.left - stage.left - 8, r.top - stage.top - 8, r.width + 16, r.height + 16);
+    }
+  }
+
+  /** True when stage point (x, y) lies under a showing card. */
+  covers(/** @type {number} */ x, /** @type {number} */ y) {
+    return this.items.some(({ o, box: b }) => o > 0.1 && x > b.left && x < b.right && y > b.top && y < b.bottom);
   }
 
   /** @param {number[]} alphas */
@@ -139,7 +152,8 @@ class Pins {
    * @param {any} r image rect @param {number} W @param {number} H
    * @param {(hs: any, x: number) => number} vis opacity for a hotspot at stage x
    * @param {number} top @param {number} bottom pins outside [top, H - bottom] hide (odometer, rail)
-   * @param {(x: number) => boolean} [left] label side; default: wherever the label fits
+   * @param {(x: number) => boolean} [left] preferred label side where both fit; default: the right.
+   *   A label that fits on one side only always goes there (never clipped by the stage edge).
    */
   place(r, W, H, vis, top, bottom, left) {
     for (const it of this.items) {
@@ -161,7 +175,9 @@ class Pins {
         it.el.style.opacity = String(o);
       }
       const reach = it.w - 22;
-      const flip = left ? left(x) : x + reach > W - 12 && (x - reach >= 12 || x > W / 2);
+      const fitR = x + reach <= W - 12;
+      const fitL = x - reach >= 12;
+      const flip = fitR !== fitL ? fitL : left ? left(x) : !fitR && x > W / 2;
       if (flip !== it.flip) it.el.classList.toggle("v-hs--l", (it.flip = flip));
     }
   }

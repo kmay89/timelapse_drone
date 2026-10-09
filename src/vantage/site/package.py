@@ -40,7 +40,7 @@ MIB = 1024 * 1024
 HOSTED_FILE_LIMIT = 25 * MIB  # Cloudflare Pages / Workers static assets
 _STORY = re.compile(r'<script id="vantage-story" type="application/json">(.*?)</script>', re.S)
 _THEME = re.compile(r'<style id="vantage-theme">(.*?)</style>', re.S)
-_ASSET_ATTR = re.compile(r'\b(src|poster|href)="(assets/[^"]+)"')
+_ASSET_ATTR = re.compile(r'<section class="v-chapter v-(\w+)|\b(src|poster|href)="(assets/[^"]+)"')
 _CSS_URL = re.compile(r'url\("(assets/[^"]+)"\)')
 _STORED = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".mp4", ".m4v", ".woff2", ".zip"}
 _MIME = {".woff2": "font/woff2", ".avif": "image/avif", ".webp": "image/webp", ".svg": "image/svg+xml",
@@ -48,7 +48,10 @@ _MIME = {".woff2": "font/woff2", ".avif": "image/avif", ".webp": "image/webp", "
 # (width, JPEG quality) steps tried until an edition fits its budget; None = the site's own ~1600 px JPEG.
 _FULL_LADDER: tuple[tuple[int, int] | None, ...] = (None, (1280, 78), (1080, 72), (900, 66))
 _LITE_LADDER: tuple[tuple[int, int], ...] = ((1080, 70), (960, 64), (800, 58), (640, 52))
-_REPEAT = (960, 66)  # (width, quality) cap for a picture the static essay shows a second time
+_REPEAT = (720, 62)  # (width, quality) cap for a thumbnail of a picture the page already carries
+# Chapters whose pictures are thumbnails (the runtime never enlarges them): a repeat there gets a
+# small copy. Elsewhere a repeat keeps the full bytes: the runtime moves those pictures into stages.
+_THUMBNAILS = {"explore", "timeline"}
 
 
 def mime_type(path: str | Path) -> str:
@@ -127,7 +130,7 @@ class _Assets:
         img["fallback"] = path
 
     def repeat(self, path: str) -> str:
-        """A smaller copy of a JPEG the page has already shown (it is never the asset itself)."""
+        """A smaller copy of a JPEG the page already carries, for a thumbnail (never the asset itself)."""
         width, quality = self._repeat
         again = path.removesuffix(".jpg") + f"-again{width}q{quality}.jpg"
         if again not in self.files:
@@ -142,17 +145,21 @@ class _Assets:
 
 
 def _inline(html: str, assets: _Assets) -> tuple[str, set[str]]:
-    """Every assets/… attribute → data: URI. The first <img> of a path carries it (data-asset);
-    a JPEG shown again (the explore grid, a strip, a thumbnail) gets a smaller copy instead, so
-    the asset's bytes are in the document once."""
+    """Every assets/… attribute → data: URI. The first <img> of a path carries it (data-asset); a
+    thumbnail of a picture shown before (explore grid, timeline) gets a smaller copy instead."""
     carried: set[str] = set()
+    chapter = ""
 
     def sub(m: re.Match[str]) -> str:
-        attr, path = m.groups()
+        nonlocal chapter
+        if m[1]:
+            chapter = m[1]
+            return m[0]
+        attr, path = m[2], m[3]
         if attr == "src" and path not in carried:
             carried.add(path)
             return f'src="{assets.uri(path)}" data-asset="{path}"'
-        if attr == "src" and path.endswith(".jpg"):
+        if attr == "src" and chapter in _THUMBNAILS and path.endswith(".jpg"):
             path = assets.repeat(path)
         return f'{attr}="{assets.uri(path)}"'
 

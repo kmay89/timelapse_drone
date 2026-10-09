@@ -130,7 +130,8 @@ function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   });
   el.addEventListener("play", () => (userPaused = false));
   new IntersectionObserver(
-    ([e]) => {
+    (entries) => {
+      const e = entries[entries.length - 1]; // a fast fling can batch an arrival and a departure
       if (e.isIntersecting && built) loadVideo(el, ch.video);
       if (e.isIntersecting && !userPaused && !reduced) tryPlay(el);
       else if (!e.isIntersecting && !el.paused) {

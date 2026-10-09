@@ -202,9 +202,8 @@ for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
 {
   const { ctx, page } = await open(browser, { ...IPHONE, reducedMotion: "reduce" });
   await page.waitForTimeout(1500);
-  // Chromium holds back muted autoplay of the (transparent) video anyway; WebKit may not, so the
-  // runtime must switch the attribute off itself.
-  const still = await page.$eval("#opening video", (v) => v.paused && !v.autoplay && v.closest(".v-playing") === null);
+  // The base sheet hides the loop (display: none), so neither engine autoplays it.
+  const still = await page.$eval("#opening video", (v) => v.paused && getComputedStyle(v).display === "none");
   check("reduced motion: hero loop stays on its still", still);
   const vid = page.locator("#last-evening video");
   await vid.scrollIntoViewIfNeeded();
@@ -235,6 +234,33 @@ for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
   }
   check("steps sharing a capture cross-fade", between.length >= 3, `${between.length} in-between samples`);
   check("no console errors (shared capture)", errors.length === 0, errors.join(" | "));
+  await ctx.close();
+}
+
+/* 8. Hotspot labels never run off the stage, whichever side of the curtain their pin is on, and no
+ *    pin shows under a step card (scrub and compare alike). */
+for (const [name, opts] of [["desktop", DESKTOP], ["iphone", IPHONE]]) {
+  const { ctx, page } = await open(browser, opts);
+  const clipped = [];
+  const covered = [];
+  for (const id of ["twelve-flights", "before-after"])
+    for (const p of [0, 0.25, 0.5, 0.75, 1]) {
+      await go(page, await trackY(page, id, p), 900);
+      const [off, under] = await page.evaluate((id) => {
+        const pins = [...document.querySelectorAll(`#${id} .v-hs.v-on`)];
+        const cards = [...document.querySelectorAll(`#${id} .v-card`)].filter((c) => +c.style.opacity > 0.1).map((c) => c.getBoundingClientRect());
+        const off = pins.map((e) => e.querySelector(".v-hs__label").getBoundingClientRect()).filter((r) => r.left < -0.5 || r.right > innerWidth + 0.5);
+        const under = pins.map((e) => e.querySelector(".v-hs__dot").getBoundingClientRect()).filter((d) => {
+          const [x, y] = [d.left + d.width / 2, d.top + d.height / 2];
+          return cards.some((c) => x > c.left && x < c.right && y > c.top && y < c.bottom);
+        });
+        return [off.length, under.length];
+      }, id);
+      if (off) clipped.push(`${id}@${p}: ${off}`);
+      if (under) covered.push(`${id}@${p}: ${under}`);
+    }
+  check(`${name}: hotspot labels stay on the stage`, !clipped.length, clipped.join(", "));
+  check(`${name}: no hotspot shows under a step card`, !covered.length, covered.join(", "));
   await ctx.close();
 }
 

@@ -37,7 +37,10 @@
 .v-odo__note { margin-top: .7rem; max-width: 25ch; font-size: .9375rem; line-height: 1.42; color: rgb(var(--v-paper-rgb) / .88); text-wrap: pretty; transition: opacity .3s; }
 
 /* Step cards: bottom sheet over the image on phones, a side column on wide screens. */
-.v-cards { position: absolute; z-index: 4; left: 12px; right: 12px; bottom: calc(var(--v-safe-b) + 78px); pointer-events: none; }
+.v-cards {
+  position: absolute; z-index: 4; left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(var(--v-safe-b) + 78px); pointer-events: none;
+}
 .v-card {
   position: absolute; left: 0; right: 0; bottom: 0; max-width: 32rem; margin: 0 auto; opacity: 0;
   padding: 1rem 1.2rem 1.1rem; border-radius: 16px; font-size: 1rem; line-height: 1.5; color: var(--v-text-on-night);
