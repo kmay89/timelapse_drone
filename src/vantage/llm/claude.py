@@ -10,8 +10,10 @@ accepted automatically: a human copies what they like into story.yaml.
 
 Responses are cached as work/llm/cache/<sha256>.json, keyed on the model, the prompt
 version, the request text and the master bytes, so re-runs are free and deterministic
-(the model takes no sampling parameters). `anthropic` is an optional extra
-(`uv sync --extra llm`); without it, or without credentials, this warns and returns None.
+(the model takes no sampling parameters). A request only mentions visits up to its own,
+so a new flight costs one more request per vantage, not a fresh set. `anthropic` is an
+optional extra (`uv sync --extra llm`); without it, or without credentials, this warns
+and returns None.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import io
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,8 +78,8 @@ class Change(BaseModel):
     @field_validator("box")
     @classmethod
     def _box(cls, v: list[float] | None) -> list[float] | None:
-        if v is None or len(v) != 4:
-            return None
+        if v is None or len(v) != 4 or not all(-0.05 <= c <= 1.05 for c in v):
+            return None  # not 0-1 fractions (e.g. pixels): no box rather than a wrong one
         x0, y0, x1, y1 = (min(max(c, 0.0), 1.0) for c in v)
         return [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
 
@@ -146,7 +149,7 @@ def _context(project: Project, name: str, visits: list[_Visit], cur: _Visit, cap
     lines = [f"Project: {cfg.title}" + (f" — {cfg.subtitle}" if cfg.subtitle else "")]
     if cfg.location:
         lines.append(f"Location: {', '.join(filter(None, (cfg.location.name, cfg.location.region)))}")
-    lines += [f"View: {name}", f"Visits of this view: {', '.join(v.label for v in visits)}"]
+    lines += [f"View: {name}", f"Visits of this view so far: {', '.join(v.label for v in visits)}"]
     lines.append(f"Brand voice: {voice.tone}" + (f" Avoid: {', '.join(voice.avoid)}." if voice.avoid else ""))
     if cur.note:
         lines.append(f"Editor's note for {cur.label}: {cur.note}")
@@ -163,7 +166,7 @@ def _request(
 ) -> list[str | Path]:
     """The user turn for visit i: text and master images (as paths), interleaved."""
     cur, prev = visits[i], visits[i - 1] if i else None
-    context = _context(project, name, visits, cur, captions)
+    context = _context(project, name, visits[: i + 1], cur, captions)
     if prev is None:
         return [
             f"Image 1: {name}, first visit, {cur.label} ({cur.date}).",
@@ -188,6 +191,15 @@ def _cache_key(model: str, parts: list[str | Path]) -> str:
     items = [p if isinstance(p, str) else hashlib.sha256(p.read_bytes()).hexdigest() for p in parts]
     payload = json.dumps([model, PROMPT_VERSION, SYSTEM, items], ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _cached(path: Path) -> _Answer | None:
+    """A cached answer; None when missing or unreadable (an interrupted write, an older schema)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return _Answer(PairAnalysis.model_validate(data["analysis"]), data["served_by"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def _ask(client: Any, model: str, parts: list[str | Path]) -> _Answer:
@@ -263,7 +275,7 @@ def _visits(project: Project, captures: list[MasterCapture]) -> list[_Visit]:
                 labels[c.date],
                 project.masters_dir / c.file,
                 note.note if note else None,
-                field_notes.read_text(encoding="utf-8").strip() if field_notes.is_file() else None,
+                field_notes.read_text("utf-8", "replace").strip() if field_notes.is_file() else None,
             )
         )
     return visits
@@ -282,15 +294,16 @@ def _entry(vid: str, visits: list[_Visit], i: int, answer: _Answer) -> dict[str,
     if answer.analysis is None:
         return {**entry, "problem": answer.problem}
     a = answer.analysis
-    hotspots = []
+    hotspots, seen = [], Counter[str]()
     for change in a.changes:
         if change.box is None:
             continue
         x0, y0, x1, y1 = change.box
         slug = re.sub(r"[^a-z0-9]+", "-", change.element.lower()).strip("-") or "change"
+        seen[slug] += 1
         hotspots.append(
             {
-                "id": f"{slug}-{cur.date}",
+                "id": f"{slug}-{cur.date}" + (f"-{seen[slug]}" if seen[slug] > 1 else ""),
                 "x": round((x0 + x1) / 2, 3),
                 "y": round((y0 + y1) / 2, 3),
                 "label": change.element[:1].upper() + change.element[1:],
@@ -330,9 +343,8 @@ def draft_captions(project: Project) -> Path | None:
         for i in range(len(visits)):
             parts = _request(project, name, visits, i, captions)
             cached = cache_dir / f"{_cache_key(model, parts)}.json"
-            if cached.is_file():
-                data = json.loads(cached.read_text(encoding="utf-8"))
-                answer = _Answer(PairAnalysis.model_validate(data["analysis"]), data["served_by"])
+            answer = _cached(cached)
+            if answer is not None:
                 hits += 1
             else:
                 try:
@@ -352,9 +364,9 @@ def draft_captions(project: Project) -> Path | None:
                         "served_by": answer.served_by,
                         "analysis": answer.analysis.model_dump(),
                     }
-                    cached.write_text(
-                        json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-                    )
+                    tmp = cached.with_suffix(".tmp")  # a crash mid-write must not leave a broken entry
+                    tmp.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                    tmp.replace(cached)
                 else:
                     log.warn(f"{vid} {visits[i].date}: {answer.problem}")
             if answer.analysis:
