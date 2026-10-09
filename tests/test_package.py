@@ -14,13 +14,14 @@ from typing import Any
 
 import numpy as np
 import pytest
+import yaml
 from PIL import Image, PngImagePlugin
 
-from test_build import make_project
+from test_build import FACTS, make_project
 from vantage.config import load_project
 from vantage.media import ffmpeg
 from vantage.site import images
-from vantage.site.build import ReleaseError
+from vantage.site.build import ReleaseError, build_site
 from vantage.site.package import package_project, read_story
 
 ASSET_REFS = re.compile(r"""(?:\b(?:src|href|poster)=["']|url\(\s*["']?)([^"')\s]+)""")
@@ -186,6 +187,27 @@ def test_release_package_is_gated(tmp_path):
     with pytest.raises(ReleaseError, match="draft: true"):
         package_project(load_project(root), tmp_path / "dist", release=True)
     assert not (tmp_path / "dist").exists()
+
+
+def test_release_package_never_ships_an_earlier_draft_site(tmp_path):
+    """A site left in dist by a draft build (Preview badge, unverified facts) is rebuilt for a release
+    from the YAML that passed the gates, never packaged as is under a release label."""
+    root = make_project(tmp_path / "tiny")
+    dist = tmp_path / "dist"
+    build_site(load_project(root), dist / "site")
+    config = yaml.safe_load((root / "project.yaml").read_text())
+    (root / "project.yaml").write_text(yaml.safe_dump(config | {"draft": False}))
+    facts = {fid: fact | {"status": "verified"} for fid, fact in FACTS["facts"].items()}
+    (root / "facts.yaml").write_text(yaml.safe_dump({"facts": facts}))
+    files = package_project(load_project(root), dist, release=True)
+    info = json.loads(files["build_json"].read_text())
+    assert info["release"] is True and info["draft"] is False and info["unverifiedFacts"] == 0
+    unverified = re.compile(r'<(?:span class="v-fact"|li id="v-note-\d+")[^>]*data-releasable="false"')
+    site = (dist / "site" / "index.html").read_text()
+    for html in (site, files["single_file"].read_text(), files["lite"].read_text()):
+        story = read_story(html)
+        assert story["meta"]["draft"] is False and all(n["releasable"] for n in story["notes"])
+        assert '<span class="v-badge">Preview</span>' not in html and not unverified.search(html)
 
 
 @pytest.mark.parametrize("edition", ["single_file", "lite"])

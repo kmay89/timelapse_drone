@@ -367,15 +367,20 @@ def _sha256(path: Path) -> str:
 
 
 def package_project(project: Project, dist_dir: Path, *, release: bool = False) -> dict[str, Path]:
-    """Package dist_dir/site (built first when missing) into the offline deliverables."""
+    """Package dist_dir/site into the offline deliverables. The site is built first when missing, and
+    always rebuilt for a release: one already in dist may be an earlier draft build (Preview badge,
+    unverified facts) or predate the YAML that just passed the gates, and must not ship as a release."""
     if release:
         problems = check_release(project)
         if problems:
             raise ReleaseError("release package blocked:\n  " + "\n  ".join(problems))
     site = dist_dir / "site"
-    if not (site / "index.html").is_file():
+    if release:
+        log.info(f"release: rebuilding {site} from the current YAML")
+        build_site(project, site, release=True)
+    elif not (site / "index.html").is_file():
         log.info(f"no site in {site}; building it first")
-        build_site(project, site, release=release)
+        build_site(project, site)
     page = (site / "index.html").read_text(encoding="utf-8")
     story = read_story(page)
     theme_match = _THEME.search(page)

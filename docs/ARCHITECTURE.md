@@ -307,8 +307,10 @@ vantage.site.build.build_site(project: Project, out_dir: Path) -> Path
     # out_dir = dist/<slug>/site ; returns out_dir / "index.html"
 vantage.film.render.render_film(project: Project, out_dir: Path) -> list[Path]
     # out_dir = dist/<slug>/film
-vantage.site.package.package_project(project: Project, dist_dir: Path) -> dict[str, Path]
-    # dist_dir = dist/<slug>; reads dist_dir/site; returns {"single_file": …, "zip": …}
+vantage.site.package.package_project(project: Project, dist_dir: Path, *, release: bool = False) -> dict[str, Path]
+    # dist_dir = dist/<slug>; reads dist_dir/site (builds it when missing); returns {"single_file": …, "zip": …}
+    # release=True runs check_release, then always rebuilds dist_dir/site with release=True, so an
+    # earlier draft build or a site older than the YAML never ships under a release label
 vantage.demo.synth.generate_demo_footage(footage_dir: Path, *, fast: bool = False, seed: int = 7) -> Path
     # writes footage/<date>/… and footage/_truth.json; returns the truth path
 vantage.llm.claude.draft_captions(project: Project) -> Path | None
