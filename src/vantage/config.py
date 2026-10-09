@@ -19,7 +19,15 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}){1,2}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -272,9 +280,19 @@ class ProjectConfig(Model):
 # Story (editorial)
 # --------------------------------------------------------------------------- #
 
-# A capture reference: an ISO date ("2026-09-12"), or "earliest" / "latest",
+
+def _as_text(value: Any) -> Any:
+    """YAML reads an unquoted 2025-06-14 as a date and 1970 as an int; keep the text the writer typed."""
+    if isinstance(value, dt.date) or (isinstance(value, int) and not isinstance(value, bool)):
+        return str(value)
+    return value
+
+
+# Display text that is often a bare year or date ('1970', 2025-10-23), quoted or not in the YAML.
+DisplayDate = Annotated[str, BeforeValidator(_as_text)]
+# A capture reference: an ISO date ("2026-09-12", quoted or not), or "earliest" / "latest",
 # or an index like "#3" into the date-sorted captures of a vantage.
-CaptureRef = str
+CaptureRef = Annotated[str, BeforeValidator(_as_text)]
 
 
 class FrameRef(Model):
@@ -458,7 +476,7 @@ class StatsChapter(_Chapter):
 
 
 class TimelineItem(Model):
-    date: str = Field(..., description="Free-form display date, e.g. '1970' or 'Oct 23, 2025'.")
+    date: DisplayDate = Field(..., description="Free-form display date, e.g. '1970' or 'Oct 23, 2025'.")
     title: str
     status: Literal["done", "in-progress", "planned"] | None = None
     body: str | None = None
@@ -477,7 +495,7 @@ class GalleryImage(Model):
         ..., description="Image path relative to the project folder (archival photos, postcards)."
     )
     caption: str | None = None
-    date: str | None = Field(None, description="Display date, e.g. 'c. 1930–45'.")
+    date: DisplayDate | None = Field(None, description="Display date, e.g. 'c. 1930–45'.")
     credit: str | None = None
     alt: str | None = None
 
