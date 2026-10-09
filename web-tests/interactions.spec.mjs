@@ -42,8 +42,8 @@ function controlTests() {
   test("compare: the curtain is a keyboard slider with date text", async ({ page }) => {
     const { ch } = await open(page, "compare", curtain);
     const slider = section(page, ch).getByRole("slider").first();
-    await slider.scrollIntoViewIfNeeded();
     await expect(slider).toBeVisible();
+    await slider.scrollIntoViewIfNeeded();
     await expect(slider).toHaveAttribute("aria-valuemin", "0");
     await expect(slider).toHaveAttribute("aria-valuemax", "100");
     await slider.focus();
@@ -66,6 +66,7 @@ function controlTests() {
   test("compare: dragging the curtain moves it", async ({ page }) => {
     const { ch } = await open(page, "compare", curtain);
     const slider = section(page, ch).getByRole("slider").first();
+    await expect(slider).toBeVisible();
     await slider.scrollIntoViewIfNeeded();
     const before = await valueOf(slider);
     const box = await slider.boundingBox();
@@ -87,6 +88,7 @@ function controlTests() {
     const splits = ch.steps.filter((s) => s.split != null).map((s) => s.split * 100);
     const sec = section(page, ch);
     const slider = sec.getByRole("slider").first();
+    await expect(slider).toBeVisible();
     const { top, height, vh } = await geometry(sec);
     await scrollToY(page, top + 1);
     const start = await valueOf(slider);
@@ -99,6 +101,7 @@ function controlTests() {
     const { ch } = await open(page, "compare", (c) => c.hotspots.length > 0);
     const spot = ch.hotspots.find((h) => h.from <= ch.after && ch.after <= h.to) ?? ch.hotspots[0];
     const pin = section(page, ch).getByRole("button", { name: new RegExp(escapeRe(spot.label), "i") }).first();
+    await expect(pin).toBeVisible();
     await pin.scrollIntoViewIfNeeded();
     await pin.focus();
     await page.keyboard.press("Enter");

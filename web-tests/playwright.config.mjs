@@ -32,6 +32,7 @@ export default defineConfig({
   ],
   use: {
     baseURL,
+    actionTimeout: 15_000, // a missing control fails in seconds, not at the test timeout
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

@@ -59,8 +59,19 @@ export const geometry = (locator) =>
   }));
 
 /**
- * Scrolls to y, then waits two frames and (up to 15 s) for the images in the viewport to load. Also
- * (re)defines window.onScreen(el) for the other helpers: evaluate() runs even with JavaScript off.
+ * True once `predicate` (run in the page) holds, polling from Node: with JavaScript off the page runs
+ * neither timers nor requestAnimationFrame, so page.waitForFunction() would never re-check.
+ */
+export async function until(page, predicate, arg, timeout = 15_000) {
+  for (const end = Date.now() + timeout; ; await page.waitForTimeout(100)) {
+    if (await page.evaluate(predicate, arg)) return true;
+    if (Date.now() > end) return false;
+  }
+}
+
+/**
+ * Scrolls to y, lets scroll handlers paint, and waits (up to 15 s) for the images in the viewport.
+ * Also (re)defines window.onScreen(el) for the other helpers.
  */
 export async function scrollToY(page, y) {
   await page.evaluate((top) => {
@@ -71,10 +82,8 @@ export async function scrollToY(page, y) {
     };
     scrollTo(0, top);
   }, Math.max(0, Math.round(y)));
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  await page
-    .waitForFunction(() => [...document.images].every((i) => i.complete || !onScreen(i)), null, { timeout: 15_000 })
-    .catch(() => {}); // whatever is still loading is reported by brokenImages()
+  await page.waitForTimeout(120);
+  await until(page, () => [...document.images].every((i) => i.complete || !onScreen(i))); // laggards: brokenImages()
 }
 
 /** On-screen images that are still loading or loaded without pixels, as their URLs. */
@@ -118,7 +127,7 @@ export const effectiveOpacity = (locator) =>
 /** Screenshot into .results/shots/<project>/<name>.png and attach it to the test report. */
 export async function checkpoint(page, testInfo, name) {
   const file = path.join(testInfo.project.outputDir, "shots", testInfo.project.name, `${name}.png`);
-  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  await until(page, () => document.fonts.status === "loaded");
   await page.screenshot({ path: file });
   await testInfo.attach(name, { path: file, contentType: "image/png" });
 }
