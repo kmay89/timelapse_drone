@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -363,18 +364,43 @@ def test_every_referenced_asset_exists(built):
     ]
 
 
+def _sw_config(site: Path) -> dict[str, Any]:
+    return json.loads(re.search(r"const CONFIG = (\{.*?\});", (site / "sw.js").read_text()).group(1))
+
+
 def test_service_worker_lists_every_file(built):
     _, site, _ = built
-    sw = (site / "sw.js").read_text()
-    config = json.loads(re.search(r"const CONFIG = (\{.*?\});", sw).group(1))
+    config = _sw_config(site)
     files = sorted(
         p.relative_to(site).as_posix() for p in site.rglob("*") if p.is_file() and p.name != "sw.js"
     )
-    assert [a for a, _ in config["assets"]] == files
-    assert re.fullmatch(r"vantage-tiny-[0-9a-f]{12}", config["cache"])
-    assert {"./", "index.html", "assets/fonts/inter-latin-opsz-normal.woff2"} <= set(config["core"])
+    assert [a for a, *_ in config["assets"]] == files
+    for name, size, sha in config["assets"]:
+        data = (site / name).read_bytes()
+        assert size == len(data) and sha == hashlib.sha256(data).hexdigest()[:16]
+    assert config["cache"] == "vantage-tiny"
+    assert {"./", "assets/fonts/inter-latin-opsz-normal.woff2"} <= set(config["core"])
     assert set(config["core"]) - {"./"} <= set(files)
     assert 'data-sw="sw.js"' in (site / "index.html").read_text()
+
+
+def test_a_redeploy_keeps_what_a_reader_saved(built, tmp_path):
+    """The next build of a changed story keeps the worker's cache name and every unchanged file's key
+    (path and content hash), so a reader's "Save for offline" copy survives the update; only the files
+    that changed are fetched again."""
+    project, site, _ = built
+    root = tmp_path / "tiny"
+    shutil.copytree(project.root, root)  # work/cache/img included: the images are not encoded again
+    story = json.loads(json.dumps(STORY))
+    story["chapters"][1]["title"] = "A bolder start"
+    (root / "story.yaml").write_text(yaml.safe_dump(story, sort_keys=False))
+    build_site(load_project(root), tmp_path / "site")
+    before, after = _sw_config(site), _sw_config(tmp_path / "site")
+    assert after["cache"] == before["cache"]
+    old = {name: sha for name, _, sha in before["assets"]}
+    new = {name: sha for name, _, sha in after["assets"]}
+    assert old.keys() == new.keys()
+    assert {name for name in new if new[name] != old[name]} == {"index.html"}
 
 
 def test_rebuild_reuses_encoded_images(built, monkeypatch, tmp_path):
@@ -657,14 +683,16 @@ def test_chapter_ids_are_unique_and_never_the_pages_own(tmp_path):
     assert re.search(r'<(\w+)[^>]*\sid="vantage-story"', html).group(1) == "script"
 
 
-def test_service_worker_installs_one_jpeg_per_image(built):
+def test_service_worker_installs_only_the_shell(built):
+    """A first visit stores the shell and the opening picture, not a JPEG of every capture: the rest is
+    cached as the reader views it, or all at once by "Save for offline"."""
     _, site, story = built
-    config = json.loads(re.search(r"const CONFIG = (\{.*?\});", (site / "sw.js").read_text()).group(1))
-    images = [c for c in config["core"] if c.startswith("assets/img/")]
-    stems = [re.sub(r"-\d+\.jpg$", "", c) for c in images]
-    assert len(stems) == len(set(stems)) and all(c.endswith(".jpg") for c in images)
-    fallbacks = {c["img"]["fallback"] for v in story["vantages"] for c in v["captures"]}
-    assert fallbacks <= set(images)
+    config = _sw_config(site)
+    images = {c for c in config["core"] if c.startswith("assets/img/")}
+    hero = story["chapters"][0]
+    still = next(v for v in story["vantages"] if v["id"] == hero["vantage"])["captures"][hero["capture"]]
+    assert images == {still["img"]["fallback"]}
+    assert "index.html" not in config["core"]  # "./" is the same page
     js = (site / "sw.js").read_text()
     assert "const CACHE = `${CONFIG.cache} ${SCOPE}`" in js  # stories sharing an origin keep their caches
 

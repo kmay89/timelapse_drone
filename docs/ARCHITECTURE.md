@@ -262,8 +262,21 @@ comment into every JPEG made from it), and video posters come from a bitexact `f
 with no metadata.
 
 The page must work from `file://` (no fetch of JSON, no ES-module imports, no
-service worker there) and from `https://` (service worker registers and
-precaches every asset so "Add to Home Screen" works offline).
+service worker there) and from `https://`, where `sw.js` registers. Its CONFIG
+(`site/build.py` `_service_worker`) is `{cache: "vantage-<slug>", core: [...],
+assets: [[path, bytes, sha256[:16]], ...]}`:
+
+* Install stores only `core`: `./`, the manifest and icons, fonts, brand files
+  and the opening hero's fallback JPEGs (shown before the worker is in
+  control). Every other file is cached the first time the page asks for it, and
+  "Save for offline" fetches all of `assets` (any 404 or network error is
+  reported as a failure, never as saved).
+* The cache name stays the same from build to build and every file is stored
+  under `<path>?v=<sha>`, so a redeploy keeps each saved file that did not
+  change; activate deletes keys this build no longer lists. Once a save
+  completes, the cache holds a `.vantage-saved` marker, and after an update the
+  worker fetches the changed files when the page next asks for its status (on
+  load and when the new worker takes over).
 
 ## Runtime principles
 

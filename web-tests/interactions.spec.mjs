@@ -287,9 +287,13 @@ test.describe("interactions", () => {
       Object.defineProperty(sw, "ready", { get: () => (mode === "stalled" ? new Promise(() => {}) : Promise.resolve({ active })) });
     }, mode);
 
-  const saveSheet = async (page) => {
+  const hosted = async (page) => {
     await page.goto("./");
     test.skip(!/^https?:/.test(page.url()) || !(await page.locator("html[data-sw]").count()), "not a hosted edition");
+  };
+
+  const saveSheet = async (page) => {
+    if (!/^https?:/.test(page.url())) await hosted(page);
     await page.getByRole("button", { name: /chapters|contents|index/i }).first().click();
     const save = page.getByRole("dialog").getByRole("button", { name: "Save for offline" });
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -320,6 +324,78 @@ test.describe("interactions", () => {
       await expect(sheet.getByRole("progressbar")).toBeHidden();
     });
   }
+
+  /* The real service worker. Chromium only: Playwright's handle on a worker is Chromium's, and WebKit's
+   * worker is checked on a device (docs/DELIVERY.md). */
+  const realWorker = async (page, browserName) => {
+    test.skip(browserName !== "chromium", "drives the real service worker through Chromium");
+    await hosted(page);
+    test.skip(!(await page.evaluate(() => "serviceWorker" in navigator)), "this browser has no service workers here");
+    await page.waitForFunction(() => navigator.serviceWorker.controller, null, { timeout: 30_000 }); // installed and in control
+    return page.context().serviceWorkers().at(-1);
+  };
+  /** Every URL in this origin's CacheStorage, without its query. */
+  const cached = (page) =>
+    page.evaluate(async () => {
+      const out = [];
+      for (const name of await caches.keys()) for (const r of await (await caches.open(name)).keys()) out.push(r.url.split("?")[0]);
+      return out;
+    });
+
+  test("offline cache: a first visit stores the opening picture and what the reader saw, nothing more", async ({ page, browserName }) => {
+    const seen = new Set();
+    page.on("request", (r) => seen.add(r.url().split("?")[0]));
+    await realWorker(page, browserName);
+    const story = await readStory(page);
+    const hero = story.chapters[0]?.type === "hero" ? story.chapters[0] : null;
+    const still = hero && vantageOf(story, hero)?.captures.at(hero.capture)?.img;
+    const opening = [still?.fallback, hero?.video?.poster?.fallback].filter(Boolean).map((f) => new URL(f, page.url()).href);
+    await page.waitForTimeout(500); // copies of the last responses are stored in the background
+    const images = (await cached(page)).filter((u) => u.includes("/assets/img/"));
+    expect(images.filter((u) => !seen.has(u) && !opening.includes(u)), "images stored that the page never asked for").toEqual([]);
+  });
+
+  test("save for offline: files the host won't serve are reported, not called saved", async ({ page, browserName }) => {
+    const worker = await realWorker(page, browserName);
+    // From here every download answers 404, the way a file the host refused (over its size cap) would.
+    await worker.evaluate(() => {
+      self.fetch = async () => new Response("", { status: 404 });
+    });
+    const save = await saveSheet(page);
+    await save.click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet.getByRole("button", { name: "Try again" })).toBeEnabled();
+    await expect(sheet.getByText(/Couldn’t save everything/).first()).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Saved for offline" })).toHaveCount(0);
+  });
+
+  test("save for offline: an update keeps the saved copy and fetches only what changed", async ({ page, browserName }) => {
+    await realWorker(page, browserName);
+    const save = await saveSheet(page);
+    await save.click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet.getByRole("button", { name: "Saved for offline" })).toBeDisabled({ timeout: 60_000 });
+    // What the next deploy looks like to the saved copy: one file changed (so the device has no copy of the
+    // new version) and one file is gone from the story.
+    const { changed, dropped, kept } = await page.evaluate(async () => {
+      const cache = await caches.open((await caches.keys()).find((k) => k.startsWith("vantage-")));
+      const reqs = (await cache.keys()).filter((r) => r.url.includes("/assets/"));
+      const changed = reqs.find((r) => r.url.includes("/assets/video/")) || reqs.find((r) => r.url.includes("/assets/img/"));
+      await cache.delete(changed);
+      const dropped = new URL("assets/img/dropped-from-the-story-640.jpg", location.href).href;
+      await cache.put(dropped, new Response("old"));
+      return { changed: changed.url.split("?")[0], dropped, kept: reqs.length };
+    });
+    await page.evaluate(() => navigator.serviceWorker.register(`${document.documentElement.dataset.sw}?next`)); // the update takes over
+    await expect
+      .poll(async () => {
+        const urls = await cached(page);
+        return { changed: urls.includes(changed), dropped: urls.includes(dropped), assets: urls.filter((u) => u.includes("/assets/")).length };
+      }, { timeout: 60_000 })
+      .toEqual({ changed: true, dropped: false, assets: kept });
+    await expect(sheet.getByRole("button", { name: "Saved for offline" })).toBeDisabled();
+    await expect(sheet.getByText(/^Saved for offline/).first()).toBeVisible();
+  });
 
   controlTests();
 });

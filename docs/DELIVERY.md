@@ -36,6 +36,10 @@ runtime turns into blob URLs on demand; videos are never `data:` sources.
   `navigator.storage.persist()`.
 - iOS `<video>` makes HTTP Range requests: the service worker answers from cache with `206` slices
   (`runtime/sw.js`), and `vantage preview` serves byte ranges.
+- Updates: a new flight or a copy edit keeps a reader's saved copy. Unchanged files stay on the
+  device, and the next time they open the story online it downloads only what changed (the Contents
+  sheet shows the progress). Visitors who never tap Save store only the page, fonts, logos, icons, the
+  opening picture and what they actually looked at.
 - The text that goes with a link: *"Open the link in Safari, tap Share, then Add to Home Screen. Open
   it from the new icon and tap Save for offline. It now works in airplane mode."* (`HOW-TO-VIEW.txt`
   has the full version.)

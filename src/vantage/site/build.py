@@ -866,26 +866,34 @@ def _fallbacks(node: Any) -> Iterator[str]:
             yield from _fallbacks(value)
 
 
+def _opening_images(story: dict[str, Any]) -> set[str]:
+    """Fallback JPEGs of the opening hero's picture and video poster. The page shows them before its
+    service worker is in control, so a copy opened offline would otherwise lack them."""
+    chapters = story["chapters"]
+    hero = chapters[0] if chapters and chapters[0]["type"] == "hero" else {}
+    v = next((v for v in story["vantages"] if v["id"] == hero.get("vantage")), None)
+    still = v["captures"][hero.get("capture", -1)]["img"] if v else None
+    return set(_fallbacks([still, hero.get("video")]))
+
+
 def _service_worker(site: Path, story: dict[str, Any]) -> Path:
+    """sw.js with its CONFIG: one cache per story, and every file with its size and content hash.
+
+    The cache name stays the same from build to build and the worker keys each file by its hash, so a
+    redeploy keeps every saved file that did not change. Install stores only the shell; every other
+    file is cached when the page first asks for it, or all at once by "Save for offline"."""
     files = [p for p in _site_files(site) if p.name != "sw.js"]
     rel = [p.relative_to(site).as_posix() for p in files]
-    digest = hashlib.sha256()
-    for path, name in zip(files, rel, strict=True):
-        digest.update(name.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
-    core = {
-        "./",
-        "index.html",
-        "manifest.webmanifest",
-        "icon-192.png",
-        "icon-512.png",
-        "apple-touch-icon.png",
-    }
+    core = {"./", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"}
     core |= {r for r in rel if r.startswith(("assets/fonts/", "assets/brand/"))}
-    core |= set(_fallbacks(story))  # one JPEG per image; the rest is fetched by "Save for offline"
+    core |= _opening_images(story)
     config = {
-        "cache": f"vantage-{story['meta']['slug']}-{digest.hexdigest()[:12]}",
+        "cache": f"vantage-{story['meta']['slug']}",
         "core": sorted(core & ({"./"} | set(rel))),
-        "assets": [[name, path.stat().st_size] for path, name in zip(files, rel, strict=True)],
+        "assets": [
+            [name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest()[:16]]
+            for path, name in zip(files, rel, strict=True)
+        ],
     }
     template = (RUNTIME_DIR / "sw.js").read_text(encoding="utf-8")
     js = _SW_CONFIG.sub(lambda _: json.dumps(config, separators=(",", ":")), template, count=1)
