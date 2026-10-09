@@ -5,6 +5,7 @@
 # Capture references (capture / from / to / before / after):
 #   "earliest" | "latest" | a flight date in quotes, e.g. "2025-06-14" (nearest visit on or before it)
 # Text fields are Markdown. Coordinates (x, y, focus) are 0–1 fractions of the aligned image.
+# Every number, date or claim is a {fact:id} token backed by facts.yaml (text, sources, status).
 
 vantages:
   - id: overview
@@ -92,10 +93,9 @@ chapters:
     kicker: "By the numbers"
     title: "TODO: The project at a glance"
     items:
-      - value: "TODO"
+      - value: "{fact:site-area}" # printed from facts.yaml; its sources appear in the notes
         unit: "acres"
         label: "TODO: Site area"
-        source: "TODO: source URL"
       - value: "TODO"
         label: "TODO: Investment or capacity"
         source: "TODO: source URL"

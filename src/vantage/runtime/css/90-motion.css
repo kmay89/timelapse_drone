@@ -2,9 +2,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .js .v-hero__media img, .v-hs__dot::after, .js .v-hero__cue::after { animation: none; }
+  .v-hero__pause { display: none; }
 }
 
 @media print {
-  .v-chrome, .v-progress, .v-dlg-wrap, .v-toast, .v-track, .v-x, .v-dots, .v-hero__cue { display: none; }
+  .v-chrome, .v-progress, .v-dlg-wrap, .v-toast, .v-track, .v-x, .v-dots, .v-hero__cue, .v-hero__pause { display: none; }
   .v-reveal :is(.v-head, .v-quote, .v-stat, .v-tl, .v-standfirst > *) { opacity: 1; transform: none; }
 }

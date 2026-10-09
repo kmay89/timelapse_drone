@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -577,3 +578,124 @@ def test_service_worker_installs_one_jpeg_per_image(built):
     assert fallbacks <= set(images)
     js = (site / "sw.js").read_text()
     assert "const CACHE = `${CONFIG.cache} ${SCOPE}`" in js  # stories sharing an origin keep their caches
+
+
+# --------------------------------------------------------------------------- #
+# Brand: facts in brand.yaml text, sanitized SVG logos
+# --------------------------------------------------------------------------- #
+
+HOSTILE_SVG = """<?xml version="1.0"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<?xml-stylesheet type="text/xsl" href="evil.xsl"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 120 32" onload="alert(1)">
+  <!-- a comment -->
+  <title>Tiny Parks</title>
+  <script>alert(2)</script>
+  <SCRIPT xlink:href="https://evil.example/x.js"/>
+  <foreignObject width="10" height="10"><iframe xmlns="http://www.w3.org/1999/xhtml" src="javascript:alert(3)"/></foreignObject>
+  <a xlink:href=" java&#x09;script:alert(4)"><rect width="120" height="32" fill="#123" ONCLICK="alert(5)"/></a>
+  <a href="#top"><image xlink:href="data:image/png;base64,iVBORw0KGgo=" width="1" height="1"/></a>
+  <image href="data:text/html;base64,PHNjcmlwdD4=" width="1" height="1"/>
+  <set attributeName="xlink:href" to="javascript:alert(6)"/>
+  <animate attributeName="onbegin" values="alert(7)"/>
+  <animate attributeName="fill" values="#123;#456" dur="2s"/>
+  <x:script xmlns:x="http://www.w3.org/1999/xhtml">alert(8)</x:script>
+  <x:div xmlns:x="http://www.w3.org/1999/xhtml">html in svg</x:div>
+  <style>rect > title { fill: red }</style>
+</svg>
+"""
+
+
+def test_sanitize_svg_strips_everything_that_runs():
+    out, removed = build.sanitize_svg(HOSTILE_SVG.encode())
+    text = out.decode()
+    root = ET.fromstring(out)
+    assert root.tag == "{http://www.w3.org/2000/svg}svg" and root.get("viewBox") == "0 0 120 32"
+    assert {el.tag.split("}")[1] for el in root.iter()} == {
+        "svg",
+        "title",
+        "a",
+        "rect",
+        "image",
+        "animate",
+        "style",
+    }
+    assert not re.search(r"script|\son\w+=|foreignObject|stylesheet|DOCTYPE|data:text|<!--|<x:", text, re.I)
+    assert text.startswith('<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"')
+    assert (
+        '<a href="#top"><image xlink:href="data:image/png;base64,iVBORw0KGgo=" width="1" height="1"/></a>'
+        in text
+    )
+    assert '<animate attributeName="fill" values="#123;#456" dur="2s"/>' in text
+    assert "<style>rect &gt; title { fill: red }</style>" in text
+    assert sorted(set(removed)) == [
+        "<animate>", "<div>", "<foreignobject>", "<script>", "<set>",
+        "href=data:…", "href=javascript:…", "onclick=…", "onload=…",
+    ]  # fmt: skip
+    assert build.sanitize_svg(out) == (out, [])  # a clean SVG comes through byte for byte
+
+
+@pytest.mark.parametrize(
+    ("svg", "error"),
+    [
+        ('<!DOCTYPE svg [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><svg xmlns="{ns}">&b;</svg>',
+         "it has a DOCTYPE internal subset"),
+        ('<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg xmlns="{ns}">&x;</svg>',
+         "it has a DOCTYPE internal subset"),
+        ('<svg xmlns="{ns}">&nbsp;</svg>', "not well-formed"),
+        ('<svg xmlns="{ns}"><g></svg>', "not well-formed"),
+        ('<svg xmlns="{ns}">' + "<g>" * 300 + "</g>" * 300 + "</svg>", "nested more than 200 deep"),
+        ('<html xmlns="http://www.w3.org/1999/xhtml"><body onload="alert(1)"/></html>', "not an SVG document"),
+        ('<svg viewBox="0 0 1 1"/>', "not an SVG document"),
+    ],
+)  # fmt: skip
+def test_sanitize_svg_refuses_entities_and_non_svg(svg: str, error: str):
+    with pytest.raises(ValueError, match=error):
+        build.sanitize_svg(svg.replace("{ns}", "http://www.w3.org/2000/svg").encode(), "logo")
+
+
+def test_brand_text_facts_and_hostile_logos(tmp_path, capsys):
+    facts = json.loads(json.dumps(FACTS))
+    facts["facts"]["year"] = {"text": "2026", "status": "client-approved", "sources": ["Client brief"]}
+    brand_text = {
+        "credit_line": "Flown for {fact:months} by Tiny Parks",
+        "copyright": "© {fact:year} Tiny Parks",
+        "disclaimer": "The {fact:cost} figure is an estimate.",
+    }
+    root = make_project(tmp_path / "p", facts=facts)
+    _edit_yaml(root / "brand/brand.yaml", lambda b: b.update(brand_text))
+    (root / "brand" / "logo-on-dark.svg").write_text(HOSTILE_SVG)
+    site = tmp_path / "site"
+    story = read_story(build_site(load_project(root), site).read_text())
+
+    assert [story["brand"][k] for k in ("creditLine", "copyright", "disclaimer")] == [
+        "Flown for nine months by Tiny Parks", "© 2026 Tiny Parks", "The $5 million figure is an estimate.",
+    ]  # fmt: skip
+    assert [(n["factId"], n["releasable"]) for n in story["notes"]] == [
+        ("months", True), ("cost", False), ("opened", True), ("acres", True), ("year", True),
+    ]  # fmt: skip
+    html = (site / "index.html").read_text()
+    credits = html[html.index('id="credits"') :]
+    assert "{fact:" not in html and '<p class="v-dek">Flown for nine months by Tiny Parks</p>' in credits
+    assert "<p>The $5 million figure is an estimate.</p>" in credits and "<p>© 2026 Tiny Parks</p>" in credits
+    assert (
+        '<li id="v-note-2" data-releasable="false">$5 million'
+        ' <span class="v-label v-unverified">Unverified: needs client</span></li>'
+    ) in credits
+    assert '<li id="v-note-5">2026<span class="v-meta">Client brief</span></li>' in credits
+
+    logo = (site / story["brand"]["logos"]["onDark"]).read_text()
+    assert "script" not in logo.lower() and "onload" not in logo and '<rect width="120"' in logo
+    assert "logo 'logo-on-dark.svg': removed <animate>, <div>, <foreignobject>" in capsys.readouterr().err
+
+    facts["facts"]["cost"]["status"] = "verified"
+    facts["facts"]["year"]["status"] = "needs-client"
+    root = make_project(tmp_path / "q", facts=facts, draft=False)
+    _edit_yaml(root / "brand/brand.yaml", lambda b: b.update(brand_text))
+    with pytest.raises(ReleaseError, match=r"brand\.yaml\.copyright: fact 'year' has status 'needs-client'"):
+        build_site(load_project(root), tmp_path / "site2", release=True)
+    (root / "brand" / "logo.svg").write_text(
+        '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg">&x;</svg>'
+    )
+    with pytest.raises(ValueError, match=r"logo 'logo\.svg': refusing to publish this SVG"):
+        build_site(load_project(root), tmp_path / "site3")

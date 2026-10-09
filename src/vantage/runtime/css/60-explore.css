@@ -25,7 +25,9 @@
 .v-x__stage .v-cmp__tag { top: 16px; }
 .v-x__reset { position: absolute; z-index: 4; right: 12px; bottom: 12px; }
 .v-x__reset[hidden] { display: none; }
-.v-x:not([data-mode="curtain"]) .v-cmp__handle, .v-x[data-mode="single"] .v-cmp__tag, .v-x:not([data-mode="single"]) .v-odo { display: none; }
+.v-x:not([data-mode="curtain"]) .v-cmp__handle, .v-x[data-mode="single"] .v-cmp__tag, .v-x:not([data-mode="single"]) .v-odo,
+.v-x:not([data-mode="blink"]) .v-cmp__bar { display: none; }
+.v-x__stage .v-cmp__bar { bottom: 12px; }
 
 .v-x__bar { display: grid; gap: 1rem; padding: 1.1rem var(--v-gutter) 0; }
 @media (min-width: 48em) { .v-x__bar { grid-template-columns: 1fr auto; align-items: start; padding-inline: 0; } }

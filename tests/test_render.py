@@ -83,7 +83,10 @@ def story(**meta: Any) -> dict[str, Any]:
             {"type": "credits", "id": "cr", "surface": "paper", "title": "Credits", "sources": [{"label": "Src", "url": "https://x.org"}],
              "notes": ["Method <em>note</em>"]},
         ],
-        "notes": [{"n": 1, "factId": "acres", "text": "48", "sources": ["https://www.example.org/plan"], "status": "verified"}],
+        "notes": [{"n": 1, "factId": "acres", "text": "48", "sources": ["https://www.example.org/plan"], "status": "verified",
+                   "releasable": True},
+                  {"n": 2, "factId": "cost", "text": "$5 million", "sources": [], "status": "needs-client", "releasable": False},
+                  {"n": 3, "factId": "says", "text": "a rumor", "sources": ["Paper"], "status": "reported", "releasable": False}],
     }  # fmt: skip
 
 
@@ -167,6 +170,61 @@ def test_every_chapter_is_a_semantic_section(no_runtime_js):
         in html
     )
     assert 'Generated <time datetime="2026-10-09T12:00:00Z">Oct. 9, 2026</time> · Made with Vantage' in html
+    assert (  # non-releasable facts are labelled in the notes list
+        '<li id="v-note-2" data-releasable="false">$5 million <span class="v-label v-unverified">'
+        "Unverified: needs client</span></li>"
+        in html
+        and '<li id="v-note-3" data-releasable="false">a rumor <span class="v-label v-unverified">'
+        'Unverified: needs attribution</span><span class="v-meta">Paper</span></li>'
+        in html
+    )
+    assert html.count("v-unverified") == 2 and "v-intro" not in html  # the hero leads
+
+
+def _headings(html: str) -> list[tuple[str, str]]:
+    return re.findall(r'<(h[12]) class="([^"]+)"', html)
+
+
+def test_story_without_a_lead_hero_still_has_a_title_and_dek(no_runtime_js):
+    s = story()
+    s["chapters"] = s["chapters"][1:]  # opens with a text chapter
+    html = render_page(s, theme_css="")
+    main = html[html.index('<main id="v-main">') :]
+    assert html.count("<h1") == 1 and _headings(html)[0] == ("h1", "v-sr")
+    assert main.startswith(
+        '<main id="v-main">\n<section class="v-intro v-surface-paper" aria-labelledby="v-story-title">\n'
+        '<div class="v-standfirst v-flow">\n<h1 class="v-sr" id="v-story-title">The Title</h1>\n'
+        '<p class="v-dek">A <em>dek</em></p>'
+    )
+    assert html.count("A <em>dek</em>") == 1 and main.index("v-standfirst") < main.index('id="t"')
+    assert "simulated: a demonstration of the format" in main[: main.index('id="t"')]
+    assert len(re.findall(r'<section class="v-chapter ', html)) == len(
+        s["chapters"]
+    )  # the intro is no chapter
+
+    bare = story(simulated=False, dek=None, dekHtml=None)
+    bare["chapters"] = bare["chapters"][2:]  # opens with a scrub; nothing to put in a standfirst
+    html = render_page(bare, theme_css="")
+    assert "v-intro" not in html and "v-standfirst" not in html
+    assert (
+        '<main id="v-main">\n<h1 class="v-sr" id="v-story-title">The Title</h1>\n<section class="v-chapter v-scrub'
+        in html
+    )
+
+
+def test_a_second_hero_is_a_part_opener(no_runtime_js):
+    s = story()
+    part = {"type": "hero", "id": "part-2", "surface": "night", "title": "Part two", "kicker": "Later",
+            "html": "<p>Next</p>", "vantage": "ov", "capture": 1}  # fmt: skip
+    s["chapters"].insert(3, part)
+    html = render_page(s, theme_css="")
+    assert _headings(html)[:3] == [("h1", "v-display"), ("h2", "v-title"), ("h2", "v-display")]
+    assert '<h2 class="v-display" id="part-2-title">Part two</h2>' in html
+    second = html[html.index('id="part-2"') : html.index('id="s2"')]
+    assert '<p class="v-kicker">Later</p>' in second and "<p>Next</p>" in second
+    for once in ("A <em>dek</em>", '<span class="v-badge">Preview</span>', "Simulated imagery", "v-hero__cue",
+                 'class="v-logo"', "v-standfirst"):  # fmt: skip
+        assert html.count(once) == 1, once
 
 
 def test_pictures_are_responsive_and_stable():

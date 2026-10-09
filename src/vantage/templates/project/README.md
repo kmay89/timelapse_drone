@@ -6,6 +6,7 @@ client's brand files; the pipeline rebuilds the site and films from them at any 
 ```
 project.yaml        title, location, time zone, processing and output settings
 story.yaml          vantages (viewpoints), visit labels, chapters and copy
+facts.yaml          every figure and claim the copy cites as {fact:id}, with sources and status
 brand/              brand.yaml + logos (+ licensed web fonts, if any)
 footage/            raw flights, one folder per visit date   (not committed)
 masters/            aligned, color-matched frames             (commit these)
@@ -26,9 +27,11 @@ work/               candidates, contact sheets, review sheets (not committed)
 4. **Process.** `vantage process {{slug}}` picks the best frame of every visit, aligns and
    color-matches them into `masters/`. Check the review sheets in `work/review/`; pin any wrong
    pick under the vantage's `picks:`.
-5. **Write.** Replace every `TODO` in `story.yaml` and `project.yaml`
-   (`vantage validate {{slug}}` counts what is left). Optional: `vantage caption {{slug}}` drafts
-   captions and alt text with Claude into `work/llm/suggestions.yaml`.
+5. **Write.** Replace every `TODO` in `story.yaml`, `project.yaml` and `facts.yaml`
+   (`vantage validate {{slug}}` counts what is left). Every number, date or claim goes in
+   `facts.yaml` with its sources and is cited as `{fact:id}`; a release build refuses facts that are
+   not verified or client-approved. Optional: `vantage caption {{slug}}` drafts captions and alt
+   text with Claude into `work/llm/suggestions.yaml`.
 6. **Build and review.** `vantage all {{slug}}` builds the site, the films and the packages;
    `vantage preview {{slug}} --host 0.0.0.0` serves it so you can open it on an iPhone on the same
    Wi-Fi.

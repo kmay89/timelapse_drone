@@ -1,0 +1,51 @@
+# facts.yaml — every number, date or claim the story prints, with its sources and a status.
+# Model: src/vantage/config.py (Facts, Fact). Story text cites a fact with a token instead of typing
+# the figure: "The park covers {fact:site-area}." The build prints the fact's text followed by a
+# numbered note; the notes (with sources) are listed in the credits. Tokens work in story.yaml,
+# project.yaml and brand.yaml's credit_line, disclaimer and copyright. Never invent a figure or a
+# source: leave the status at needs-client until someone has checked it.
+#
+#   text         what the story prints, exactly as it should read ("48 acres", "Oct. 23, 2025")
+#   sources      where it comes from: URLs, document titles, "client email, 2026-01-12"
+#   status       verified         checked against a primary source (a public record, a plan sheet)
+#                client-approved  the client signed it off in writing
+#                reported         published elsewhere: printable only with an attribution
+#                needs-client     waiting for the client (draft builds mark it "Unverified")
+#                do-not-print     kept for reference; the story must not use it
+#   attribution  who said it ("according to the City of …"); required for reported facts
+#   note         anything a fact-checker should know; never published
+#
+# `vantage validate {{slug}}` lists facts that are not releasable yet; `vantage build --release`
+# fails until every fact the story uses is verified or client-approved (or reported with an
+# attribution). Facts the story never uses are ignored.
+
+facts:
+  site-area: # used by the "By the numbers" chapter in story.yaml
+    text: "TODO"
+    sources: ["TODO: site plan sheet or client brief"]
+    status: needs-client
+
+  # One example per status. Uncomment, rename and fill in as the facts come in.
+  # groundbreaking:
+  #   text: "Oct. 23, 2025"
+  #   sources: ["https://example.org/news/groundbreaking"]
+  #   status: verified
+  # opening:
+  #   text: "summer 2026"
+  #   sources: ["Client email, 2026-01-12"]
+  #   status: client-approved
+  # budget:
+  #   text: "$12 million"
+  #   sources: ["https://example.org/local-news/park-budget"]
+  #   status: reported
+  #   attribution: "according to the city council"
+  # trees:
+  #   text: "TODO trees"
+  #   sources: []
+  #   status: needs-client
+  #   note: "Asked the design team for the planting plan count."
+  # old-attendance:
+  #   text: "a million visitors a year"
+  #   sources: ["Unsourced recollection"]
+  #   status: do-not-print
+  #   note: "No primary source; keep for the interview, never print."
