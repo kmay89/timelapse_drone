@@ -100,6 +100,7 @@ function controlTests() {
     await expect(slider).toBeVisible();
     const { top, height, vh } = await geometry(sec);
     await scrollToY(page, top + 1);
+    await expect(slider).toHaveAttribute("aria-valuenow", /\d/); // a missing value would read as 0
     const start = await settled(slider);
     await scrollToY(page, top + height - vh - 1);
     const travel = Math.abs(splits.at(-1) - splits[0]);

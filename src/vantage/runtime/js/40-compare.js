@@ -68,7 +68,10 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let blinkLoop = () => {};
   const after = layers[1].el;
 
-  /* Curtain: handle (1px rule + 44pt grip, a role=slider), dates riding on either side. */
+  /* Curtain: handle (1px rule + 44pt grip, a role=slider), dates riding on either side. The slider has
+   * its value from the start, before the chapter's first frame. */
+  const valueText = (/** @type {number} */ n) => `${100 - n}% ${labels[1]}, ${n}% ${labels[0]}`;
+  const n0 = Math.round(clamp(splits[0]) * 100);
   const grip = h("div", {
     class: "v-cmp__grip",
     role: "slider",
@@ -76,6 +79,8 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     "aria-label": `Divider between ${labels[0]} and ${labels[1]}`,
     "aria-valuemin": "0",
     "aria-valuemax": "100",
+    "aria-valuenow": String(n0),
+    "aria-valuetext": valueText(n0),
   }, [icon("grip")]);
   const handle = h("div", { class: "v-cmp__handle" }, [h("span", { class: "v-cmp__rule" }), ...tags, grip]);
   const setSplit = (/** @type {number} */ x) => {
@@ -208,7 +213,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       if (!blink && now !== valueNow) {
         valueNow = now;
         grip.setAttribute("aria-valuenow", String(now));
-        grip.setAttribute("aria-valuetext", `${100 - now}% ${labels[1]}, ${now}% ${labels[0]}`);
+        grip.setAttribute("aria-valuetext", valueText(now));
       }
       cards.set(steps[0].html ? cardAlphas(wins, x) : wins.map(() => 0));
       const side = (/** @type {number} */ px) => px < X;
