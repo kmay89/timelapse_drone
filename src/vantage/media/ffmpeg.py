@@ -77,8 +77,14 @@ class Probe:
 
 def probe(path: Path) -> Probe:
     cmd = [
-        ffprobe_bin(), "-v", "error", "-print_format", "json",
-        "-show_format", "-show_streams", str(path),
+        ffprobe_bin(),
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -93,9 +99,17 @@ def probe(path: Path) -> Probe:
     num, _, den = (vs.get("avg_frame_rate") or vs.get("r_frame_rate") or "0/1").partition("/")
     fps = float(num) / float(den) if den and float(den) else 0.0
     nb_frames = int(vs.get("nb_frames") or 0)
-    is_image = fmt.get("format_name", "").endswith("_pipe") or vs.get("codec_name") in {
-        "mjpeg", "png", "webp", "tiff", "bmp",
-    } and (duration == 0.0 or nb_frames <= 1)
+    is_image = fmt.get("format_name", "").endswith("_pipe") or (
+        vs.get("codec_name")
+        in {
+            "mjpeg",
+            "png",
+            "webp",
+            "tiff",
+            "bmp",
+        }
+        and (duration == 0.0 or nb_frames <= 1)
+    )
     tags = {**fmt.get("tags", {}), **vs.get("tags", {})}
     rotation = 0
     for sd in vs.get("side_data_list", []) or []:
@@ -196,10 +210,32 @@ class FrameWriter:
         else:
             venc = ["-c:v", "libx264", "-profile:v", "high"]
         self.cmd = [
-            ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
-            *venc, "-crf", str(crf), "-preset", preset, "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart", *extra, str(out),
+            ffmpeg_bin(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-s",
+            f"{width}x{height}",
+            "-r",
+            str(fps),
+            "-i",
+            "-",
+            *venc,
+            "-crf",
+            str(crf),
+            "-preset",
+            preset,
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            *extra,
+            str(out),
         ]
         self.proc: subprocess.Popen | None = None
 

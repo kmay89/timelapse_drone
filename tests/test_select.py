@@ -20,7 +20,7 @@ from test_align import SIZE, make_world, random_homography, reference_view, rend
 from vantage.config import Project, load_project
 from vantage.media.ffmpeg import FrameWriter
 from vantage.models import Candidate, Catalog, Selection, Source
-from vantage.process.select import haversine_m, load_frame, select_frames
+from vantage.process.select import CHAIN_TRIES, chain_by_date, haversine_m, load_frame, select_frames
 
 SITE = (41.3170, -81.3530)  # the vantage hint
 FAR = (41.3260, -81.3530)  # ~1 km north of it
@@ -68,9 +68,17 @@ def _write_yaml(path: Path, data: dict[str, Any]) -> None:
 
 
 def build_project(
-    root: Path, *, vantage: dict[str, Any] | None = None, captures: list[dict[str, Any]] | None = None
+    root: Path,
+    *,
+    vantage: dict[str, Any] | None = None,
+    captures: list[dict[str, Any]] | None = None,
+    shots: dict[str, Shot] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> tuple[Project, Catalog, dict[str, Shot]]:
-    """Write project.yaml/story.yaml/brand, footage, candidate JPEGs and work/catalog.json."""
+    """Write project.yaml/story.yaml/brand, footage, candidate JPEGs and work/catalog.json.
+
+    `shots` replaces the default footage; `config` is shallow-merged into project.yaml.
+    """
     _write_yaml(
         root / "project.yaml",
         {
@@ -79,6 +87,7 @@ def build_project(
             "align": {"max_features": 4000},
             "grade": {"mode": "reinhard", "strength": 1.0},
             "output": {"images": {"master_width": 960}},
+            **(config or {}),
         },
     )
     _write_yaml(
@@ -91,7 +100,7 @@ def build_project(
     )
     _write_yaml(root / "brand" / "brand.yaml", {"name": "Test Brand"})
 
-    shots = _shots()
+    shots = shots or _shots()
     catalog = Catalog()
     for shot in shots.values():
         path = root / "footage" / shot.path
@@ -206,6 +215,31 @@ def test_load_frame_honours_exif_orientation_and_icc(tmp_path):
     assert out.shape == (300, 200, 3)
     expected = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
     assert np.abs(out.astype(int) - expected).mean() < 3
+
+
+def test_video_time_past_the_end_is_a_clear_error(tmp_path):
+    clip = Shot("2025-07-20/DJI_0042.MP4", np.zeros((SIZE[1], SIZE[0], 3), np.uint8), 1.0, None, kind="video")
+    project, catalog, _ = build_project(tmp_path, shots={"clip": clip})
+    with pytest.raises(ValueError, match="no frame at t=30s"):
+        load_frame(project, catalog.sources[0], 30.0)
+
+
+def test_chain_by_date_links_nearest_pairs_first_with_bounded_attempts():
+    calls: list[tuple[str, str]] = []
+    links = {("2025-03-01", "2025-06-01"), ("2025-01-01", "2025-03-01")}
+
+    def attempt(date: str, via: str) -> bool:
+        calls.append((date, via))
+        return (date, via) in links
+
+    pending = ["2025-01-01", "2025-03-01", "2024-01-01"]
+    linked = chain_by_date(pending, ["2025-06-01", "2025-09-01"], attempt)
+    assert linked == {"2025-01-01", "2025-03-01"}
+    assert calls[:2] == [
+        ("2025-03-01", "2025-06-01"),
+        ("2025-01-01", "2025-03-01"),
+    ]  # a linked date is a stone
+    assert sum(date == "2024-01-01" for date, _ in calls) == CHAIN_TRIES
 
 
 def test_haversine():

@@ -1,0 +1,24 @@
+{% from "macros.html" import attrs %}
+<section {{ attrs(ch, index) }}>
+<div class="v-flow">
+<header class="v-head">
+{% if ch.kicker %}
+<p class="v-kicker">{{ ch.kicker }}</p>
+{% endif %}
+{% if ch.title %}
+<h2 class="v-title" id="{{ ch.id }}-title">{{ ch.title }}</h2>
+{% endif %}
+</header>
+{% if ch.html %}
+<div class="v-prose{{ ' v-dropcap' if dropcap == ch.id }}">{{ ch.html|safe }}</div>
+{% endif %}
+{% if ch.pullQuote %}
+<figure class="v-quote">
+<blockquote class="v-pull"><p>{{ ch.pullQuote|safe }}</p></blockquote>
+{% if ch.attribution %}
+<figcaption class="v-label">{{ ch.attribution }}</figcaption>
+{% endif %}
+</figure>
+{% endif %}
+</div>
+</section>

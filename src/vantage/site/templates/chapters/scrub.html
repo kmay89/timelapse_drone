@@ -1,0 +1,44 @@
+{% from "macros.html" import attrs, head, pins, legend %}
+{% set v = vantages[ch.vantage] %}
+{% set total = v.captures|length %}
+{% macro moment(i, html=none, focus=none) -%}
+{% set c = v.captures[i] %}
+<li class="v-moment" data-capture="{{ i }}">
+<figure class="v-fig">
+{% if focus %}
+<div class="v-media v-crop" style="--ar:{{ v.aspect }};--fx:{{ focus[0] }};--fy:{{ focus[1] }};--z:{{ focus[2] }}">{{ picture(c.img, "bleed") }}</div>
+{% else %}
+<div class="v-media">{{ picture(c.img, "bleed") }}{{ pins(ch.hotspots, i) }}</div>
+{% endif %}
+<figcaption class="v-seq__cap">
+<span class="v-seq__when"><span class="v-label v-seq__count">{{ (i + 1)|pad }} / {{ total|pad }}</span><time class="v-date" datetime="{{ c.date }}">{{ c.label }}</time></span>
+<div class="v-seq__text">{% if html %}{{ html|safe }}{% elif c.note %}<p>{{ c.note }}</p>{% endif %}</div>
+</figcaption>
+</figure>
+</li>
+{%- endmacro %}
+<section {{ attrs(ch, index) }} data-vantage="{{ v.id }}">
+<div class="v-flow">
+{{ head(ch) }}
+<ol class="v-seq v-bleed">
+{% if ch.steps %}
+{% set ns = namespace(last=ch["from"]) %}
+{% for s in ch.steps %}
+{% if s.capture is not none and s.capture is defined %}
+{% set ns.last = s.capture %}
+{{ moment(s.capture, s.html) }}
+{% elif s.focus %}
+{{ moment(ns.last, s.html, s.focus) }}
+{% else %}
+<li class="v-moment v-moment--text"><div class="v-interlude">{{ s.html|safe }}</div></li>
+{% endif %}
+{% endfor %}
+{% else %}
+{% for i in range(ch["from"], ch["to"] + 1) %}
+{{ moment(i) }}
+{% endfor %}
+{% endif %}
+</ol>
+{{ legend(ch.hotspots) }}
+</div>
+</section>

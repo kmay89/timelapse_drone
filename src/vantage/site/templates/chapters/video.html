@@ -1,0 +1,23 @@
+{% from "macros.html" import attrs, head %}
+{% set poster = ch.video.poster %}
+<section {{ attrs(ch, index) }}>
+<div class="v-flow">
+{{ head(ch) }}
+<figure class="v-fig v-clip v-bleed">
+<div class="v-media">
+{% if ch.video.sources and not embedded %}
+<video controls muted playsinline{{ " loop" if ch.loop }} preload="none" poster="{{ poster.fallback }}" width="{{ poster.w }}" height="{{ poster.h }}" style="background:{{ poster.color }} url({{ poster.lqip }}) 50%/cover no-repeat">
+{% for s in ch.video.sources %}
+<source src="{{ s.src }}" type="{{ s.type }}">
+{% endfor %}
+</video>
+{% else %}
+{{ picture(poster, "bleed") }}
+{% endif %}
+</div>
+{% if ch.caption %}
+<figcaption>{{ ch.caption|safe }}</figcaption>
+{% endif %}
+</figure>
+</div>
+</section>

@@ -149,3 +149,27 @@ def test_sample_at_and_summarize() -> None:
 def test_circular_median_wraps() -> None:
     assert circular_median([359.0, 1.0, 3.0]) == pytest.approx(1.0)
     assert circular_median([None, None]) is None
+
+
+def test_empty_legacy_values_never_swallow_the_next_block_index() -> None:
+    blocks = [
+        f"{i}\n00:00:0{i - 1},000 --> 00:00:0{i},000\n"
+        f"HOME(-81.3700,41.3400) 2016.06.25 10:22:3{i}\n"
+        "GPS(-81.3712,41.3401,17) BAROMETER:\n"
+        "ISO:100 Shutter:120 Fnum:F2.8 EV:\n"
+        for i in (1, 2, 3)
+    ]
+    samples = parse_srt_text("\n".join(blocks))
+    assert [s.index for s in samples] == [1, 2, 3]
+    assert [(s.ev, s.rel_alt) for s in samples] == [(None, None)] * 3
+    assert [s.datetime.second for s in samples if s.datetime] == [31, 32, 33]
+
+
+def test_bracket_barometer_is_height_above_takeoff() -> None:
+    text = (
+        '1\n00:00:00,000 --> 00:00:01,000\n<font size="28">SrtCnt : 1, DiffTime : 1000ms\n'
+        "2018-08-10 13:32:46,190,543\n[iso : 100] [shutter : 1/500.0] [fnum : 220] [ev : 0] "
+        "[latitude : 41.3401] [longtitude : -81.3712] [barometer: 60.4] </font>\n"
+    )
+    (s,) = parse_srt_text(text)
+    assert (s.lat, s.lon, s.rel_alt, s.fnum) == (41.3401, -81.3712, 60.4, 2.2)

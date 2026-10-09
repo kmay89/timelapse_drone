@@ -134,6 +134,25 @@ def test_ecc_refines_a_coarse_feature_fit(world, ref):
     assert np.median(corner_errors(after.H, H_true)) < 0.5 * np.median(corner_errors(before.H, H_true))
 
 
+@pytest.mark.parametrize("seed", [1, 3])
+def test_ecc_does_not_drift_off_the_feature_consensus(world, ref, ref_features, seed):
+    """A quarter of the frame displaced 12 px (parallax, moved shadows): ECC's correlation gain there
+    must not pull the homography away from what the feature inliers of the rest agree on."""
+    rng = np.random.default_rng(seed)
+    H_true = random_homography(rng)
+    still = render_view(world, H_true, rng)
+    moved = render_view(world, np.array([[1, 0, 12], [0, 1, 6], [0, 0, 1]]) @ H_true, rng)
+    blend = np.zeros((SIZE[1], SIZE[0]), np.float32)
+    blend[:, : SIZE[0] // 4] = 1
+    blend = cv2.GaussianBlur(blend, (0, 0), 6)[..., None]
+    img = (still * (1 - blend) + moved * blend).astype(np.uint8)
+    features_only = align.register(ref, img, AlignSettings(ecc_refine=False), ref_features=ref_features)
+    reg = align.register(ref, img, AlignSettings(), ref_features=ref_features)
+    assert reg.ok
+    worst_allowed = np.median(corner_errors(features_only.H, H_true)) + 0.1
+    assert np.median(corner_errors(reg.H, H_true)) <= worst_allowed, reg.note
+
+
 def test_resolution_change_maps_full_res_pixels(world, ref, ref_features):
     """A half-resolution image must still map onto full-resolution reference pixels."""
     rng = np.random.default_rng(5)

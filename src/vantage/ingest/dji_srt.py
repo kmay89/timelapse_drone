@@ -12,7 +12,8 @@ not recognise and never raises on content:
       [iso: 100] [shutter: 1/1000.0] [fnum: 2.8] [ev: 0] [latitude: 41.3401] [longitude: -81.3712]
       [rel_alt: 60.000 abs_alt: 350.000] [gb_yaw: 12.3 gb_pitch: -30.0 gb_roll: 0.0] </font>
 
-* Mini 2 / Air 2 variants: ``[latitude : …] [longtitude : …] [altitude: …]`` (sic), ``fnum : 280``
+* Mini 2 / Air 2 / Mavic Pro variants: ``[latitude : …] [longtitude : …] [altitude: …]`` (sic),
+  ``[barometer: …]``, ``fnum : 280``
   (×100), ``focal_len : 240`` (×10) and ``2021-03-14 14:34:20,384,165`` timestamps;
 * legacy Phantom / Mavic Pro text: ``HOME(lon,lat) 2017.08.05 14:11:51``, ``GPS(lon,lat,alt)
   BAROMETER:58.3``, ``ISO:100 Shutter:1000 EV:0 Fnum:F2.8`` or
@@ -88,6 +89,7 @@ _KEYS = {
     "rel_alt": "rel_alt",
     "abs_alt": "abs_alt",
     "altitude": "abs_alt",
+    "barometer": "rel_alt",
     "gb_yaw": "gimbal_yaw",
     "gb_pitch": "gimbal_pitch",
     "gb_roll": "gimbal_roll",
@@ -228,6 +230,8 @@ def parse_srt_text(text: str) -> list[TelemetrySample]:
         m = _TIMECODE.search(line)
         if m:
             index = int(previous) if previous.isdigit() else len(blocks) + 1
+            if previous.isdigit() and blocks:
+                blocks[-1][3].pop()  # this block's index line, not the previous block's text
             g = m.groups()
             blocks.append((index, _seconds(*g[:4]), _seconds(*g[4:]), []))
         elif blocks:

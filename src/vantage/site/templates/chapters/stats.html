@@ -1,0 +1,17 @@
+{% from "macros.html" import attrs, head %}
+<section {{ attrs(ch, index) }}>
+<div class="v-flow">
+{{ head(ch, "v-wide") }}
+<ul class="v-statgrid v-wide">
+{% for s in ch["items"] %}
+<li class="v-stat">
+<span class="v-stat__value">{{ s.value }}{% if s.unit %}<span class="v-stat__unit">{{ s.unit }}</span>{% endif %}{% if s.note %}<sup class="v-note-ref"><a href="#v-note-{{ s.note }}" aria-label="Note {{ s.note }}">{{ s.note }}</a></sup>{% endif %}</span>
+<span class="v-stat__label">{{ s.label }}</span>
+{% if s.source %}
+{% if s.source.startswith(("http://", "https://")) %}<a class="v-stat__source v-label" href="{{ s.source }}" rel="noopener">Source</a>{% else %}<span class="v-stat__source">{{ s.source }}</span>{% endif %}
+{% endif %}
+</li>
+{% endfor %}
+</ul>
+</div>
+</section>

@@ -1,0 +1,36 @@
+{# Shared chapter pieces. `picture(img, sizes)` is a Python global (render.py). #}
+
+{% macro attrs(ch, index, extra="") -%}
+class="v-chapter v-{{ ch.type }} v-surface-{{ ch.surface }}{{ extra }}" id="{{ ch.id }}" data-type="{{ ch.type }}" data-index="{{ index }}"{% if ch.title %} aria-labelledby="{{ ch.id }}-title"{% else %} aria-label="{{ ch.kicker or ch.type|capitalize }}"{% endif %}
+{%- endmacro %}
+
+{% macro head(ch, cls="") -%}
+{% if ch.kicker or ch.title or ch.html %}
+<header class="v-head {{ cls }}">
+{% if ch.kicker %}
+<p class="v-kicker">{{ ch.kicker }}</p>
+{% endif %}
+{% if ch.title %}
+<h2 class="v-title" id="{{ ch.id }}-title">{{ ch.title }}</h2>
+{% endif %}
+{% if ch.html %}
+<div class="v-lede v-prose">{{ ch.html|safe }}</div>
+{% endif %}
+</header>
+{% endif %}
+{%- endmacro %}
+
+{# Numbered markers for the hotspots visible at capture index i. #}
+{% macro pins(hotspots, i) -%}
+{% for h in hotspots %}{% if h["from"] <= i <= h["to"] %}<span class="v-pin" style="--x:{{ h.x }};--y:{{ h.y }}" aria-hidden="true">{{ loop.index }}</span>{% endif %}{% endfor %}
+{%- endmacro %}
+
+{% macro legend(hotspots) -%}
+{% if hotspots %}
+<ol class="v-pins" aria-label="Points of interest">
+{% for h in hotspots %}
+<li><span class="v-pin" aria-hidden="true">{{ loop.index }}</span><div><b>{{ h.label }}</b>{% if h.html %}{{ h.html|safe }}{% endif %}</div></li>
+{% endfor %}
+</ol>
+{% endif %}
+{%- endmacro %}

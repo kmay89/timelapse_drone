@@ -4,16 +4,21 @@ The reference frame of a vantage is `vantage.reference`, or else the sharpest
 candidate of the latest visit near the vantage hint. For every other visit a
 manual `vantage.picks[date]` wins; otherwise the date's sharpest candidates
 (after a telemetry prefilter) are registered against the reference at low
-resolution and the best-overlapping, best-matching one is kept.
+resolution and the best-overlapping, best-matching one is kept. A visit too
+different from the reference (a site before construction vs. after) is matched
+through the already-selected visits nearest in time instead.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 import math
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -34,6 +39,7 @@ HEADING_TOLERANCE_DEG = 45.0
 SCORE_TIE = 0.02  # scores within this of the best count as tied → sharpest wins
 EARTH_RADIUS_M = 6_371_008.8
 REF_PROXY_WIDTH = 1600
+CHAIN_TRIES = 3  # stepping-stone visits tried for a visit that doesn't register to the reference
 WORKERS = min(4, os.cpu_count() or 1)
 
 _SRGB = ImageCms.createProfile("sRGB")
@@ -75,6 +81,8 @@ def load_frame(project: Project, source: Source, t: float = 0.0, *, width: int |
         if not cached.exists():
             tmp = cached.with_suffix(".tmp.png")
             ffmpeg.extract_frame(path, t, tmp)
+            if not tmp.exists():  # ffmpeg exits cleanly when seeking past the last frame
+                raise ValueError(f"{source.path}: no frame at t={t:g}s (clip length {source.duration_s:g}s)")
             os.replace(tmp, cached)
         img = cv2.imread(str(cached), cv2.IMREAD_COLOR)
         if img is None:
@@ -84,6 +92,37 @@ def load_frame(project: Project, source: Source, t: float = 0.0, *, width: int |
             img, (width, round(img.shape[0] * width / img.shape[1])), interpolation=cv2.INTER_AREA
         )
     return img
+
+
+def chain_by_date(
+    pending: Iterable[str], anchors: Iterable[str], attempt: Callable[[str, str], bool]
+) -> set[str]:
+    """Link dates to anchor dates, closest pair in time first; returns the dates linked.
+
+    `attempt(date, anchor)` registers one to the other. A linked date becomes an
+    anchor itself, so a long run of visits chains back to the reference visit by
+    visit. Each pending date gets at most CHAIN_TRIES attempts.
+    """
+    todo, stones, linked = set(pending), set(anchors), set()
+    tried: set[tuple[str, str]] = set()
+    used: Counter[str] = Counter()
+    while True:
+        pairs = [
+            (abs(dt.date.fromisoformat(d) - dt.date.fromisoformat(a)).days, d, a)
+            for d in todo
+            if used[d] < CHAIN_TRIES
+            for a in stones
+            if (d, a) not in tried
+        ]
+        if not pairs:
+            return linked
+        _, date, anchor = min(pairs)
+        tried.add((date, anchor))
+        used[date] += 1
+        if attempt(date, anchor):
+            todo.discard(date)
+            stones.add(date)
+            linked.add(date)
 
 
 def _sharpest_first(cand: Candidate) -> tuple[float, float, str]:
@@ -139,6 +178,23 @@ def _source_for(catalog: Catalog, ref: FrameRef, what: str) -> Source:
         ) from None
 
 
+@dataclass(frozen=True)
+class _Anchor:
+    """A frame candidates are registered against, and its transform onto the reference proxy."""
+
+    img: np.ndarray
+    features: align.Features
+    H: np.ndarray
+    score: float
+
+
+@dataclass(frozen=True)
+class _Choice:
+    pick: FramePick
+    cand: Candidate
+    H: np.ndarray  # candidate pixels → reference proxy pixels
+
+
 class _VantageSelector:
     """Selection state for one vantage: reference proxy image + cached features."""
 
@@ -148,8 +204,9 @@ class _VantageSelector:
         self.project, self.catalog, self.by_date, self.vantage = project, catalog, by_date, vantage
         self.sources = {s.id: s for s in catalog.sources}
         self.settings = _scoring_settings(project.config.align)
-        self.reference, self.ref_img = self._reference()
-        self.ref_features = align.detect(self.ref_img, self.settings)
+        self.reference, ref_img = self._reference()
+        self.ref_size = (ref_img.shape[1], ref_img.shape[0])
+        self.anchor = _Anchor(ref_img, align.detect(ref_img, self.settings), np.eye(3), 1.0)
 
     def _plausible(self, cands: list[Candidate]) -> list[Candidate]:
         radius = self.project.config.select.gps_radius_m
@@ -185,31 +242,52 @@ class _VantageSelector:
         t = ref.t if src.kind == "video" else 0.0
         return FramePick(source=src.id, t=t, date=date, score=1.0, manual=True)
 
-    def _score(self, cand: Candidate) -> tuple[float, int, Candidate] | None:
+    def _score(self, cand: Candidate, anchor: _Anchor) -> tuple[float, int, Candidate, np.ndarray] | None:
         """Score in [0, 1): match strength x share of the reference covered x inlier ratio."""
         img = _read_candidate(self.project, cand)
         if img is None:
             return None
-        reg = align.register(self.ref_img, img, self.settings, ref_features=self.ref_features)
+        reg = align.register(anchor.img, img, self.settings, ref_features=anchor.features)
         if not reg.ok:
             return None
-        ref_size = (self.ref_img.shape[1], self.ref_img.shape[0])
-        overlap = align.coverage(reg.H, (img.shape[1], img.shape[0]), ref_size)
+        H = anchor.H @ reg.H
+        overlap = align.coverage(H, (img.shape[1], img.shape[0]), self.ref_size)
         strength = reg.inliers / (reg.inliers + self.settings.min_inliers)
-        return strength * overlap * (0.5 + 0.5 * reg.inlier_ratio), reg.inliers, cand
+        return anchor.score * strength * overlap * (0.5 + 0.5 * reg.inlier_ratio), reg.inliers, cand, H
 
-    def best(self, date: str) -> FramePick | None:
-        """Register the date's sharpest plausible candidates; None when nothing matches."""
+    def best(self, date: str, anchor: _Anchor | None = None) -> _Choice | None:
+        """Register the date's sharpest plausible candidates (to the reference by default)."""
+        anchor = anchor if anchor is not None else self.anchor
         pool = sorted(self._plausible(self.by_date.get(date, [])), key=_sharpest_first)[:TOP_N]
         with ThreadPoolExecutor(WORKERS) as executor:  # OpenCV releases the GIL
-            scored = [s for s in executor.map(self._score, pool) if s is not None]
+            scored = [s for s in executor.map(lambda c: self._score(c, anchor), pool) if s is not None]
         if not scored:
             return None
-        top = max(s for s, _, _ in scored)
-        score, inliers, cand = min(
+        top = max(s[0] for s in scored)
+        score, inliers, cand, H = min(
             (x for x in scored if x[0] >= top - SCORE_TIE), key=lambda x: _sharpest_first(x[2])
         )
-        return FramePick(source=cand.source, t=cand.t, date=date, score=round(score, 4), inliers=inliers)
+        pick = FramePick(source=cand.source, t=cand.t, date=date, score=round(score, 4), inliers=inliers)
+        return _Choice(pick, cand, H)
+
+    def chain(self, unmatched: list[str], chosen: dict[str, _Choice]) -> dict[str, _Choice]:
+        """Match visits that miss the reference through the selected visits nearest in time."""
+        found = dict(chosen)
+
+        def attempt(date: str, via: str) -> bool:
+            stone = found[via]
+            img = _read_candidate(self.project, stone.cand)
+            if img is None:
+                return False
+            anchor = _Anchor(img, align.detect(img, self.settings), stone.H, stone.pick.score)
+            choice = self.best(date, anchor)
+            if choice is not None:
+                found[date] = choice
+                log.debug(f"{self.vantage.id}: {date} matched via {via}")
+            return choice is not None
+
+        linked = chain_by_date(unmatched, chosen, attempt)
+        return {d: found[d] for d in linked}
 
 
 def select_frames(project: Project, catalog: Catalog | None = None) -> Selection:
@@ -237,17 +315,26 @@ def select_frames(project: Project, catalog: Catalog | None = None) -> Selection
                 )
             seen_refs.setdefault(key, vantage.id)
             picks: dict[str, FramePick] = {}
+            chosen: dict[str, _Choice] = {}
+            unmatched: list[str] = []
             for date in sorted((set(by_date) | set(vantage.picks) | {ref.date}) - excluded):
                 if date in vantage.picks:
                     picks[date] = sel.manual(date, vantage.picks[date])
                 elif date == ref.date:
                     picks[date] = ref
-                elif (pick := sel.best(date)) is not None:
-                    picks[date] = pick
+                elif (choice := sel.best(date)) is not None:
+                    chosen[date] = choice
                 else:
+                    unmatched.append(date)
+            if unmatched:
+                chosen |= sel.chain(unmatched, chosen)
+            for date in unmatched:
+                if date not in chosen:
                     log.warn(
                         f"{vantage.id}: nothing on {date} registers to the reference; skipping that visit"
                     )
+            picks |= {date: choice.pick for date, choice in chosen.items()}
+            picks = dict(sorted(picks.items()))
             selection.vantages[vantage.id] = VantageSelection(reference=ref, picks=picks)
             log.info(f"{vantage.id}: {len(picks)} visits, reference {ref.date} ({sources[ref.source].path})")
     selection.save(project.work_dir / "selection.json")

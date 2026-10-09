@@ -8,6 +8,7 @@ import pytest
 from PIL import ExifTags, Image
 
 from vantage.ingest.exif import parse_exif_datetime, read_still_metadata
+from vantage.ingest.frames import load_photo
 
 
 def _dms(value: float) -> tuple[float, float, float]:
@@ -121,3 +122,19 @@ def test_unreadable_file_raises_oserror(tmp_path: Path) -> None:
 )
 def test_parse_exif_datetime(value: object, expected: dt.datetime | None) -> None:
     assert parse_exif_datetime(value) == expected
+
+
+@pytest.mark.parametrize("ext", ["tif", "jpg"])
+def test_oriented_still_size_matches_the_upright_pixels(tmp_path: Path, ext: str) -> None:
+    path = tmp_path / f"rotated.{ext}"
+    image = Image.new("RGB", (64, 48), (200, 40, 40))
+    if ext == "tif":  # Pillow reports TIFF sizes already rotated; JPEG sizes as stored
+        image.save(
+            path, tiffinfo={ExifTags.Base.Orientation: 6, ExifTags.Base.DateTime: "2025:04:12 10:41:07"}
+        )
+    else:
+        image.save(path, exif=_exif("2025:04:12 10:41:07", orientation=6))
+    meta = read_still_metadata(path)
+    assert (meta.width, meta.height) == (48, 64)
+    assert load_photo(path).shape[:2] == (meta.height, meta.width)
+    assert meta.datetime is not None and meta.datetime.date() == dt.date(2025, 4, 12)

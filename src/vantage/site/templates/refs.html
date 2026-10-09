@@ -1,0 +1,5 @@
+<ol class="v-refs">
+{% for n in notes %}
+<li id="v-note-{{ n.n }}">{{ n.text }}{% if n.status not in ("verified", "client-approved", "reported") %} <span class="v-label v-unverified">Unverified</span>{% endif %}{% for s in n.sources %}<span class="v-meta">{% if s.startswith(("http://", "https://")) %}<a href="{{ s }}" rel="noopener">{{ s|host }}</a>{% else %}{{ s }}{% endif %}</span>{% endfor %}</li>
+{% endfor %}
+</ol>

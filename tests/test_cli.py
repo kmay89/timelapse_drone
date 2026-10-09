@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import http.client
 import shutil
 import sys
@@ -7,6 +8,7 @@ import threading
 import types
 from collections.abc import Iterator
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 import yaml
@@ -278,3 +280,26 @@ def test_preview_server_serves_byte_ranges(server: int) -> None:
 )
 def test_preview_server_mime_types(server: int, name: str, mime: str) -> None:
     assert _get(server, f"/{name}")[1]["content-type"].startswith(mime)
+
+
+def test_new_escapes_hostile_titles_and_validate_checks_timezone_and_gallery(tmp_path: Path) -> None:
+    title = 'Say "Hi" & <Co> \\ back: # not-a-comment {{slug}}'
+    assert _invoke(tmp_path, "new", "odd-one", "--title", title).exit_code == 0
+    root = tmp_path / "odd-one"
+    project = load_project(root)
+    assert (project.config.title, project.brand.name, project.story.chapters[0].title) == (title,) * 3
+    for svg in (root / "brand").glob("*.svg"):
+        ElementTree.parse(svg)  # well-formed XML despite the title
+    assert f">{html.escape(title)}</text>" in (root / "brand" / "logo.svg").read_text()
+
+    config = root / "project.yaml"
+    config.write_text(config.read_text().replace("America/New_York", "Mars/Olympus"))
+    story = yaml.safe_load((root / "story.yaml").read_text())
+    story["chapters"].append(
+        {"type": "gallery", "id": "archive", "captures": ["first"], "images": [{"file": "archive/gone.jpg"}]}
+    )
+    (root / "story.yaml").write_text(yaml.safe_dump(story, sort_keys=False))
+    result = _invoke(tmp_path, "validate", "odd-one")
+    assert result.exit_code == 1
+    for needle in ("'Mars/Olympus'", "archive/gone.jpg", "'first'"):
+        assert needle in result.output

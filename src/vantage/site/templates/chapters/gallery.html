@@ -1,0 +1,18 @@
+{% from "macros.html" import attrs, head %}
+{% set v = vantages.get(ch.vantage) if ch.vantage else none %}
+<section {{ attrs(ch, index) }}>
+<div class="v-flow">
+{{ head(ch) }}
+</div>
+<ul class="v-strip" aria-label="{{ ch.title or 'Gallery' }}">
+{% if v %}
+{% for i in ch.captures if v.captures[i].img is not placeholder %}
+{% set c = v.captures[i] %}
+<li><figure class="v-fig"><div class="v-media">{{ picture(c.img, "strip") }}</div><figcaption><time class="v-date" datetime="{{ c.date }}">{{ c.label }}</time>{% if c.note %}<span>{{ c.note }}</span>{% endif %}</figcaption></figure></li>
+{% endfor %}
+{% endif %}
+{% for g in ch.images if g.img is not placeholder %}
+<li><figure class="v-fig"><div class="v-media">{{ picture(g.img, "strip") }}</div><figcaption>{% if g.date %}<span class="v-date">{{ g.date }}</span>{% endif %}{% if g.caption %}<span>{{ g.caption|safe }}</span>{% endif %}{% if g.credit %}<span class="v-credit">{{ g.credit }}</span>{% endif %}</figcaption></figure></li>
+{% endfor %}
+</ul>
+</section>

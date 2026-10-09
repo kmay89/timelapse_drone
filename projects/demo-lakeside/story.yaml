@@ -1,0 +1,242 @@
+# Story for the fictional demo. File names below are fixed by vantage.demo.synth (dates and take-off
+# times are part of its flight plan); hotspot x/y are in the aligned overview frame, computed from the
+# generator's site plan through the exact camera of the 2026-09-20 reference still.
+
+vantages:
+  - id: overview
+    name: Over the old parking lot, looking north to the lake
+    kind: drone
+    portrait_focus: [0.48, 0.52]
+    reference: { source: "2026-09-20/DJI_20260920172528_0001.JPG" }
+    hint: { lat: 40.947858, lon: -82.044708, alt_m: 115, heading_deg: 0, gimbal_pitch_deg: -44 }
+  - id: shoreline
+    name: From over the water, looking back at the beach
+    kind: drone
+    portrait_focus: [0.45, 0.45]
+    reference: { source: "2026-09-20/DJI_20260920172744_0002.JPG" }
+    hint: { lat: 40.950086, lon: -82.044208, alt_m: 74, heading_deg: -164, gimbal_pitch_deg: -45 }
+
+captures:
+  - { date: 2025-04-12, label: April 2025, note: "Before. The park as it was left in 2007." }
+  - { date: 2025-05-30, label: May 2025, note: "Fences go up; the first machines arrive." }
+  - { date: 2025-07-18, label: July 2025, note: "The slides, the lazy river and two buildings are gone." }
+  - { date: 2025-09-05, label: September 2025, note: "The wave pool is broken up and backfilled." }
+  - { date: 2025-10-24, label: October 2025, note: "Graded from curb to shore; half the lot is torn out." }
+  - { date: 2025-12-12, label: December 2025, note: "First snow. The promenades and the plaza are poured." }
+  - { date: 2026-01-31, label: January 2026, note: "Deep freeze. The lot is repaved; the boardwalk begins." }
+  - { date: 2026-03-21, label: March 2026, note: "Thaw. New roofs on the gatehouses." }
+  - { date: 2026-05-09, label: May 2026, note: "Sod goes down west to east; the beach gets its sand." }
+  - { date: 2026-06-27, label: June 2026, note: "Finished, and still fenced, a month before opening." }
+  - { date: 2026-08-08, label: August 2026, note: "A week after opening day." }
+  - { date: 2026-09-20, label: September 2026, note: "Late summer, the first season on the new beach." }
+
+chapters:
+  - type: hero
+    id: opening
+    kicker: Lakeside · 2025–2026
+    title: Where the Wave Pool Was
+    body: >-
+      Twelve flights, one patch of sky, and eighteen months in which an abandoned waterpark was
+      handed back to the lake.
+    vantage: overview
+    capture: latest
+    video: { source: "2026-09-20/DJI_0001.MP4", t: 0 }
+    clip_s: 3
+
+  - type: text
+    id: the-fence
+    kicker: The site
+    title: Eighteen summers behind a fence
+    surface: paper
+    body: |
+      The waterpark opened in 1988 on the south shore, a wave pool fanned toward the water so that
+      swimmers could see the lake from the deep end. It closed after the {fact:last-season} season and
+      never reopened. By the spring of 2025 the slide tubes had faded to pastel, cottonwoods were
+      rooting in the walkways, and the pool held a single green puddle where the wave machines used to
+      be.
+
+      The plan that replaced it is modest on paper: keep the two gatehouses, remove almost everything
+      else, and give the shoreline back. A beach where the pool was. A boardwalk in place of the dock.
+      A meadow on the half of the parking lot nobody had needed in years.
+    pull_quote: We used to hear it from the porch every August. Then for eighteen years we heard nothing at all.
+    attribution: A neighbor on the north shore, at the first public meeting
+
+  - type: scrub
+    id: twelve-flights
+    kicker: Twelve flights
+    title: Eighteen months from the same patch of sky
+    body: Scroll to fly the site forward in time. Every frame is aligned to the last flight.
+    vantage: overview
+    from: earliest
+    to: latest
+    hold: 0.55
+    steps:
+      - capture: "2025-04-12"
+        text: >-
+          **April 2025.** Weeds split the old lot. The wave pool is dry except for its deep end, and four
+          slide tubes still coil off a single concrete tower.
+      - capture: "2025-07-18"
+        text: >-
+          **July.** In ten weeks the slides, the lazy river and two buildings are gone. Concrete is sorted
+          into piles to be crushed on site; it will go back under the new paths.
+        focus: [0.62, 0.52, 1.6]
+      - capture: "2025-10-24"
+        text: >-
+          **October.** Graded from the curb to the reeds. The basin is backfilled, the west half of the lot
+          is stripped to earth, and orange survey paint marks where the promenades will run.
+      - capture: "2026-01-31"
+        text: >-
+          **January.** Under snow the plan is legible for the first time: the curving promenades, the
+          round plaza between the gatehouses, a ring of paving where the splash pad will spray.
+        focus: [0.48, 0.55, 1.5]
+      - capture: "2026-05-09"
+        text: >-
+          **May.** Sod goes down in strips from west to east. Sand fills the old fan of the wave pool,
+          and the first of {fact:new-trees} go into the ground along the paths.
+      - capture: "2026-09-20"
+        text: >-
+          **September.** The deep end is now the shallow end of a beach.
+        focus: [0.48, 0.45, 1.8]
+    hotspots:
+      - id: slide-tower
+        x: 0.858
+        y: 0.554
+        label: The slide tower
+        body: Four tubes off one tower, demolished in the first summer.
+        from: earliest
+        to: "2025-05-30"
+      - id: beach
+        x: 0.480
+        y: 0.425
+        label: The wave pool, then the beach
+        body: The same fan-shaped footprint, backfilled and topped with sand.
+      - id: gatehouse-east
+        x: 0.564
+        y: 0.760
+        label: The gatehouses
+        body: Kept from 1988, re-roofed in standing-seam bronze in the second winter.
+      - id: pier
+        x: 0.667
+        y: 0.314
+        label: Boardwalk and slips
+        body: "{fact:boardwalk} along the shore, and eight slips where the old dock collapsed."
+        from: "2026-03-21"
+      - id: meadow
+        x: 0.063
+        y: 0.939
+        label: Lot to meadow
+        body: "{fact:stalls-to-meadow}, returned to coneflower and little bluestem."
+        from: "2026-05-09"
+  - type: compare
+    id: before-after
+    kicker: Before and after
+    title: Seventeen months apart
+    body: Drag the line. Left is April 2025; right is September 2026.
+    vantage: overview
+    mode: curtain
+    before: earliest
+    after: latest
+    before_label: April 2025
+    after_label: September 2026
+    steps:
+      - text: The old park, as it was left in 2007.
+        split: 0.85
+      - text: The fan of the wave pool survives as the outline of the beach.
+        split: 0.5
+        focus: [0.48, 0.46, 1.7]
+      - text: The new park, in its first late summer.
+        split: 0.12
+    hotspots:
+      - { id: beach, x: 0.480, y: 0.425, label: Pool to beach }
+      - { id: gatehouse-west, x: 0.383, y: 0.759, label: "Gatehouse, kept" }
+      - { id: pier, x: 0.667, y: 0.314, label: Dock to boardwalk }
+
+  - type: stats
+    id: by-the-numbers
+    kicker: By the numbers
+    title: What changed
+    surface: paper
+    items:
+      - { value: "12", label: "drone flights, every six to seven weeks", source: Flight logs }
+      - { value: "135", label: parking spaces returned to meadow, source: Site plan }
+      - { value: "13,100", unit: sq ft, label: "of wave pool, now beach and splash pad", source: Site plan }
+      - { value: "770", unit: m, label: of new paths and promenade, source: Site plan }
+      - { value: "78", label: young trees planted along the paths, source: Planting plan }
+      - { value: "8", label: boat slips off a new 138-meter boardwalk, source: Site plan }
+
+  - type: timeline
+    id: timeline
+    kicker: Timeline
+    title: Sixty-four years on the south shore
+    surface: paper
+    items:
+      - { date: "1962", title: A farm pond becomes a swimming lake, status: done }
+      - date: "1988"
+        title: The waterpark opens
+        body: A wave pool fanned toward the water, a lazy river, and four slides off one tower.
+        status: done
+      - { date: Labor Day 2007, title: The last season, status: done }
+      - { date: "2023", title: The City of Lakeside buys the shore, status: done }
+      - date: May 30, 2025
+        title: Fences up, demolition begins
+        capture: "2025-05-30"
+        vantage: overview
+        status: done
+      - date: Sept. 5, 2025
+        title: The wave pool is backfilled
+        capture: "2025-09-05"
+        vantage: overview
+        status: done
+      - date: Jan. 31, 2026
+        title: Paths poured, the lot repaved under snow
+        capture: "2026-01-31"
+        vantage: overview
+        status: done
+      - date: May 9, 2026
+        title: Sod, sand and the first trees
+        capture: "2026-05-09"
+        vantage: shoreline
+        status: done
+      - date: Aug. 1, 2026
+        title: Opening day
+        body: "The fence comes down on {fact:opening-day}."
+        capture: "2026-08-08"
+        vantage: shoreline
+        status: done
+      - { date: Spring 2027, title: Kayak rentals at the boat launch, status: planned }
+
+  - type: video
+    id: last-evening
+    title: The last summer evening of the old park
+    body: Late May 2025, from over the water. The slide tower still stands; the fence is already up.
+    clip: { source: "2025-05-30/DJI_0002.MP4", t: 0 }
+    clip_s: 3
+    caption: May 30, 2025, 6:15 p.m. Shoreline vantage, hovering at 74 meters.
+    loop: true
+
+  - type: gallery
+    id: from-the-water
+    kicker: From the water
+    title: Every flight, seen from the lake
+    vantage: shoreline
+
+  - type: explore
+    id: explore
+    kicker: Explore
+    title: Your turn
+    body: Pick any two flights and compare them, or scrub through all twelve from either vantage.
+    vantages: [overview, shoreline]
+
+  - type: credits
+    id: credits
+    title: About this story
+    body: >-
+      A demonstration of Vantage. The site, the organizations, the people quoted and every figure are
+      fictional; the drone footage was generated by a computer, not flown.
+    sources:
+      - label: "Imagery: procedural drone footage from vantage.demo.synth (seed 7)"
+      - label: "Site plan, figures and quotations: invented for this demo"
+    notes:
+      - All imagery is simulated. Places, organizations and people are fictional.
+      - Logos are original artwork made for this demo and represent no real organization.
+      - Aerial frames are aligned to the 2026-09-20 flight and color-matched halfway, so the seasons still show.
