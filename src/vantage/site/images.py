@@ -5,6 +5,9 @@
 cached by content hash (source bytes + settings) so rebuilds only copy files; AVIF is slow, so
 images are encoded in parallel threads (Pillow releases the GIL). `VANTAGE_FAST=1` limits output to
 JPEG + WebP at two widths for quick dev/CI builds.
+
+Published images carry pixels and a colour profile, nothing else: `open_rgb` drops EXIF, XMP and
+comments before anything is encoded, and `strip_raster` re-encodes raster logos the same way.
 """
 
 from __future__ import annotations
@@ -22,11 +25,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, JpegImagePlugin
 
 from vantage.config import ImageSettings
 
-_VERSION = 1
+_VERSION = 2  # 2: variants no longer inherit a source's JPEG comment
 _ORDER = ("avif", "webp", "jpeg")
 _EXT = {"avif": "avif", "webp": "webp", "jpeg": "jpg"}
 _MIME = {"avif": "image/avif", "webp": "image/webp", "jpeg": "image/jpeg"}
@@ -54,9 +57,18 @@ def _plan(settings: ImageSettings) -> tuple[list[str], list[int], dict[str, int]
     return formats, widths, {f: settings.quality.get(f, _DEFAULT_QUALITY[f]) for f in formats}
 
 
+def _bare(im: Image.Image) -> Image.Image:
+    """`im` with `info` cut to its colour profile. Pillow's writers fall back to `info` (a JPEG
+    source's COM comment is written into every JPEG made from it), so EXIF, XMP, IPTC and comments
+    from a camera, a scanner or a design tool stop here."""
+    im.info = {"icc_profile": im.info["icc_profile"]} if im.info.get("icc_profile") else {}
+    return im
+
+
 def open_rgb(path: Path) -> Image.Image:
+    """`path` upright (EXIF orientation applied) as RGB, with no metadata but its colour profile."""
     with Image.open(path) as im:
-        return ImageOps.exif_transpose(im).convert("RGB")
+        return _bare(ImageOps.exif_transpose(im).convert("RGB"))
 
 
 def resize(im: Image.Image, width: int) -> Image.Image:
@@ -291,6 +303,69 @@ def share_card(
     out.parent.mkdir(parents=True, exist_ok=True)
     im.convert("RGB").save(out, "JPEG", quality=86, progressive=True, optimize=True)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Raster logos: pixels only
+# --------------------------------------------------------------------------- #
+
+_RASTER_WRITERS: dict[str, tuple[str, dict[str, Any]]] = {  # Pillow format → (writer, lossless-ish options)
+    "PNG": ("PNG", {"optimize": True}),
+    "GIF": ("GIF", {"optimize": True}),
+    "WEBP": ("WEBP", {"lossless": True, "exact": True, "quality": 100}),
+    "JPEG": ("JPEG", {"optimize": True}),
+    "MPO": ("JPEG", {"optimize": True}),  # a JPEG with more pictures after it (phone thumbnails, depth)
+    "AVIF": ("AVIF", {"quality": 90, "subsampling": "4:4:4", "speed": 6, "max_threads": 1}),
+}
+_METADATA = {
+    "exif": "EXIF",
+    "xmp": "XMP",
+    "XML:com.adobe.xmp": "XMP",
+    "photoshop": "IPTC",
+    "comment": "comment",
+}
+EXTRA_FRAMES = "frames after the first"
+
+
+def strip_raster(path: Path) -> tuple[bytes, list[str]]:
+    """A PNG, JPEG, WebP, AVIF or GIF re-encoded from its pixels in its own format, and what went.
+
+    Only pixels, transparency and the colour profile are kept. EXIF (camera, GPS, author), XMP
+    (design-tool history with names and local file paths), IPTC, comments and PNG text chunks are
+    not; EXIF orientation is applied to the pixels first. PNG, GIF and WebP are written losslessly
+    (the decoded pixels exactly; a lossy WebP grows), a JPEG with its own quantization tables and
+    subsampling, an AVIF at quality 90. Of an animated image only the first frame is kept: a logo
+    does not move (prefers-reduced-motion).
+    """
+    with Image.open(path) as src:
+        if src.format not in _RASTER_WRITERS:
+            raise ValueError(f"{path.name} is {src.format or 'unknown'}, not PNG, JPEG, WebP, AVIF or GIF")
+        writer, options = _RASTER_WRITERS[src.format]
+        options = dict(options)
+        removed = {name for key, name in _METADATA.items() if src.info.get(key)}
+        if set(getattr(src, "text", None) or ()) - set(_METADATA):
+            removed.add("text chunks")
+        if getattr(src, "n_frames", 1) > 1:
+            removed.add(EXTRA_FRAMES)
+        if writer == "JPEG":
+            options |= {
+                "qtables": src.quantization,
+                "subsampling": JpegImagePlugin.get_sampling(src),
+                "progressive": bool(src.info.get("progressive")),
+            }
+        icc = src.info.get("icc_profile")
+        im = ImageOps.exif_transpose(src)  # the first frame, upright
+        transparency = im.info.get("transparency")
+        im.info = {}
+        if icc and writer != "GIF":
+            options["icc_profile"] = icc
+        if transparency is not None and writer in ("PNG", "GIF"):
+            options["transparency"] = transparency
+        if writer == "JPEG" and im.mode not in ("L", "RGB", "CMYK"):
+            im = im.convert("RGB")
+        buf = io.BytesIO()
+        im.save(buf, writer, **options)
+    return buf.getvalue(), sorted(removed)
 
 
 def initials(name: str) -> str:

@@ -50,7 +50,16 @@ from vantage.media import ffmpeg
 from vantage.models import MastersIndex
 from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import BRAND_TEXT, FactNotes, check_release
-from vantage.site.images import CardText, ImageSpec, app_icon, encode_images, fast_mode, initials, share_card
+from vantage.site.images import (
+    CardText,
+    ImageSpec,
+    app_icon,
+    encode_images,
+    fast_mode,
+    initials,
+    share_card,
+    strip_raster,
+)
 from vantage.site.render import MONTHS, capture_label, render_page
 from vantage.site.theme import font_file, theme_css
 
@@ -533,7 +542,13 @@ class StoryBuilder:
                 log.warn(f"brand.yaml: logo {rel!r}: removed {', '.join(sorted(set(removed)))}")
             target.write_bytes(data)
         else:
-            shutil.copyfile(path, target)
+            try:
+                data, removed = strip_raster(path)
+            except (OSError, ValueError) as exc:  # unreadable, truncated or not the image it claims to be
+                raise ValueError(f"brand.yaml: logo {rel!r} is not a readable image: {exc}") from None
+            if removed:
+                log.warn(f"brand.yaml: logo {rel!r}: removed {', '.join(removed)}")
+            target.write_bytes(data)
         return url
 
     # -- references ---------------------------------------------------------- #

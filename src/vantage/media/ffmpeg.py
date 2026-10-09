@@ -132,10 +132,15 @@ def probe(path: Path) -> Probe:
 
 
 def extract_frame(video: Path, t: float, out: Path, *, width: int | None = None, quality: int = 2) -> Path:
-    """Write one frame at time t (seconds) to `out` (format from extension)."""
+    """Write one frame at time t (seconds) to `out` (format from extension).
+
+    Bitexact and without metadata: no encoder version (a JPEG `Lavc…` comment) or source tags in
+    the bytes, so the same frame gives the same file on any ffmpeg.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
     vf = [f"scale={width}:-2:flags=lanczos"] if width else []
     args: list[str | Path] = ["-ss", f"{max(t, 0):.3f}", "-i", video, "-frames:v", "1"]
+    args += ["-map_metadata", "-1", "-fflags", "+bitexact", "-flags:v", "+bitexact"]
     if vf:
         args += ["-vf", ",".join(vf)]
     if out.suffix.lower() in {".jpg", ".jpeg"}:

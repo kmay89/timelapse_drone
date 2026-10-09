@@ -226,7 +226,7 @@ dist/<slug>/site/
   index.html                     pre-rendered HTML + inlined CSS/JS/StoryJSON (+ theme)
   assets/img/<vantage>/<date>-<w>.<avif|webp|jpg>
   assets/video/<chapter>.<mp4>   (h264 + hevc)
-  assets/brand/…                 logos as supplied (SVGs sanitized, see below)
+  assets/brand/…                 logos (SVGs sanitized, rasters re-encoded bare, see below)
   assets/fonts/…                 woff2 actually used
   share.jpg (1200×630)  icon-192.png  icon-512.png  apple-touch-icon.png
   manifest.webmanifest  sw.js
@@ -243,6 +243,16 @@ a root other than an SVG `<svg>` (a plain `<!DOCTYPE svg PUBLIC …>` is fine). 
 `vbscript:` and `livescript:` values; `data:` URLs other than `data:image/…` in `href`, `src`,
 `action` and `formaction`; comments and processing instructions (`xml-stylesheet`). The build logs
 what it removed and `vantage validate` lists it as a warning.
+
+No published image carries metadata. A raster logo is re-encoded from its pixels in its own format
+(`site/images.py` `strip_raster`): EXIF (camera, GPS, author), XMP (design-tool history, names, local
+paths), IPTC, comments and PNG text chunks go; EXIF orientation is applied to the pixels; transparency
+and the colour profile stay. PNG, GIF and WebP are written losslessly, a JPEG with its own
+quantization tables, an AVIF at quality 90; an animated logo keeps its first frame. The build logs
+what it removed. Photo variants, LQIPs, the share card and single-file re-encodes start from
+`images.open_rgb`, which keeps only the colour profile (Pillow would otherwise copy a source JPEG's
+comment into every JPEG made from it), and video posters come from a bitexact `ffmpeg.extract_frame`
+with no metadata.
 
 The page must work from `file://` (no fetch of JSON, no ES-module imports, no
 service worker there) and from `https://` (service worker registers and
