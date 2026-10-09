@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import itertools
 import json
 import math
 import multiprocessing
@@ -107,10 +108,10 @@ def _lerp(a: np.ndarray, b: np.ndarray, t: np.ndarray | float) -> np.ndarray:
     return a + (b - a) * t
 
 
-def _rect(cx: float, cy: float, w: float, l: float, ang: float = 0.0) -> Points:
-    """Corners of a w (along x) by l (along y) rectangle rotated by `ang` degrees."""
+def _rect(cx: float, cy: float, w: float, depth: float, ang: float = 0.0) -> Points:
+    """Corners of a w (along x) by depth (along y) rectangle rotated by `ang` degrees."""
     c, s = math.cos(math.radians(ang)), math.sin(math.radians(ang))
-    pts = np.array([[-w, -l], [w, -l], [w, l], [-w, l]], np.float64) / 2
+    pts = np.array([[-w, -depth], [w, -depth], [w, depth], [-w, depth]], np.float64) / 2
     return pts @ np.array([[c, s], [-s, c]]) + (cx, cy)
 
 
@@ -204,13 +205,21 @@ def _sun(when_utc: dt.datetime, lat: float, lon: float) -> tuple[float, float]:
     hour = when_utc.hour + when_utc.minute / 60 + when_utc.second / 3600
     g = 2 * math.pi / 365 * (doy - 1 + (hour - 12) / 24)
     eqt = 229.18 * (
-        0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g)
-        - 0.014615 * math.cos(2 * g) - 0.040849 * math.sin(2 * g)
-    )  # fmt: skip
+        0.000075
+        + 0.001868 * math.cos(g)
+        - 0.032077 * math.sin(g)
+        - 0.014615 * math.cos(2 * g)
+        - 0.040849 * math.sin(2 * g)
+    )
     decl = (
-        0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g) - 0.006758 * math.cos(2 * g)
-        + 0.000907 * math.sin(2 * g) - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g)
-    )  # fmt: skip
+        0.006918
+        - 0.399912 * math.cos(g)
+        + 0.070257 * math.sin(g)
+        - 0.006758 * math.cos(2 * g)
+        + 0.000907 * math.sin(2 * g)
+        - 0.002697 * math.cos(3 * g)
+        + 0.00148 * math.sin(3 * g)
+    )
     ha = math.radians((hour * 60 + eqt + 4 * lon) / 4 - 180)
     la = math.radians(lat)
     cz = math.sin(la) * math.sin(decl) + math.cos(la) * math.cos(decl) * math.cos(ha)
@@ -275,9 +284,15 @@ class _Stages:
     def at(cls, p: float) -> _Stages:
         busy = _ramp(p, 0.03, 0.1) * (1 - _ramp(p, 0.8, 0.9))
         return cls(
-            p, _ramp(p, 0.04, 0.26), _ramp(p, 0.17, 0.38), _ramp(p, 0.36, 0.58), _ramp(p, 0.48, 0.68),
-            _ramp(p, 0.62, 0.86), _ramp(p, 0.84, 1.0), busy,
-        )  # fmt: skip
+            p,
+            _ramp(p, 0.04, 0.26),
+            _ramp(p, 0.17, 0.38),
+            _ramp(p, 0.36, 0.58),
+            _ramp(p, 0.48, 0.68),
+            _ramp(p, 0.62, 0.86),
+            _ramp(p, 0.84, 1.0),
+            busy,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -385,7 +400,7 @@ _BASIN = (260.0, 266.0, 46.0, 33.0)  # apex x, y, radius, half-angle: a fan open
 _SPLASH = (260.0, 251.0, 9.0)
 _LAZY = (172.0, 252.0, 14.0, 20.0)  # cx, cy, r_in, r_out
 _TOWER = (352.0, 262.0)
-_OLD_BUILDINGS = (  # cx, cy, w, l, height, demolished at progress
+_OLD_BUILDINGS = (  # cx, cy, w, depth, height, demolished at progress
     (205.0, 288.0, 24.0, 11.0, 4.5, 0.10),
     (318.0, 288.0, 18.0, 10.0, 4.0, 0.15),
     (260.0, 271.0, 16.0, 5.0, 5.0, 0.21),
@@ -492,7 +507,11 @@ def _layout(rng: np.random.Generator) -> _Layout:
         pl((tx, ty), (tx + 10, ty - 2), (tx + 14, ty - 14), (tx + 8, ty - 24), (tx + 2, ty - 33)),
     ]
     s318 = sy(318)
-    slips = [pl((318 + sx * 1.6, s318 - 8 - 6 * k), (318 + sx * 10, s318 - 8 - 6 * k)) for k in range(4) for sx in (-1, 1)]
+    slips = [
+        pl((318 + sx * 1.6, s318 - 8 - 6 * k), (318 + sx * 10, s318 - 8 - 6 * k))
+        for k in range(4)
+        for sx in (-1, 1)
+    ]
     meadow_path = pl((150, 312), (176, 326), (210, 330), (236, 318), (214, 309), (180, 309), (150, 312))
 
     young = []
@@ -524,8 +543,9 @@ def _layout(rng: np.random.Generator) -> _Layout:
     )
 
 
-def _scatter_trees(rng: np.random.Generator, lake: Points, island: Points, roads: list[Points], work: Points,
-                   sy) -> np.ndarray:  # noqa: ANN001  # fmt: skip
+def _scatter_trees(
+    rng: np.random.Generator, lake: Points, island: Points, roads: list[Points], work: Points, sy
+) -> np.ndarray:
     """Jittered-grid tree placement against a 1 px/m occupancy mask."""
     w, h = int(WORLD_M[0]), int(WORLD_M[1])
 
@@ -575,8 +595,13 @@ def _scatter_trees(rng: np.random.Generator, lake: Points, island: Points, roads
 # --------------------------------------------------------------------------- #
 
 
-def _fbm(rng: np.random.Generator, shape: tuple[int, int], cell: float, octaves: int = 4,
-         stretch: tuple[float, float] = (1.0, 1.0)) -> np.ndarray:  # fmt: skip
+def _fbm(
+    rng: np.random.Generator,
+    shape: tuple[int, int],
+    cell: float,
+    octaves: int = 4,
+    stretch: tuple[float, float] = (1.0, 1.0),
+) -> np.ndarray:
     """Fractal value noise (bicubic random lattices), zero mean and unit std, float32."""
     h, w = shape
     out = np.zeros(shape, np.float32)
@@ -617,8 +642,14 @@ class _Canvas:
     def __init__(self, ppm: float, shape: tuple[int, int]) -> None:
         self.ppm, self.shape = ppm, shape
 
-    def stamp(self, polys: Sequence[Points] = (), lines: Sequence[Points] = (), width: float = 1.0,
-              feather: float = 0.0, closed: bool = False) -> _Stamp | None:  # fmt: skip
+    def stamp(
+        self,
+        polys: Sequence[Points] = (),
+        lines: Sequence[Points] = (),
+        width: float = 1.0,
+        feather: float = 0.0,
+        closed: bool = False,
+    ) -> _Stamp | None:
         parts = [p for p in (*polys, *lines) if len(p)]
         if not parts:
             return None
@@ -640,14 +671,18 @@ class _Canvas:
         if lines:
             wpx = width * self.ppm  # sub-pixel lines: 1 px wide with proportional alpha
             val = round(255 * min(1.0, wpx))
-            cv2.polylines(buf, [fix(p) for p in lines], closed, val, max(1, round(wpx)), cv2.LINE_AA, self.SHIFT)
+            cv2.polylines(
+                buf, [fix(p) for p in lines], closed, val, max(1, round(wpx)), cv2.LINE_AA, self.SHIFT
+            )
         a = buf.astype(np.float32) * (1 / 255)
         if feather > 0:
             a = cv2.GaussianBlur(a, (0, 0), feather * self.ppm)
         return _Stamp(y0, x0, a)
 
 
-def _paint(img: np.ndarray, st: _Stamp | None, color: np.ndarray | float, k: float | np.ndarray = 1.0) -> None:
+def _paint(
+    img: np.ndarray, st: _Stamp | None, color: np.ndarray | float, k: float | np.ndarray = 1.0
+) -> None:
     """Alpha-blend a color (or ROI-sized field) into a (3, h, w) or (h, w) image under a stamp."""
     if st is None or (np.isscalar(k) and k <= 0):
         return
@@ -708,10 +743,32 @@ C = {
     "orange": _rgb(226, 112, 58),
     "ev": _rgb(60, 130, 90),
 }
-_CAR_COLORS = [_rgb(*c) for c in [(232, 232, 230), (190, 192, 194), (30, 32, 36), (120, 122, 126),
-                                   (40, 58, 96), (150, 30, 34), (70, 76, 70), (210, 206, 196)]]  # fmt: skip
-_CLOTHES = [_rgb(*c) for c in [(230, 90, 60), (40, 70, 140), (240, 240, 236), (60, 60, 64), (230, 190, 60),
-                               (90, 150, 110), (200, 80, 130), (120, 180, 210)]]  # fmt: skip
+_CAR_COLORS = [
+    _rgb(*c)
+    for c in [
+        (232, 232, 230),
+        (190, 192, 194),
+        (30, 32, 36),
+        (120, 122, 126),
+        (40, 58, 96),
+        (150, 30, 34),
+        (70, 76, 70),
+        (210, 206, 196),
+    ]
+]
+_CLOTHES = [
+    _rgb(*c)
+    for c in [
+        (230, 90, 60),
+        (40, 70, 140),
+        (240, 240, 236),
+        (60, 60, 64),
+        (230, 190, 60),
+        (90, 150, 110),
+        (200, 80, 130),
+        (120, 180, 210),
+    ]
+]
 _UMBRELLAS = [_rgb(*c) for c in [(226, 112, 58), (244, 240, 230), (54, 150, 158), (234, 190, 70)]]
 _BLANKETS = [_rgb(*c) for c in [(196, 96, 74), (70, 96, 140), (222, 214, 196), (200, 170, 90)]]
 _KAYAKS = [_rgb(*c) for c in [(236, 120, 40), (240, 200, 50), (220, 60, 50), (60, 160, 170)]]
@@ -730,8 +787,9 @@ _FALL = np.stack([_CANOPY[k][1].ravel() for k in range(5)])
 _HUE = np.array([-1.0, 0.25, 1.0], np.float32)  # tilts greens toward yellow (-) or blue (+)
 
 
-def _canopy_colors(kinds: np.ndarray, tone: np.ndarray, hue: np.ndarray, turn: np.ndarray, s: _Season,
-                   autumn: float = 1.0) -> np.ndarray:  # fmt: skip
+def _canopy_colors(
+    kinds: np.ndarray, tone: np.ndarray, hue: np.ndarray, turn: np.ndarray, s: _Season, autumn: float = 1.0
+) -> np.ndarray:
     """Per-tree crown colors (n, 3) for a season: leaf-out, autumn turning, blossom, bare winter twigs."""
     t = np.clip((s.autumn * autumn - 0.5 * turn) * 2.0, 0, 1)[:, None]
     col = (_SUMMER[kinds] + (_FALL[kinds] - _SUMMER[kinds]) * t) * (1 + 0.12 * tone)[:, None]
@@ -742,7 +800,9 @@ def _canopy_colors(kinds: np.ndarray, tone: np.ndarray, hue: np.ndarray, turn: n
         spring = bare + (fresh - bare) * min(1.0, s.leaf * 2.2)
         col = np.where(deciduous, spring + (col - spring) * s.leaf**2, col)
     if s.blossom > 0:
-        col = np.where((kinds == _ORNAMENTAL)[:, None], col + (np.array([0.91, 0.78, 0.82]) - col) * 0.6 * s.blossom, col)
+        col = np.where(
+            (kinds == _ORNAMENTAL)[:, None], col + (np.array([0.91, 0.78, 0.82]) - col) * 0.6 * s.blossom, col
+        )
     return col.astype(np.float32)
 
 
@@ -786,15 +846,19 @@ class _World:
         trng = np.random.default_rng([seed, 5])
         self.tree_phase = trng.uniform(0, 2 * np.pi, (len(self.lay.trees) + len(self.lay.young), 3))
         self.tree_turn = trng.uniform(0, 1, len(self.tree_phase))
-        self.sprites = [self._sprite(x, y, r, self.tree_phase[i]) for i, (x, y, r, *_) in enumerate(self.lay.trees)]
+        self.sprites = [
+            self._sprite(x, y, r, self.tree_phase[i]) for i, (x, y, r, *_) in enumerate(self.lay.trees)
+        ]
 
-    def _on_lake(self, arr: np.ndarray, st: _Stamp, fn) -> None:  # noqa: ANN001
+    def _on_lake(self, arr: np.ndarray, st: _Stamp, fn) -> None:
         """Apply fn(region, alpha) to the part of a lake-ROI array covered by `st`."""
         oy, ox = st.y0 - self.lake.y0, st.x0 - self.lake.x0
         h, w = st.a.shape
         arr[oy : oy + h, ox : ox + w] = fn(arr[oy : oy + h, ox : ox + w], st.a)
 
-    def _sprite(self, x: float, y: float, r: float, ph: Sequence[float]) -> tuple[int, int, np.ndarray, np.ndarray] | None:
+    def _sprite(
+        self, x: float, y: float, r: float, ph: Sequence[float]
+    ) -> tuple[int, int, np.ndarray, np.ndarray] | None:
         """A lumpy round canopy footprint: (y0, x0, coverage, normalized radius)."""
         ppm, rp = self.ppm, r * self.ppm * 1.2
         x0, y0 = max(int(x * ppm - rp) - 1, 0), max(int(y * ppm - rp) - 1, 0)
@@ -803,12 +867,19 @@ class _World:
             return None
         dx, dy = self.xm[None, x0:x1] - x, self.ym[y0:y1, None] - y
         ang = np.arctan2(dy, dx)
-        reff = r * (1 + 0.1 * np.sin(3 * ang + ph[0]) + 0.07 * np.sin(5 * ang + ph[1]) + 0.04 * np.sin(8 * ang + ph[2]))
+        reff = r * (
+            1
+            + 0.1 * np.sin(3 * ang + ph[0])
+            + 0.07 * np.sin(5 * ang + ph[1])
+            + 0.04 * np.sin(8 * ang + ph[2])
+        )
         rr = np.hypot(dx, dy) / reff
         cover = np.clip((1 - rr) * reff * ppm * 0.8, 0, 1).astype(np.float32)
         return (y0, x0, cover, rr.astype(np.float32)) if cover.any() else None
 
-    def _mat(self, st: _Stamp, base: np.ndarray, amp: Sequence[float] = (0.05, 0.05, 0.05, 0.04)) -> np.ndarray:
+    def _mat(
+        self, st: _Stamp, base: np.ndarray, amp: Sequence[float] = (0.05, 0.05, 0.05, 0.04)
+    ) -> np.ndarray:
         """A material color modulated by the four noise octaves under a stamp, (3, h, w)."""
         sl = st.sl
         v = 1 + amp[0] * self.n_large[sl] + amp[1] * self.n_mid[sl] + amp[2] * self.n_fine[sl]
@@ -828,8 +899,16 @@ class _World:
             cv2.fillConvexPoly(alb[c], q, float(color[c, 0, 0]), cv2.LINE_8, 4)
         cv2.fillConvexPoly(hmap, q, float(height), cv2.LINE_8, 4)
 
-    def _dot(self, alb: np.ndarray, hmap: np.ndarray, x: float, y: float, r: float, color: np.ndarray,
-             height: float) -> None:  # fmt: skip
+    def _dot(
+        self,
+        alb: np.ndarray,
+        hmap: np.ndarray,
+        x: float,
+        y: float,
+        r: float,
+        color: np.ndarray,
+        height: float,
+    ) -> None:
         c = (round(x * self.ppm * 16), round(y * self.ppm * 16))
         rad = max(12, round(r * self.ppm * 16))
         for ch in range(3):
@@ -892,7 +971,11 @@ class _World:
             pts, nrm = _resample(road, 0.5)
             edges = self.cv.stamp(lines=[pts + nrm * 3.4, pts - nrm * 3.4], width=0.14)
             _paint(alb, edges, C["line_white"], 0.7)
-            dashes = [pts[i : i + 7] + nrm[i : i + 7] * off for i in range(0, len(pts) - 7, 18) for off in (-0.12, 0.12)]
+            dashes = [
+                pts[i : i + 7] + nrm[i : i + 7] * off
+                for i in range(0, len(pts) - 7, 18)
+                for off in (-0.12, 0.12)
+            ]
             _paint(alb, self.cv.stamp(lines=dashes, width=0.11), C["line_yellow"], 0.85)
 
     def _lake(self, alb: np.ndarray, s: _Season) -> np.ndarray:
@@ -909,7 +992,9 @@ class _World:
         foam = np.clip(1 - d / 0.9, 0, 1) * (d > 0) * (0.5 + 0.5 * n_fine)
         col = _lerp(col, _rgb(200, 204, 196), foam * 0.35)
         _paint(alb, st, col)
-        water = st.a * (1 - reeds * 0.7) * (d > 0) * (0.72 + 0.28 * _smooth(0.5 + 0.6 * n_mid))  # wind patches
+        water = (
+            st.a * (1 - reeds * 0.7) * (d > 0) * (0.72 + 0.28 * _smooth(0.5 + 0.6 * n_mid))
+        )  # wind patches
         if s.ice > 0:
             edge = 4 + s.ice * 70 * (1 + 0.35 * self.n_large[sl])
             ice = _smooth((edge - d) / 3.0) * (d > 0)
@@ -937,7 +1022,9 @@ class _World:
         _paint(alb, work, weeds, 0.85)
         gone = self._reveal(work, st.demo)
         earth = self._mat(work, C["earth"], (0.05, 0.08, 0.06, 0.06))
-        rubble = _lerp(earth * (0.84 + 0.05 * n_fine), C["concrete_old"] * (0.8 + 0.1 * n_micro), (n_micro > 1.3) * 0.7)
+        rubble = _lerp(
+            earth * (0.84 + 0.05 * n_fine), C["concrete_old"] * (0.8 + 0.1 * n_micro), (n_micro > 1.3) * 0.7
+        )
         _paint(alb, work, rubble, gone * (1 - st.grade))
         graded = self._reveal(work, st.grade, 0.1) * gone
         stripes = np.sin(self.ym[sl[0], None] * 3.3 + 1.5 * n_mid)
@@ -964,7 +1051,11 @@ class _World:
         sl = lot.sl
         crack = (np.abs(self.n_crack[sl]) < 0.03) | (np.abs(self.n_fine[sl]) < 0.012)
         stains = _smooth((self.n_mid[sl] - 1.1) * 2)
-        old = self._mat(lot, C["asphalt_old"], (0.06, 0.07, 0.07, 0.08)) * (1 - 0.28 * crack) * (1 - 0.18 * stains)
+        old = (
+            self._mat(lot, C["asphalt_old"], (0.06, 0.07, 0.07, 0.08))
+            * (1 - 0.28 * crack)
+            * (1 - 0.18 * stains)
+        )
         old = _lerp(old, C["olive"] * 0.85, crack * (self.n_fine[sl] > 0.2) * 0.8 * (1 - st.demo))
         _paint(alb, lot, old)
         _paint(alb, drive, self._mat(drive, C["asphalt_old"] * 0.95))
@@ -974,11 +1065,17 @@ class _World:
         _paint(alb, lot, self._mat(lot, C["earth_dark"], (0.05, 0.08, 0.08, 0.06)), west * rip)
         if st.soft > 0:  # west: a pollinator meadow with a mown loop
             ga, gb = self._grass(v.season)
-            meadow = _lerp(C["meadow"], gb, 0.4) * (1 + 0.12 * self.n_mid[sl] + 0.14 * self.n_fine[sl] + 0.1 * self.n_micro[sl])
+            meadow = _lerp(C["meadow"], gb, 0.4) * (
+                1 + 0.12 * self.n_mid[sl] + 0.14 * self.n_fine[sl] + 0.1 * self.n_micro[sl]
+            )
             if v.season.green > 0.5:  # scattered single blooms: coneflower, black-eyed susan, yarrow
                 speck = np.random.default_rng([self.seed, 31]).random((2, *lot.a.shape), dtype=np.float32)
                 bloom = (speck[0] > 0.94) * (self.n_mid[sl] > -0.4) * st.live
-                tint = np.where(speck[1] < 0.4, _rgb(196, 140, 200), np.where(speck[1] < 0.8, _rgb(238, 200, 70), _rgb(240, 238, 228)))
+                tint = np.where(
+                    speck[1] < 0.4,
+                    _rgb(196, 140, 200),
+                    np.where(speck[1] < 0.8, _rgb(238, 200, 70), _rgb(240, 238, 228)),
+                )
                 meadow = _lerp(meadow, tint, bloom * 0.9)
             _paint(alb, lot, meadow, west * st.soft)
             mp = cv.stamp(lines=[self.lay.meadow_path], width=2.2, feather=0.3)
@@ -998,7 +1095,9 @@ class _World:
         if old_lines is not None:
             lx = self.xm[None, old_lines.sl[1]]
             k = 0.75 * (1 - (lx < _LOT_SPLIT) * rip) * (1 - (lx > _DRIVE[0]) * mill)
-            _paint(alb, old_lines, C["line_white"] * 0.88, k * (0.55 + 0.45 * (self.n_fine[old_lines.sl] > -0.6)))
+            _paint(
+                alb, old_lines, C["line_white"] * 0.88, k * (0.55 + 0.45 * (self.n_fine[old_lines.sl] > -0.6))
+            )
         restripe = _ramp(p, 0.5, 0.53)
         if restripe > 0:
             new = [s for s in segs if s[0, 0] > _DRIVE[1]] + [np.array([(_DRIVE[1] + 1, mid), (x1 - 4, mid)])]
@@ -1015,19 +1114,44 @@ class _World:
         for ra, rb in rows:
             for x in stall_x:
                 if x > _DRIVE[1] and crng.uniform() < 0.55 * st.live:
-                    self._car(alb, hmap, x + 1.375 + crng.uniform(-0.15, 0.15), (ra + rb) / 2 + crng.uniform(-0.3, 0.3), 180 * crng.integers(2) + crng.uniform(-3, 3), crng)
+                    self._car(
+                        alb,
+                        hmap,
+                        x + 1.375 + crng.uniform(-0.15, 0.15),
+                        (ra + rb) / 2 + crng.uniform(-0.3, 0.3),
+                        180 * crng.integers(2) + crng.uniform(-3, 3),
+                        crng,
+                    )
         for _ in range(int(9 * st.busy)):
-            self._car(alb, hmap, crng.uniform(340, 392), crng.uniform(y0 + 2, y0 + 24), crng.uniform(0, 180), crng, True)
+            self._car(
+                alb,
+                hmap,
+                crng.uniform(340, 392),
+                crng.uniform(y0 + 2, y0 + 24),
+                crng.uniform(0, 180),
+                crng,
+                True,
+            )
 
-    def _car(self, alb: np.ndarray, hmap: np.ndarray, cx: float, cy: float, ang: float,
-             rng: np.random.Generator, pickup: bool = False) -> None:  # fmt: skip
+    def _car(
+        self,
+        alb: np.ndarray,
+        hmap: np.ndarray,
+        cx: float,
+        cy: float,
+        ang: float,
+        rng: np.random.Generator,
+        pickup: bool = False,
+    ) -> None:
         palette = _CAR_COLORS[:3] if pickup else _CAR_COLORS
         col = palette[int(rng.integers(len(palette)))]
         a = math.radians(ang)
         fx, fy = math.sin(a), -math.cos(a)
         self._box(alb, hmap, _rect(cx, cy, 1.9, 5.4 if pickup else 4.6, ang), col, 1.5)
         self._box(alb, hmap, _rect(cx + fx * 0.45, cy + fy * 0.45, 1.6, 1.0, ang), C["glass"], 1.4)
-        self._box(alb, hmap, _rect(cx - fx * 0.5, cy - fy * 0.5, 1.5, 1.3 if pickup else 1.7, ang), col * 1.06, 1.55)
+        self._box(
+            alb, hmap, _rect(cx - fx * 0.5, cy - fy * 0.5, 1.5, 1.3 if pickup else 1.7, ang), col * 1.06, 1.55
+        )
 
     def _old_park(self, alb: np.ndarray, hmap: np.ndarray, st: _Stages, s: _Season) -> None:
         """The abandoned waterpark: walkways, wave-pool basin, lazy river, slide tower."""
@@ -1051,18 +1175,24 @@ class _World:
             deep = np.clip((self.ym[sl[0], None] - (ay - r)) / r, 0, 1)
             paint = _lerp(C["basin"], C["concrete_old"] * 0.9, (0.5 + 0.5 * np.tanh(1.5 * n_mid)) * 0.6)
             paint *= 1 + 0.06 * n_fine + 0.05 * self.n_micro[sl]
-            paint = _lerp(paint, C["stain"] * (1 + 0.15 * n_fine), 0.75 * _smooth(1.4 * deep - 0.5 + 0.35 * n_mid))
+            paint = _lerp(
+                paint, C["stain"] * (1 + 0.15 * n_fine), 0.75 * _smooth(1.4 * deep - 0.5 + 0.35 * n_mid)
+            )
             paint = _lerp(paint, C["water_green"] * 0.7, _smooth((deep - 0.82 + 0.06 * n_fine) * 12))
             paint = _lerp(paint, C["snow"] * 0.95, 0.8 * s.snow)
             _paint(alb, basin, paint, 1 - fill)
             rim = cv.stamp(lines=[fan], width=0.9, closed=True)
             _paint(alb, rim, C["concrete_old"] * 1.1, 1 - fill)
             _lift(hmap, rim, 0.9 * (1 - fill))
-            bands = cv.stamp(lines=[_arc(ax, ay, rr, -half, half) for rr in np.arange(12, r, 6.0)], width=0.25)
+            bands = cv.stamp(
+                lines=[_arc(ax, ay, rr, -half, half) for rr in np.arange(12, r, 6.0)], width=0.25
+            )
             _paint(alb, bands, C["paver_dark"], 0.25 * (1 - fill))
         lx, ly, ri, ro = _LAZY
         gone = _ramp(st.demo, 0.3, 0.7)
-        ring = cv.stamp(lines=[_arc(lx, ly, (ri + ro) / 2, 0, 360, 96)], width=ro - ri, closed=True, feather=0.1)
+        ring = cv.stamp(
+            lines=[_arc(lx, ly, (ri + ro) / 2, 0, 360, 96)], width=ro - ri, closed=True, feather=0.1
+        )
         if ring is not None and gone < 1:
             c = _lerp(C["basin"] * 0.95, C["stain"], (0.5 + 0.5 * np.tanh(2 * self.n_mid[ring.sl])) * 0.6)
             _paint(alb, ring, c * (1 + 0.07 * self.n_fine[ring.sl]), 1 - gone)
@@ -1079,8 +1209,10 @@ class _World:
                 thick = max(1, round(1.5 * self.ppm))
                 for c in range(3):
                     cv2.polylines(alb[c], [pts], False, float(faded[c, 0, 0]), thick, cv2.LINE_8, 4)
-                    cv2.polylines(alb[c], [pts], False, float(faded[c, 0, 0] * 1.25), max(1, thick // 3), cv2.LINE_8, 4)
-                for i, (a, b) in enumerate(zip(pts[:-1], pts[1:], strict=True)):
+                    cv2.polylines(
+                        alb[c], [pts], False, float(faded[c, 0, 0] * 1.25), max(1, thick // 3), cv2.LINE_8, 4
+                    )
+                for i, (a, b) in enumerate(itertools.pairwise(pts)):
                     cv2.line(hmap, a, b, float((14 - 12.5 * i / len(pts)) * tower), thick, cv2.LINE_8, 4)
             top = cv.stamp([_rect(tx, ty, 6, 6)])
             _paint(alb, top, C["concrete_old"] * 0.9, tower)
@@ -1093,7 +1225,9 @@ class _World:
         assert old is not None
         sl = old.sl
         cr = np.abs(self.n_crack[sl]) < 0.05
-        joints = (np.abs((self.xm[None, sl[1]] % 3.0) - 1.5) > 1.44) | (np.abs((self.ym[sl[0], None] % 3.0) - 1.5) > 1.44)
+        joints = (np.abs((self.xm[None, sl[1]] % 3.0) - 1.5) > 1.44) | (
+            np.abs((self.ym[sl[0], None] % 3.0) - 1.5) > 1.44
+        )
         c = self._mat(old, C["concrete_old"], (0.05, 0.07, 0.07, 0.06)) * (1 - 0.3 * cr) * (1 - 0.15 * joints)
         c = _lerp(c, C["olive"], cr * 0.5 * (1 - st.demo))
         _paint(alb, old, c, 1 - _ramp(st.hard, 0.0, 0.3))
@@ -1127,15 +1261,21 @@ class _World:
             _paint(alb, cv.stamp(lines=_crossbars(part, 2.4, width), width=0.06), C["paver_dark"], 0.5)
             _paint(plowed, path, 1.0)
 
-    def _beach(self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, st: _Stages,
-               rng: np.random.Generator) -> None:  # fmt: skip
+    def _beach(
+        self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, st: _Stages, rng: np.random.Generator
+    ) -> None:
         """The wave-pool basin reborn: a sand beach around a ringed splash pad."""
         cv = self.cv
         ax, ay, r, half = _BASIN
         sand = cv.stamp([np.vstack([[ax, ay], _arc(ax, ay, r, -half, half)])], feather=0.3)
         assert sand is not None
         ripple = np.sin(self.ym[sand.sl[0], None] * 5.0 + 4 * self.n_mid[sand.sl]) * (1 - st.live)
-        _paint(alb, sand, self._mat(sand, C["sand"], (0.03, 0.04, 0.05, 0.06)) * (1 + 0.03 * ripple), _ramp(st.soft, 0, 0.5))
+        _paint(
+            alb,
+            sand,
+            self._mat(sand, C["sand"], (0.03, 0.04, 0.05, 0.06)) * (1 + 0.03 * ripple),
+            _ramp(st.soft, 0, 0.5),
+        )
         sx, sy, sr = _SPLASH
         kp = _ramp(st.hard, 0.3, 0.8)
         pad = cv.stamp([_arc(sx, sy, sr + 1.5, 0, 360, 96)], feather=0.05)
@@ -1149,24 +1289,41 @@ class _World:
                 for a in np.arange(0, 360, 30):
                     for rad in (3.0, 6.0):
                         t = math.radians(a + rad * 7)
-                        self._dot(alb, hmap, sx + rad * math.sin(t), sy - rad * math.cos(t), 0.35, _rgb(242, 247, 255), 1.6)
+                        self._dot(
+                            alb,
+                            hmap,
+                            sx + rad * math.sin(t),
+                            sy - rad * math.cos(t),
+                            0.35,
+                            _rgb(242, 247, 255),
+                            1.6,
+                        )
         for _ in range(int(26 * st.live)):
             rad, ang = rng.uniform(8, r - 4), math.radians(rng.uniform(-half + 5, half - 5))
             ux, uy = ax + rad * math.sin(ang), ay - rad * math.cos(ang)
             if math.hypot(ux - sx, uy - sy) < sr + 3.5:
                 continue
             col = _UMBRELLAS[int(rng.integers(len(_UMBRELLAS)))]
-            self._box(alb, hmap, _rect(ux + 1.8, uy + 0.6, 0.9, 1.8, rng.uniform(0, 180)), _CLOTHES[int(rng.integers(8))], 0.05)
+            self._box(
+                alb,
+                hmap,
+                _rect(ux + 1.8, uy + 0.6, 0.9, 1.8, rng.uniform(0, 180)),
+                _CLOTHES[int(rng.integers(8))],
+                0.05,
+            )
             self._dot(alb, hmap, ux, uy, 1.3, col, 2.4)
             self._dot(alb, hmap, ux, uy, 0.15, col * 0.6, 2.5)
 
-    def _shore(self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, st: _Stages,
-               rng: np.random.Generator) -> None:  # fmt: skip
+    def _shore(
+        self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, st: _Stages, rng: np.random.Generator
+    ) -> None:
         cv, lay, p = self.cv, self.lay, st.p
         gone = _ramp(p, 0.3, 0.4)
         if gone < 1:  # the old dock: weathered planks, collapsed in the middle
             a, b = lay.old_dock
-            dock = cv.stamp(lines=[np.stack([a, a + (b - a) * 0.45]), np.stack([a + (b - a) * 0.62, b])], width=2.4)
+            dock = cv.stamp(
+                lines=[np.stack([a, a + (b - a) * 0.45]), np.stack([a + (b - a) * 0.62, b])], width=2.4
+            )
             if dock is not None:
                 _paint(alb, dock, self._mat(dock, C["timber_old"], (0.05, 0.05, 0.1, 0.12)), 1 - gone)
                 _lift(hmap, dock, 0.6 * (1 - gone))
@@ -1191,14 +1348,16 @@ class _World:
         if st.live > 0:  # boats in the slips, kayaks on the water
             for i, seg in enumerate(lay.slips):
                 if (i * 7 + 3) % 5 < 3:
-                    mid = seg.mean(0) + (0, -3.0)
+                    mid = seg.mean(0) - (0.0, 3.0)
                     self._box(alb, hmap, _rect(mid[0], mid[1], 6.4, 2.2), _rgb(240, 240, 236), 1.2)
                     self._box(alb, hmap, _rect(mid[0] + 0.6, mid[1], 2.0, 1.4), C["glass"], 1.6)
             for _ in range(int(14 * st.live)):
                 x = rng.uniform(150, 380)
                 y = lay.shore_y(x) - rng.uniform(8, 50)
                 a = math.radians(rng.uniform(0, 180))
-                hull = np.array([(1.8 * math.cos(t), 0.36 * math.sin(t)) for t in np.linspace(0, 2 * np.pi, 16)])
+                hull = np.array(
+                    [(1.8 * math.cos(t), 0.36 * math.sin(t)) for t in np.linspace(0, 2 * np.pi, 16)]
+                )
                 hull = hull @ np.array([[math.cos(a), math.sin(a)], [-math.sin(a), math.cos(a)]]) + (x, y)
                 self._box(alb, hmap, hull, _KAYAKS[int(rng.integers(4))], 0.12)
         if st.struct > 0.5:
@@ -1206,33 +1365,47 @@ class _World:
                 self._dot(alb, hmap, q[0], q[1], 0.18, C["dark"], 6.0)
 
     def _buildings(self, alb: np.ndarray, hmap: np.ndarray, st: _Stages) -> None:
-        for cx, cy, w, l, height, at in _OLD_BUILDINGS:
+        for cx, cy, w, depth, height, at in _OLD_BUILDINGS:
             if st.p < at:
-                self._roof(alb, hmap, cx, cy, w, l, height, height, C["roof_flat"], stained=True)
+                self._roof(alb, hmap, cx, cy, w, depth, height, height, C["roof_flat"], stained=True)
         renew = _ramp(st.p, 0.52, 0.62)
         for gx, gy in _GATEHOUSES:
             col = _lerp(C["rust"], C["roof_new"], renew)
             self._roof(alb, hmap, gx, gy, 9.0, 9.0, 3.6, 7.2, col, seams=True, stained=renew < 0.5, hip=True)
-        cx, cy, w, l = _PAVILION
+        cx, cy, w, depth = _PAVILION
         if st.p > 0.4:
             if _ramp(st.p, 0.5, 0.62) > 0.5:
                 roof = _lerp(C["concrete_new"], C["roof_new"], 0.3)
-                self._roof(alb, hmap, cx, cy, w, l, 3.4, 5.6, roof, seams=True, solar=True)
+                self._roof(alb, hmap, cx, cy, w, depth, 3.4, 5.6, roof, seams=True, solar=True)
             else:
-                _paint(alb, self.cv.stamp([_rect(cx, cy, w + 1, l + 1)]), C["concrete_new"] * 0.95)
+                _paint(alb, self.cv.stamp([_rect(cx, cy, w + 1, depth + 1)]), C["concrete_new"] * 0.95)
 
-    def _roof(self, alb: np.ndarray, hmap: np.ndarray, cx: float, cy: float, w: float, l: float, eave: float,
-              ridge: float, col: np.ndarray, *, seams: bool = False, stained: bool = False, hip: bool = False,
-              solar: bool = False) -> None:  # fmt: skip
+    def _roof(
+        self,
+        alb: np.ndarray,
+        hmap: np.ndarray,
+        cx: float,
+        cy: float,
+        w: float,
+        depth: float,
+        eave: float,
+        ridge: float,
+        col: np.ndarray,
+        *,
+        seams: bool = False,
+        stained: bool = False,
+        hip: bool = False,
+        solar: bool = False,
+    ) -> None:
         """Flat (with parapet + HVAC), gable (ridge along x) or hip roof; shading comes from the height map."""
-        st = self.cv.stamp([_rect(cx, cy, w, l)], feather=0.05)
+        st = self.cv.stamp([_rect(cx, cy, w, depth)], feather=0.05)
         if st is None:
             return
         sl = st.sl
         dx, dy = self.xm[None, sl[1]] - cx, self.ym[sl[0], None] - cy
-        du, dv = np.clip(w / 2 - np.abs(dx), 0, None), np.clip(l / 2 - np.abs(dy), 0, None)
+        du, dv = np.clip(w / 2 - np.abs(dx), 0, None), np.clip(depth / 2 - np.abs(dy), 0, None)
         flat = ridge <= eave
-        rise = np.minimum(du, dv) / (min(w, l) / 2) if hip else dv / (l / 2)
+        rise = np.minimum(du, dv) / (min(w, depth) / 2) if hip else dv / (depth / 2)
         h = eave + (ridge - eave) * np.clip(rise, 0, 1)
         c = col * (1 + 0.03 * self.n_fine[sl] + 0.03 * self.n_micro[sl])
         if seams:
@@ -1240,7 +1413,7 @@ class _World:
         if stained:
             c = _lerp(c, c * 0.62, _smooth(0.8 * self.n_mid[sl] + 0.5 * self.n_fine[sl]))
         if solar:
-            panel = (dy < -0.8) & (np.abs(dx) < w / 2 - 1.2) & (dy > -l / 2 + 0.8)
+            panel = (dy < -0.8) & (np.abs(dx) < w / 2 - 1.2) & (dy > -depth / 2 + 0.8)
             grid = (np.abs((dx % 1.05) - 0.52) > 0.47) | (np.abs((dy % 1.7) - 0.85) > 0.8)
             c = np.where(panel, np.where(grid, C["concrete_new"] * 0.8, C["solar"]), c)
         if flat:
@@ -1251,11 +1424,12 @@ class _World:
         _lift(hmap, st, h)
         if flat:
             for k in range(3):
-                hvac = _rect(cx - w / 4 + k * w / 4, cy + (k % 2 - 0.5) * l / 4, 2.2, 1.6)
+                hvac = _rect(cx - w / 4 + k * w / 4, cy + (k % 2 - 0.5) * depth / 4, 2.2, 1.6)
                 self._box(alb, hmap, hvac, _rgb(158, 158, 152), eave + 1.4)
 
-    def _construction(self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, st: _Stages,
-                      rng: np.random.Generator) -> None:  # fmt: skip
+    def _construction(
+        self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, st: _Stages, rng: np.random.Generator
+    ) -> None:
         """Haul tracks, debris piles, the staging yard and the machines of the moment."""
         cv, p = self.cv, st.p
         for _ in range(int(7 * st.busy)):
@@ -1266,19 +1440,30 @@ class _World:
             _paint(alb, ruts, C["earth_dark"], 0.55 * (1 - st.soft))
             _paint(plowed, ruts, 0.8)
         piles = _ramp(p, 0.04, 0.12) * (1 - _ramp(p, 0.3, 0.4))
-        for cx, cy, rad in [(210, 270, 7.0), (318, 270, 6.0), (184, 286, 5.0), (300, 248, 6.5), (236, 280, 4.0)]:
+        for cx, cy, rad in [
+            (210, 270, 7.0),
+            (318, 270, 6.0),
+            (184, 286, 5.0),
+            (300, 248, 6.5),
+            (236, 280, 4.0),
+        ]:
             pile = cv.stamp([_blob(rng, cx, cy, rad, rad * 0.75, 0.35)], feather=0.8) if piles > 0 else None
             if pile is not None:
                 c = _lerp(C["concrete_old"] * 0.8, C["earth_dark"], (self.n_fine[pile.sl] > 0) * 0.6)
                 _paint(alb, pile, c * (1 + 0.18 * self.n_micro[pile.sl]), piles)
                 _lift(hmap, pile, pile.a * (3.0 + 0.6 * self.n_fine[pile.sl]) * piles)
         y0 = _LOT[1]
-        for cx, cy, w, l, ang, col in [(372, y0 + 6, 12, 3.2, 0, _rgb(236, 236, 230)),
-                                        (386, y0 + 14, 12, 2.5, 90, _rgb(160, 60, 46)),
-                                        (380, y0 + 14, 12, 2.5, 90, _rgb(46, 90, 120))]:  # fmt: skip
-            self._box(alb, hmap, _rect(cx, cy, w, l, ang), col, 2.8)
-        for cx, cy, rad, col in [(352, y0 + 26, 4.5, _rgb(150, 146, 140)), (362, y0 + 27, 4.0, C["earth"]),
-                                 (344, y0 + 12, 3.5, _rgb(196, 178, 140))]:  # fmt: skip
+        for cx, cy, w, depth, ang, col in [
+            (372, y0 + 6, 12, 3.2, 0, _rgb(236, 236, 230)),
+            (386, y0 + 14, 12, 2.5, 90, _rgb(160, 60, 46)),
+            (380, y0 + 14, 12, 2.5, 90, _rgb(46, 90, 120)),
+        ]:
+            self._box(alb, hmap, _rect(cx, cy, w, depth, ang), col, 2.8)
+        for cx, cy, rad, col in [
+            (352, y0 + 26, 4.5, _rgb(150, 146, 140)),
+            (362, y0 + 27, 4.0, C["earth"]),
+            (344, y0 + 12, 3.5, _rgb(196, 178, 140)),
+        ]:
             pile = cv.stamp([_blob(rng, cx, cy, rad, rad * 0.8, 0.2)], feather=0.9)
             if pile is not None:
                 _paint(alb, pile, col * (1 + 0.12 * self.n_micro[pile.sl]))
@@ -1290,14 +1475,16 @@ class _World:
         else:
             fleet = ("mixer", "loader", "truck", "loader", "excavator")
         for i in range(round(5 + 3 * st.busy)):
-            self._machine(alb, hmap, fleet[i % 5], rng.uniform(150, 380), rng.uniform(222, 298), rng.uniform(0, 360))
+            self._machine(
+                alb, hmap, fleet[i % 5], rng.uniform(150, 380), rng.uniform(222, 298), rng.uniform(0, 360)
+            )
 
     def _machine(self, alb: np.ndarray, hmap: np.ndarray, kind: str, x: float, y: float, ang: float) -> None:
         f = np.array([math.sin(math.radians(ang)), -math.cos(math.radians(ang))])
         o = np.array([x, y])
 
-        def box(at: np.ndarray, w: float, l: float, col: np.ndarray, h: float, rot: float = ang) -> None:
-            self._box(alb, hmap, _rect(at[0], at[1], w, l, rot), col, h)
+        def box(at: np.ndarray, w: float, depth: float, col: np.ndarray, h: float, rot: float = ang) -> None:
+            self._box(alb, hmap, _rect(at[0], at[1], w, depth, rot), col, h)
 
         yellow, dark = C["yellow"], C["dark"]
         if kind == "excavator":
@@ -1325,17 +1512,28 @@ class _World:
         spots: list[np.ndarray] = []
         for line, width, *_ in lay.paths:
             pts, nrm = _resample(line, 3.0)
-            spots += [q + n * rng.uniform(-width / 2.5, width / 2.5) for q, n in zip(pts, nrm, strict=True)
-                      if rng.uniform() < 0.22 * live]  # fmt: skip
+            spots += [
+                q + n * rng.uniform(-width / 2.5, width / 2.5)
+                for q, n in zip(pts, nrm, strict=True)
+                if rng.uniform() < 0.22 * live
+            ]
         for line in (lay.boardwalk, lay.pier):
-            spots += [q + rng.uniform(-1, 1, 2) for q in _resample(line, 3.0)[0] if rng.uniform() < 0.3 * live]
+            spots += [
+                q + rng.uniform(-1, 1, 2) for q in _resample(line, 3.0)[0] if rng.uniform() < 0.3 * live
+            ]
         ax, ay, r, half = _BASIN
         for _ in range(int(60 * live)):
             rad, ang = rng.uniform(4, r - 2), math.radians(rng.uniform(-half, half))
             spots.append(np.array([ax + rad * math.sin(ang), ay - rad * math.cos(ang)]))
         for _ in range(int(18 * live)):  # picnics on the great lawn
             c = np.array([rng.uniform(312, 388), rng.uniform(228, 270)])
-            self._box(alb, hmap, _rect(c[0], c[1], 2.0, 1.6, rng.uniform(0, 90)), _BLANKETS[int(rng.integers(4))], 0.05)
+            self._box(
+                alb,
+                hmap,
+                _rect(c[0], c[1], 2.0, 1.6, rng.uniform(0, 90)),
+                _BLANKETS[int(rng.integers(4))],
+                0.05,
+            )
             spots += [c + rng.uniform(-1.4, 1.4, 2) for _ in range(int(rng.integers(1, 4)))]
         for q in spots:
             self._dot(alb, hmap, q[0], q[1], 0.28, _CLOTHES[int(rng.integers(len(_CLOTHES)))], 1.7)
@@ -1351,11 +1549,15 @@ class _World:
         cols = _canopy_colors(kinds, lay.trees[:, 4], lay.trees[:, 5], self.tree_turn[:n], s)
         items = []
         for i, (r, group) in enumerate(lay.trees[:, [2, 6]].tolist()):
-            if self.sprites[i] is not None and not (group == _VOLUNTEER and p > 0.06 + 0.1 * self.tree_turn[i]):
+            if self.sprites[i] is not None and not (
+                group == _VOLUNTEER and p > 0.06 + 0.1 * self.tree_turn[i]
+            ):
                 items.append((2.3 * r + 2.5, self.sprites[i], kinds[i] == _CONIFER, cols[i]))
         planted, grow = _ramp(p, 0.68, 0.8), 1.0 + 0.6 * _ramp(p, 0.75, 1.0)
         young = lay.young
-        ycols = _canopy_colors(young[:, 3].astype(int), 0 * young[:, 0], 0 * young[:, 0], self.tree_turn[n:], s, 0.5)
+        ycols = _canopy_colors(
+            young[:, 3].astype(int), 0 * young[:, 0], 0 * young[:, 0], self.tree_turn[n:], s, 0.5
+        )
         for j, (x, y, order) in enumerate(young[:, :3].tolist()):
             sprite = self._sprite(x, y, 1.25 * grow, self.tree_phase[n + j]) if order < planted else None
             if sprite is not None:
@@ -1366,8 +1568,17 @@ class _World:
         hmap += (0.3 * self.n_fine + 0.45 * self.n_micro) * canopy * (0.4 + 0.6 * s.leaf)
         return canopy
 
-    def _tree(self, alb: np.ndarray, hmap: np.ndarray, canopy: np.ndarray, sprite: tuple, height: float,
-              conifer: bool, col: np.ndarray, s: _Season) -> None:  # fmt: skip
+    def _tree(
+        self,
+        alb: np.ndarray,
+        hmap: np.ndarray,
+        canopy: np.ndarray,
+        sprite: tuple,
+        height: float,
+        conifer: bool,
+        col: np.ndarray,
+        s: _Season,
+    ) -> None:
         y0, x0, cover, rr = sprite
         sl = (slice(y0, y0 + cover.shape[0]), slice(x0, x0 + cover.shape[1]))
         leaf = 1.0 if conifer else s.leaf
@@ -1386,7 +1597,9 @@ class _World:
         np.maximum(hreg, lift, out=hreg)
         np.maximum(canopy[sl], k, out=canopy[sl])
 
-    def _snow(self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, canopy: np.ndarray, s: _Season) -> None:
+    def _snow(
+        self, alb: np.ndarray, hmap: np.ndarray, plowed: np.ndarray, canopy: np.ndarray, s: _Season
+    ) -> None:
         """Snow cover: drifts, stubble poking through, plowed paths with banks, dusted crowns."""
         if s.snow <= 0:
             return
@@ -1406,8 +1619,9 @@ class _World:
         hmap += self.relief
         az, el = math.radians(v.sun_az), math.radians(max(v.sun_el, 8.0))
         lx, ly, lz = math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el)
-        gx = cv2.Sobel(hmap, cv2.CV_32F, 1, 0, ksize=3, scale=self.ppm / 8)
-        gy = cv2.Sobel(hmap, cv2.CV_32F, 0, 1, ksize=3, scale=self.ppm / 8)
+        soft = cv2.GaussianBlur(hmap, (0, 0), 0.6)  # no stair-stepped slopes on small objects
+        gx = cv2.Sobel(soft, cv2.CV_32F, 1, 0, ksize=3, scale=self.ppm / 8)
+        gy = cv2.Sobel(soft, cv2.CV_32F, 0, 1, ksize=3, scale=self.ppm / 8)
         shade = np.clip((lz - gx * lx - gy * ly) / np.sqrt(1 + gx * gx + gy * gy) / lz, 0, 2.5)
         occ, ao = self._shadows(hmap, (lx, ly, lz))
         direct = shade * (1 - 0.86 * occ)
@@ -1491,8 +1705,9 @@ def _grain(rng: np.random.Generator, w: int, h: int, n: int, sigma: float) -> li
 class _Optics:
     """Image-space effects for one camera and look, precomputed once per take (all 8-bit at run time)."""
 
-    def __init__(self, cam: _Camera, look: _Look, v: _Visit, ppm: float, grain: list[np.ndarray],
-                 still: bool = False) -> None:  # fmt: skip
+    def __init__(
+        self, cam: _Camera, look: _Look, v: _Visit, ppm: float, grain: list[np.ndarray], still: bool = False
+    ) -> None:
         w, h = self.size = (cam.width, cam.height)
         self.tex_to_world = np.diag([1 / ppm, 1 / ppm, 1.0])
         step = 8
@@ -1504,7 +1719,11 @@ class _Optics:
         haze = (1 - np.exp(-cam.alt / dz * look.haze_per_km / 1000))[..., None]
         gain = np.array(look.wb[::-1]) * look.exposure  # BGR
         fres = 0.02 + 0.98 * (1 - dz) ** 5
-        sky = _lerp(np.array(look.haze_rgb[::-1]), np.array(look.sky_zenith[::-1]), (np.arcsin(dz)[..., None] / (np.pi / 2)) ** 0.6)
+        sky = _lerp(
+            np.array(look.haze_rgb[::-1]),
+            np.array(look.sky_zenith[::-1]),
+            (np.arcsin(dz)[..., None] / (np.pi / 2)) ** 0.6,
+        )
         az, el = math.radians(v.sun_az), math.radians(max(v.sun_el, 3))
         sun_dir = np.array([math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el)])
         cos_sun = d @ sun_dir  # reflected ray (dx, dy, -dz) . sun (east, south, up)
@@ -1513,7 +1732,9 @@ class _Optics:
 
         def up(a: np.ndarray, dtype: type = np.float32) -> np.ndarray:
             a = np.ascontiguousarray(a, np.float32)
-            big = cv2.resize(a, (a.shape[1] * step, a.shape[0] * step), interpolation=cv2.INTER_LINEAR)[:h, :w]
+            big = cv2.resize(a, (a.shape[1] * step, a.shape[0] * step), interpolation=cv2.INTER_LINEAR)[
+                :h, :w
+            ]
             return np.clip(big, 0, 255).astype(np.uint8) if dtype is np.uint8 else big
 
         lum = np.array([[0.114, 0.587, 0.299]])
@@ -1521,7 +1742,9 @@ class _Optics:
         self.color = (np.diag(gain) @ sat).astype(np.float32)
         self.a_mul = up(np.repeat(vig * (1 - haze), 3, axis=2) * 255, np.uint8)
         self.b_add = up(vig * haze * gain * np.array(look.haze_rgb[::-1]) * 235, np.uint8)
-        refl = (fres[..., None] * sky + glint[..., None] * np.array([0.92, 0.97, 1.0])) / np.maximum(refl_k, 1e-3)[..., None]
+        refl = (fres[..., None] * sky + glint[..., None] * np.array([0.92, 0.97, 1.0])) / np.maximum(
+            refl_k, 1e-3
+        )[..., None]
         self.refl = up(refl * 225, np.uint8)
         self.refl_k = up(refl_k * (1 / 255))  # times the 0..255 water alpha
         t = np.linspace(0, 1, 256)
@@ -1532,8 +1755,13 @@ class _Optics:
 
     def shoot(self, tex: np.ndarray, world_to_image: np.ndarray, frame: int = 0) -> np.ndarray:
         """Photograph the BGRA world texture through a world->image homography."""
-        img = cv2.warpPerspective(tex, world_to_image @ self.tex_to_world, self.size, flags=self.interp,
-                                  borderMode=cv2.BORDER_REFLECT)  # fmt: skip
+        img = cv2.warpPerspective(
+            tex,
+            world_to_image @ self.tex_to_world,
+            self.size,
+            flags=self.interp,
+            borderMode=cv2.BORDER_REFLECT,
+        )
         bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
         rows = np.flatnonzero(img[:, :, 3].max(axis=1))
         if len(rows):  # water reflects the sky (Fresnel) and the sun (glint)
@@ -1587,8 +1815,9 @@ def _dms(value: float) -> tuple[float, float, float]:
     return float(d), float(m), round((value - d - m / 60) * 3600, 4)
 
 
-def _save_photo(path: Path, img_bgr: np.ndarray, when: dt.datetime, offset_h: int, cam: _Camera, look: _Look,
-                s: _Season) -> None:  # fmt: skip
+def _save_photo(
+    path: Path, img_bgr: np.ndarray, when: dt.datetime, offset_h: int, cam: _Camera, look: _Look, s: _Season
+) -> None:
     """JPEG with EXIF date/time, GPS and DJI-style XMP gimbal tags."""
     lat, lon = _latlon(cam.x, cam.y)
     stamp = when.strftime("%Y:%m:%d %H:%M:%S")
@@ -1636,9 +1865,19 @@ def _hflat(h: np.ndarray) -> list[float]:
 
 def _camera_json(cam: _Camera) -> dict:
     lat, lon = _latlon(cam.x, cam.y)
-    vals = {"x_m": cam.x, "y_m": cam.y, "alt_m": cam.alt, "heading_deg": cam.heading, "pitch_deg": cam.pitch,
-            "roll_deg": cam.roll}  # fmt: skip
-    return {k: round(v, 4) for k, v in vals.items()} | {"hfov_deg": HFOV_DEG, "lat": round(lat, 7), "lon": round(lon, 7)}
+    vals = {
+        "x_m": cam.x,
+        "y_m": cam.y,
+        "alt_m": cam.alt,
+        "heading_deg": cam.heading,
+        "pitch_deg": cam.pitch,
+        "roll_deg": cam.roll,
+    }
+    return {k: round(v, 4) for k, v in vals.items()} | {
+        "hfov_deg": HFOV_DEG,
+        "lat": round(lat, 7),
+        "lon": round(lon, 7),
+    }
 
 
 def _source_hash() -> str:
@@ -1674,8 +1913,12 @@ def generate_demo_footage(footage_dir: Path, *, fast: bool = False, seed: int = 
         jobs = [(v.index, str(footage_dir), seed, fast) for v in visits]
         if workers > 1:
             threads = max(1, (os.cpu_count() or 1) // workers)
-            with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"),
-                                     initializer=_init_worker, initargs=(seed, fast, threads)) as pool:  # fmt: skip
+            with ProcessPoolExecutor(
+                workers,
+                mp_context=multiprocessing.get_context("spawn"),
+                initializer=_init_worker,
+                initargs=(seed, fast, threads),
+            ) as pool:
                 futures = [pool.submit(_visit_job, *job) for job in jobs]
                 results = [_logged(f.result()) for f in futures]
         else:
@@ -1683,8 +1926,13 @@ def generate_demo_footage(footage_dir: Path, *, fast: bool = False, seed: int = 
             results = [_logged(_visit_job(*job)) for job in jobs]
         truth = {
             "version": 1,
-            "generator": {"name": "vantage.demo.synth", "version": _VERSION, "source": _source_hash(), "seed": seed,
-                          "fast": fast},  # fmt: skip
+            "generator": {
+                "name": "vantage.demo.synth",
+                "version": _VERSION,
+                "source": _source_hash(),
+                "seed": seed,
+                "fast": fast,
+            },
             "world": {
                 "width_m": WORLD_M[0],
                 "height_m": WORLD_M[1],
@@ -1709,11 +1957,16 @@ def _init_worker(seed: int, fast: bool, threads: int | None = None) -> None:
     mode = _FAST if fast else _FULL
     grng = np.random.default_rng([seed, 9])
     _WORKER["world"] = _World(seed, mode.ppm)
-    _WORKER["grain"] = {"video": _grain(grng, *mode.video, 4, 2.6), "photo": _grain(grng, *mode.photo, 1, 2.0)}
+    _WORKER["grain"] = {
+        "video": _grain(grng, *mode.video, 4, 2.6),
+        "photo": _grain(grng, *mode.photo, 1, 2.0),
+    }
 
 
 def _visit_job(index: int, root: str, seed: int, fast: bool) -> dict:
-    return _render_visit(_WORKER["world"], _visits()[index], _FAST if fast else _FULL, Path(root), seed, _WORKER["grain"])
+    return _render_visit(
+        _WORKER["world"], _visits()[index], _FAST if fast else _FULL, Path(root), seed, _WORKER["grain"]
+    )
 
 
 def _logged(visit: dict) -> dict:
@@ -1722,8 +1975,9 @@ def _logged(visit: dict) -> dict:
     return visit
 
 
-def _render_visit(world: _World, v: _Visit, mode: _Mode, root: Path, seed: int,
-                  grain: dict[str, list[np.ndarray]]) -> dict:  # fmt: skip
+def _render_visit(
+    world: _World, v: _Visit, mode: _Mode, root: Path, seed: int, grain: dict[str, list[np.ndarray]]
+) -> dict:
     rng = np.random.default_rng([seed, 100 + v.index])
     tex = world.render(v, np.random.default_rng([seed, 200 + v.index]))
     look = _look(v, rng)
@@ -1738,19 +1992,31 @@ def _render_visit(world: _World, v: _Visit, mode: _Mode, root: Path, seed: int,
         if kind == "video":
             cam = replace(base[vantage], width=mode.video[0], height=mode.video[1])
             name = f"DJI_{number:04d}.MP4"
-            entry = _write_video(folder / name, tex, cam, look, v, mode, when, world.ppm, grain["video"], trng)
+            entry = _write_video(
+                folder / name, tex, cam, look, v, mode, when, world.ppm, grain["video"], trng
+            )
         else:
-            cam = replace(_jitter(base[vantage], trng, (1.2, 0.8, 0.3, 0.01, 0.8)), width=mode.photo[0], height=mode.photo[1])
+            cam = replace(
+                _jitter(base[vantage], trng, (1.2, 0.8, 0.3, 0.01, 0.8)),
+                width=mode.photo[0],
+                height=mode.photo[1],
+            )
             name = f"DJI_{when:%Y%m%d%H%M%S}_{number:04d}.JPG"
             img = _Optics(cam, look, v, world.ppm, grain["photo"], still=True).shoot(tex, cam.homography())
             _save_photo(folder / name, img, when, v.utc_offset_h, cam, look, v.season)
             entry = {"kind": "photo", "width": cam.width, "height": cam.height}
         frames = entry.pop("frame_homographies", None)
         files.append(
-            {"path": f"{v.date}/{name}", "vantage": vantage, **entry, "start": when.isoformat(timespec="milliseconds"),
-             "camera": _camera_json(cam), "homography": _hflat(cam.homography())}
+            {
+                "path": f"{v.date}/{name}",
+                "vantage": vantage,
+                **entry,
+                "start": when.isoformat(timespec="milliseconds"),
+                "camera": _camera_json(cam),
+                "homography": _hflat(cam.homography()),
+            }
             | ({"frame_homographies": frames} if frames else {})
-        )  # fmt: skip
+        )
     return {
         "date": v.date,
         "progress": round(v.progress, 4),
@@ -1763,15 +2029,27 @@ def _render_visit(world: _World, v: _Visit, mode: _Mode, root: Path, seed: int,
     }
 
 
-def _write_video(path: Path, tex: np.ndarray, cam: _Camera, look: _Look, v: _Visit, mode: _Mode, when: dt.datetime,
-                 ppm: float, grain: list[np.ndarray], rng: np.random.Generator) -> dict:  # fmt: skip
+def _write_video(
+    path: Path,
+    tex: np.ndarray,
+    cam: _Camera,
+    look: _Look,
+    v: _Visit,
+    mode: _Mode,
+    when: dt.datetime,
+    ppm: float,
+    grain: list[np.ndarray],
+    rng: np.random.Generator,
+) -> dict:
     optics = _Optics(cam, look, v, ppm, grain)
     phase = rng.uniform(0, 2 * np.pi, 6).tolist()
     n = round(mode.seconds * mode.fps)
     utc = when - dt.timedelta(hours=v.utc_offset_h)
     meta = ["-metadata", f"creation_time={utc:%Y-%m-%dT%H:%M:%S}.{utc.microsecond // 1000:03d}Z"]
     homs, srt = [], []
-    with FrameWriter(path, cam.width, cam.height, fps=mode.fps, crf=mode.crf, preset=mode.preset, extra=meta) as out:
+    with FrameWriter(
+        path, cam.width, cam.height, fps=mode.fps, crf=mode.crf, preset=mode.preset, extra=meta
+    ) as out:
         for i in range(n):
             c = _hover(cam, i / mode.fps, phase)
             hom = c.homography()
@@ -1818,7 +2096,9 @@ def truth_homography(truth: dict, rel_path: str, t: float = 0.0) -> np.ndarray:
     raise KeyError(rel_path)
 
 
-def relative_homography(truth: dict, src: str, dst: str, t_src: float = 0.0, t_dst: float = 0.0) -> np.ndarray:
+def relative_homography(
+    truth: dict, src: str, dst: str, t_src: float = 0.0, t_dst: float = 0.0
+) -> np.ndarray:
     """Exact homography mapping pixels of `src` onto pixels of `dst`."""
     h = truth_homography(truth, dst, t_dst) @ np.linalg.inv(truth_homography(truth, src, t_src))
     return h / h[2, 2]
