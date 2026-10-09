@@ -514,7 +514,8 @@ class StoryBuilder:
 
     def capture_img(self, v: _Vantage, i: int) -> dict[str, Any]:
         c = v.captures[i]
-        alt = f"{v.name}, {c.label}" + (f": {c.note}" if c.note else "")
+        note = self.plain(c.note)
+        alt = f"{self.plain(v.name)}, {self.plain(c.label)}" + (f": {note}" if note else "")
         return self.img(c.path, _dest("assets", "img", v.id, c.date), alt)
 
     def brand_file(self, rel: str | None) -> str | None:
@@ -644,8 +645,8 @@ class StoryBuilder:
             log.warn(f"{where}: before and after are the same capture ({v.captures[before].date})")
         return base | {
             "vantage": v.id, "mode": ch.mode, "before": before, "after": after,
-            "beforeLabel": self.plain(ch.before_label) or v.captures[before].label,
-            "afterLabel": self.plain(ch.after_label) or v.captures[after].label,
+            "beforeLabel": self.plain(ch.before_label or v.captures[before].label),
+            "afterLabel": self.plain(ch.after_label or v.captures[after].label),
             "steps": self.steps(v, ch.steps, 0, len(v.captures) - 1, where),
             "hotspots": self.hotspots(v, ch.hotspots, where),
         }  # fmt: skip
@@ -698,7 +699,7 @@ class StoryBuilder:
             if not path.is_file():
                 log.warn(f"{where}: gallery image {gi.file} is missing; skipped")
                 continue
-            alt = gi.alt or self.plain(gi.caption) or Path(gi.file).stem.replace("-", " ")
+            alt = self.plain(gi.alt or gi.caption) or Path(gi.file).stem.replace("-", " ")
             name = Path(gi.file).with_suffix("").as_posix()  # the whole path: two folders may share a name
             out["images"].append(_compact({
                 "img": self.img(path, _dest("assets", "img", "gallery", base["id"], name), alt),

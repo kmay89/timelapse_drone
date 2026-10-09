@@ -402,6 +402,32 @@ def test_unknown_fact_fails_the_build(tmp_path):
         build_site(load_project(make_project(tmp_path / "p", story=story)), tmp_path / "site")
 
 
+def test_fact_tokens_never_print_raw(tmp_path):
+    """Tokens in vantage names, capture labels and notes and gallery alt text resolve everywhere they
+    print: image alt text (and so the JS-off essay), the compare chapter's default labels, StoryJSON."""
+    story = json.loads(json.dumps(STORY))
+    story["vantages"][0]["name"] = "Over the {fact:lot}"
+    story["captures"][0] |= {"label": "Before {fact:season}", "note": "Crews lay {fact:boardwalk}."}
+    story["chapters"][6]["images"][0]["alt"] = "A postcard of the {fact:lot}"
+    facts = json.loads(json.dumps(FACTS))
+    facts["facts"] |= {
+        "lot": {"text": "old parking lot", "status": "verified", "sources": ["Survey"]},
+        "season": {"text": "spring 2025", "status": "verified", "sources": ["Log"]},
+        "boardwalk": {"text": "400 ft of boardwalk", "status": "needs-client"},
+    }
+    site = tmp_path / "site"
+    html = build_site(load_project(make_project(tmp_path / "p", story=story, facts=facts)), site).read_text()
+    built = read_story(html)
+    assert "{fact:" not in html and "{fact:" not in json.dumps(built)
+    alt = "Over the old parking lot, Before spring 2025: Crews lay 400 ft of boardwalk."
+    assert built["vantages"][0]["captures"][0]["img"]["alt"] == alt and f'alt="{alt}"' in html
+    chapters = {c["id"]: c for c in built["chapters"]}
+    assert chapters["cmp"]["beforeLabel"] == "Before spring 2025"
+    assert chapters["archive"]["images"][0]["img"]["alt"] == "A postcard of the old parking lot"
+    assert {"lot", "season", "boardwalk"} <= {n["factId"] for n in built["notes"]}
+    assert built["meta"]["unverifiedFacts"] == 2  # cost and boardwalk
+
+
 def test_site_coordinates_are_never_published(tmp_path):
     """project.yaml may record the site's lat/lon, but no edition publishes where the site is."""
     location = {"name": "Lot Nine", "region": "Somewhere", "lat": 12.3456, "lon": -45.6789}
