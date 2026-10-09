@@ -81,11 +81,15 @@ path instead of a slug. See `docs/PROJECTS.md`.
 <project>/
   project.yaml        ProjectConfig
   story.yaml          Story
+  facts.yaml          Facts: every printed number, date or claim (text, sources, status)
   brand/brand.yaml    BrandKit (+ logo SVGs, optional fonts/*.woff2)
   footage/            raw flights, one sub-folder per visit date is ideal: footage/2026-09-12/...
   masters/            aligned + graded masters (commit these) + index.json
   work/               intermediates (gitignored)
 ```
+
+`vantage new` writes `project.yaml`, `story.yaml`, `facts.yaml`, `brand/` (brand.yaml and
+placeholder logos), a README and an empty `footage/` from `src/vantage/templates/project/`.
 
 ## CLI
 
@@ -124,7 +128,7 @@ Exit code non-zero on any failure; every command prints a one-line summary.
       "fps": 29.97, "telemetry": "2026-09-12/DJI_0042.SRT", "size_bytes": 123 } ],
   "candidates": [
     { "source": "a1b2c3d4", "t": 12.5, "file": "candidates/a1b2c3d4/0012.500.jpg",
-      "sharpness": 812.4, "lat": 41.33, "lon": -81.37, "rel_alt": 60.1 } ] }
+      "sharpness": 812.4, "lat": 12.34, "lon": -45.67, "rel_alt": 60.1 } ] }
 ```
 Source ids are the first 8 hex chars of sha1(relative path + size). Candidate
 JPEGs are ≤1600 px wide. Dates are local calendar dates of the flight.
@@ -218,11 +222,23 @@ dist/<slug>/site/
   index.html                     pre-rendered HTML + inlined CSS/JS/StoryJSON (+ theme)
   assets/img/<vantage>/<date>-<w>.<avif|webp|jpg>
   assets/video/<chapter>.<mp4>   (h264 + hevc)
-  assets/brand/…                 logos as supplied
+  assets/brand/…                 logos as supplied (SVGs sanitized, see below)
   assets/fonts/…                 woff2 actually used
   share.jpg (1200×630)  icon-192.png  icon-512.png  apple-touch-icon.png
   manifest.webmanifest  sw.js
 ```
+
+Brand and partner logos are copied from inside `brand/` (SVG, PNG, JPEG, WebP, AVIF or GIF). An SVG
+is published as a sanitized copy (`site/build.py` `sanitize_svg`): pages show it through `<img>`,
+where SVG never runs script, but the copy can also be opened on its own, on the story's origin. The
+build refuses, and `vantage validate` reports as an error, an SVG with entity declarations, a DOCTYPE
+internal subset, external entities, XML that is not well-formed, nesting deeper than 200 elements or
+a root other than an SVG `<svg>` (a plain `<!DOCTYPE svg PUBLIC …>` is fine). It strips `<script>`,
+`<foreignObject>`, `<handler>`, `<iframe>`, `<embed>`, `<object>` and any XHTML element; `<set>` and
+`<animate>` aimed at a link attribute or an event handler; `on*` attributes; `javascript:`,
+`vbscript:` and `livescript:` values; `data:` URLs other than `data:image/…` in `href`, `src`,
+`action` and `formaction`; comments and processing instructions (`xml-stylesheet`). The build logs
+what it removed and `vantage validate` lists it as a warning.
 
 The page must work from `file://` (no fetch of JSON, no ES-module imports, no
 service worker there) and from `https://` (service worker registers and
@@ -234,6 +250,21 @@ precaches every asset so "Add to Home Screen" works offline).
   `<picture>` elements and text; the JS upgrades chapters into pinned,
   scroll-driven experiences. With JS off (iOS Quick Look), it's an elegant
   photo essay.
+* Headings: an opening hero carries the page's `<h1>`, the brand bar, the date
+  line, the scroll cue and the standfirst (dek, byline). A later hero is a part
+  opener: an `<h2>` over its picture, without any of those. A story that does
+  not open with a hero gets a visually hidden `<h1>` with `meta.title` and, when
+  it has a dek, a byline or simulated imagery, an intro
+  `<section class="v-chapter v-intro">` (no `id`, no `data-type`) before the
+  first chapter, on that chapter's surface, holding the standfirst
+  (`templates/intro.html`, `standfirst.html`).
+* A hotspot pin opens a sheet with a 16:9 detail crop of the picture beneath
+  the pin above the hotspot's text (a third of the picture wide, centred on
+  the pin and kept inside the frame, the pin ringed in `--v-accent`,
+  `aria-hidden`). The crop comes from the capture on screen, on a compare from
+  the side of the curtain the pin is on (in blink, the flight showing); there
+  is none while that picture is still decoding (`runtime/js/25-stage.js`
+  `crop`).
 * No dependencies, no build step, ES2020, one IIFE. Target iOS Safari 16.4+.
 * Scroll-scrubbed time-lapse = `<canvas>` cross-fading between decoded
   captures (not `<video>` seeking): smooth on iPhone, tiny memory, any
@@ -306,12 +337,21 @@ with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
 * `brand.disclaimer?: string`.
 * Facts: markdown may contain `{fact:id}` tokens resolved from the project's optional
   `facts.yaml` (`config.Facts`). The build renders the fact text followed by a numbered
-  source marker linking to the credits; StoryJSON gains
-  `notes: { n: number; factId: string; text: string; sources: string[]; status: string }[]`
+  source marker linking to the credits (or, with no credits chapter, to a Notes section at the
+  end); StoryJSON gains
+  `notes: { n: number; factId: string; text: string; sources: string[]; status: string; releasable: boolean }[]`
   and `meta.unverifiedFacts: number`. Draft builds style non-releasable facts visibly
-  (`.v-fact[data-releasable="false"]`); `vantage build --release` fails if any fact used in the
-  story is not releasable (`Fact.releasable`), if a token references an unknown fact, or if the
-  project is `draft: true`.
+  (`.v-fact[data-releasable="false"]`, titled "Unverified: <status>"), and the notes list labels
+  them "Unverified: needs client", "Unverified: needs attribution" (`reported` without an
+  `attribution`) or "Unverified: do not print" (`templates/refs.html`). `vantage build --release`
+  fails if any fact used in the story is not releasable (`Fact.releasable`), if a token references
+  an unknown fact, or if the project is `draft: true`.
+* Brand text: `brand.yaml`'s `credit_line`, `disclaimer` and `copyright` (`facts.BRAND_TEXT`)
+  resolve `{fact:…}` tokens to the fact's text without a marker (as titles do; the film's end card
+  prints the same text). Each such fact is still numbered in the notes, after those the story uses.
+  `check_release` scans brand.yaml along with project.yaml and story.yaml, so these fields are part
+  of the `--release` gate (`build`, `package`, `all`). `vantage validate` errors on a token in any
+  other brand field (`voice` is never printed and is not checked).
 
 ### Single-file assets
 
@@ -331,10 +371,14 @@ and `<slug>-lite.html` (email). `<html data-edition>` is `site` (hosted), `offli
   `<script type="application/octet-stream" data-asset="<path>" data-type="<mime>">`, placed
   before the runtime script. The runtime resolves a path by looking up `[data-asset="<path>"]`:
   a `<script>` becomes `URL.createObjectURL(new Blob([bytes], {type: data-type}))` (create it
-  lazily, revoke it when unused); an element with `src` lends its data: URI.
+  lazily, revoke it when its last user releases it); an element with `src` lends its data: URI.
+  The base64 is decoded by `fetch()` of a `data:<type>;base64,…` URL, off the main thread; if that
+  fails, `atob()` in 1 MiB chunks that yield between chunks (`runtime/js/10-assets.js`).
 * Videos are never `data:` sources. `render.py` emits no `<video>` in these editions (the poster
   is a plain picture); the runtime builds the player from `chapter.video.sources` (H.264 only
-  here) once the blob URL exists. Videos are kept only while the file fits
+  here) and decodes the video only when it is needed: a hero loop once the hero is on screen (and
+  motion is allowed and not paused), a video chapter once it is within 1.5 viewports. Videos are
+  kept only while the file fits
   `output.single_file_max_mb`; otherwise hero `video` is removed and video chapters keep
   `sources: []`. Lite never carries video.
 * Fonts are inlined as `data:font/woff2` in the theme CSS; `meta.shareImage` is dropped unless

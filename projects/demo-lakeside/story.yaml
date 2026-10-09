@@ -94,7 +94,7 @@ chapters:
       - capture: "2026-05-09"
         text: >-
           **Planting.** Sod goes down in strips from west to east. Sand fills the old fan of the wave pool,
-          and the first of {fact:new-trees} go into the ground along the paths.
+          and the first of {fact:new-trees} trees go into the ground along the paths.
       - capture: "2026-09-20"
         text: >-
           **The beach.** The deep end is now the shallow end of a beach.
@@ -121,13 +121,13 @@ chapters:
         x: 0.682
         y: 0.274
         label: Boardwalk and slips
-        body: "{fact:boardwalk} along the shore, and eight slips where the old dock collapsed."
+        body: "{fact:boardwalk} meters of boardwalk along the shore, and {fact:boat-slips} boat slips where the old dock collapsed."
         from: "2026-03-21"
       - id: meadow
         x: 0.195
         y: 0.952
         label: Lot to meadow
-        body: "{fact:stalls-to-meadow}, returned to coneflower and little bluestem."
+        body: "{fact:stalls-to-meadow} parking spaces, returned to coneflower and little bluestem."
         from: "2026-05-09"
   - type: compare
     id: before-after
@@ -159,12 +159,13 @@ chapters:
     title: What changed
     surface: paper
     items:
-      - { value: "12", label: "drone flights, every six to seven weeks", source: Flight logs }
-      - { value: "132", label: parking spaces returned to meadow, source: Site plan }
-      - { value: "13,100", unit: sq ft, label: "of wave pool, now beach and splash pad", source: Site plan }
-      - { value: "770", unit: m, label: of new paths and promenade, source: Site plan }
-      - { value: "78", label: young trees planted along the paths, source: Planting plan }
-      - { value: "8", label: boat slips off a new 138-meter boardwalk, source: Site plan }
+      # Values print from facts.yaml, whose sources are numbered in the notes.
+      - { value: "{fact:flights}", label: "drone flights, every six to seven weeks", source: Flight logs }
+      - { value: "{fact:stalls-to-meadow}", label: parking spaces returned to meadow, source: Site plan }
+      - { value: "{fact:wave-pool-area}", unit: sq ft, label: "of wave pool, now beach and splash pad", source: Site plan }
+      - { value: "{fact:new-paths}", unit: m, label: of new paths and promenade, source: Site plan }
+      - { value: "{fact:new-trees}", label: young trees planted along the paths, source: Planting plan }
+      - { value: "{fact:boat-slips}", label: "boat slips off a new {fact:boardwalk}-meter boardwalk", source: Site plan }
 
   - type: timeline
     id: timeline

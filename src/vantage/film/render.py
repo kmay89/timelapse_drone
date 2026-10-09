@@ -38,6 +38,7 @@ from vantage.config import BrandKit, FontSpec, Project, ScrubChapter
 from vantage.media.ffmpeg import FrameWriter
 from vantage.models import MastersIndex
 from vantage.paths import RUNTIME_DIR
+from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
 
 PUSH = 0.06  # Ken-Burns zoom across a section (1.00 → 1.06)
@@ -89,10 +90,15 @@ def _mix(a: np.ndarray, b: np.ndarray, w: float) -> np.ndarray:
     return cv2.convertScaleAbs(cv2.sqrt(m), alpha=255.0)
 
 
+def _plain(project: Project, text: str | None) -> str | None:
+    """Story, project and brand text as the site prints it: `{fact:…}` tokens become the fact's text."""
+    return FactNotes(project.facts.facts).plain(text)
+
+
 def capture_labels(project: Project, dates: Sequence[str]) -> dict[str, str]:
     """Visit labels exactly as the site shows them: story.yaml's label, else 'June 2025'
     ('June 14, 2025' when the vantage has two visits that month)."""
-    labels = {n.date.isoformat(): n.label for n in project.story.captures if n.label}
+    labels = {n.date.isoformat(): _plain(project, n.label) for n in project.story.captures if n.label}
     months = Counter(d[:7] for d in dates)
     return {d: labels.get(d) or date_label(d, day=months[d[:7]] > 1) for d in dates}
 
@@ -290,7 +296,7 @@ def _sections(project: Project, index: MastersIndex) -> list[_Section]:
     scrub = [ch.vantage for ch in project.story.chapters if isinstance(ch, ScrubChapter)]
     main = next((vid for vid in scrub if vid in index.vantages), order[0] if order else None)
     excluded = {n.date.isoformat() for n in project.story.captures if n.exclude}
-    notes = {n.date.isoformat(): n.note for n in project.story.captures}
+    notes = {n.date.isoformat(): _plain(project, n.note) for n in project.story.captures}
     sections: list[_Section] = []
     for vid in sorted(order, key=lambda v: v != main):
         mv = index.vantages[vid]
@@ -302,7 +308,8 @@ def _sections(project: Project, index: MastersIndex) -> list[_Section]:
         vantage = story.get(vid)
         focus = vantage.portrait_focus if vantage and vantage.portrait_focus else (0.5, 0.5)
         if shots and (not sections or len(shots) > 1):
-            sections.append(_Section(vantage.name if vantage else mv.name, shots, (focus[0], focus[1])))
+            name = _plain(project, vantage.name) if vantage else mv.name
+            sections.append(_Section(name, shots, (focus[0], focus[1])))
     if not sections:
         raise FileNotFoundError(f"no masters to film in {project.masters_dir}; run `vantage process` first")
     return sections
@@ -454,26 +461,29 @@ class _Film:
     def _layout(self) -> None:
         """Typeset every card and capture, and lay the timeline out."""
         cfg, brand, settings = self.project.config, self.project.brand, self.project.config.output.film
+        text = lambda s: _plain(self.project, s)  # noqa: E731
         first, last = self.sections[0], self.sections[-1]
         place = cfg.location.name if cfg.location else None
         years = "–".join(dict.fromkeys((first.shots[0].date[:4], first.shots[-1].date[:4])))
         title: list[_Block] = [
-            (cfg.kicker or " · ".join(filter(None, (place, years))), KICKER, 0),
+            (text(cfg.kicker) or " · ".join(filter(None, (place, years))), KICKER, 0),
             (None, KICKER, 26),
-            (cfg.title, TITLE, 34),
+            (text(cfg.title), TITLE, 34),
         ]
         if cfg.subtitle:
-            title.append((cfg.subtitle, SUBTITLE, 20))
+            title.append((text(cfg.subtitle), SUBTITLE, 20))
         title.append((_span(first.shots), SPAN, 34))
 
         end: list[_Block] = [(brand.name, BRAND, 0)]
         if brand.credit_line:
-            end.append((brand.credit_line, CREDIT, 18))
+            end.append((text(brand.credit_line), CREDIT, 18))
         for i, partner in enumerate(brand.partners):
             end += [(partner.role, ROLE, 22 if i else 40), (partner.name, PARTNER, 8)]
         if cfg.output.base_url:
             end.append((cfg.output.base_url.split("://")[-1].rstrip("/"), LINK, 40))
-        fine = filter(None, (brand.copyright, brand.disclaimer, SIMULATED_NOTE if cfg.simulated else None))
+        fine = filter(
+            None, (text(brand.copyright), text(brand.disclaimer), SIMULATED_NOTE if cfg.simulated else None)
+        )
         end += [(text, FINE, 8 if i else 40) for i, text in enumerate(fine)]
 
         t = settings.title_card_s

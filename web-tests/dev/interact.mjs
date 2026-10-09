@@ -340,7 +340,12 @@ const browser = await chromium.launch();
   await page.locator("#explore .v-chip").nth(1).tap();
   await page.waitForTimeout(800);
   check("explore: chip switches vantage", (await page.locator("#explore canvas").getAttribute("aria-label")).startsWith("From over the water"));
-  check("explore: ticks follow the vantage", (await page.locator("#explore .v-x__ticks .v-tick:not(.v-tick--year)").count()) === 10);
+  const visits = await page.evaluate(() => {
+    const id = /** @type {HTMLElement} */ (document.querySelectorAll("#explore .v-chip")[1]).dataset.id;
+    return JSON.parse(document.getElementById("vantage-story").textContent).vantages.find((v) => v.id === id).captures.length;
+  });
+  const ticks = await page.locator("#explore .v-x__ticks .v-tick:not(.v-tick--year)").count();
+  check("explore: ticks follow the vantage", ticks === visits, `${ticks} ticks, ${visits} visits`);
   await page.locator("#from-the-water .v-dot").nth(4).scrollIntoViewIfNeeded();
   await page.locator("#from-the-water .v-dot").nth(4).tap();
   await page.waitForTimeout(900);

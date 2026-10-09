@@ -53,7 +53,7 @@ shell profile (or `.claude/settings.local.json` → `env`). Only the fictional d
 uv run vantage new <slug> --title "<Title>" --dir "$VANTAGE_PROJECTS"
 ```
 
-Slugs are lowercase words joined by hyphens. This writes `project.yaml`, `story.yaml`,
+Slugs are lowercase words joined by hyphens. This writes `project.yaml`, `story.yaml`, `facts.yaml`,
 `brand/brand.yaml`, placeholder logos, a project README and `footage/`.
 
 ## 3. Fill the YAML (models: `src/vantage/config.py`)
@@ -65,7 +65,9 @@ Slugs are lowercase words joined by hyphens. This writes `project.yaml`, `story.
   licence), voice, partners (copy their logo files into `brand/partners/`), credit_line, copyright,
   disclaimer, `theme: dark|light`. Copy only files the client supplied: **never** download or trace a
   logo from a website.
-- `facts.yaml` (create it): one entry per figure from the interview.
+- `facts.yaml` (scaffolded; its header comment explains each field and status): fill in the
+  `site-area` entry the template story cites if the area is known (keep the entry either way), then
+  add one entry per figure from the interview, following the commented examples.
 
   ```yaml
   facts:
