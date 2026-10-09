@@ -1,0 +1,15 @@
+{# Included before the first chapter's <section>. A story that opens with a hero gets its <h1> and
+   standfirst there; any other opening gets a visually hidden <h1> with the story's title here, plus
+   the standfirst (dek, byline, simulated-imagery note) on the first chapter's surface. #}
+{% if index == 0 and ch.type != "hero" %}
+{% if meta.dekHtml or meta.byline or meta.simulated %}
+<section class="v-chapter v-intro v-surface-{{ ch.surface }}" aria-labelledby="v-story-title">
+<div class="v-standfirst v-flow">
+<h1 class="v-sr" id="v-story-title">{{ meta.title }}</h1>
+{% include "standfirst.html" %}
+</div>
+</section>
+{% else %}
+<h1 class="v-sr" id="v-story-title">{{ meta.title }}</h1>
+{% endif %}
+{% endif %}

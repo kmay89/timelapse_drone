@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{MISSION}} · pilot brief</title>
+<style>
+  @page { size: auto; margin: 14mm; }
+  :root { --ink: #16181a; --muted: #5d6368; --rule: #d7dadc; --accent: {{ACCENT}}; }
+  body { font: 10.5pt/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); margin: 0 auto; max-width: 190mm; }
+  h1 { font-size: 20pt; margin: 0 0 2pt; letter-spacing: -.01em; }
+  h2 { font-size: 11pt; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); margin: 14pt 0 4pt; border-bottom: 1px solid var(--rule); padding-bottom: 2pt; }
+  .meta { color: var(--muted); margin: 0 0 8pt; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; vertical-align: top; padding: 4pt 5pt; border-bottom: 1px solid var(--rule); }
+  th { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  td.n { white-space: nowrap; }
+  ul { margin: 0; padding-left: 14pt; }
+  li { margin: 1pt 0; }
+  .box { border: 1.5px solid var(--accent); padding: 6pt 8pt; margin: 8pt 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14pt; }
+  footer { color: var(--muted); font-size: 8.5pt; margin-top: 12pt; }
+  @media print { h2 { break-after: avoid; } table, .box { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<h1>{{SITE_NAME}}: repeat flight brief</h1>
+<p class="meta">Mission <b>{{MISSION}}</b> · {{LOCATION}} · times are {{TIMEZONE}} · version {{DATE}}</p>
+
+<div class="box"><b>Goal:</b> the same pictures from the same spots every visit, so the story shows the
+site changing, not the camera moving. Take off from the marked spot: {{TAKEOFF}}.</div>
+
+<h2>The standard mission</h2>
+<table>
+<thead><tr><th>#</th><th>Stop</th><th>What it shows</th><th>Position</th><th>Alt. above take-off</th><th>Heading</th><th>Tilt</th><th>Capture</th></tr></thead>
+<tbody>
+{{STOP_ROWS}}
+</tbody>
+</table>
+
+<div class="cols">
+<div>
+<h2>Camera (identical every visit)</h2>
+<ul>
+{{CAMERA_ITEMS}}
+</ul>
+<h2>When to fly</h2>
+<ul>
+{{TIMING_ITEMS}}
+</ul>
+</div>
+<div>
+<h2>Phone photos</h2>
+<ul>
+{{GROUND_ITEMS}}
+</ul>
+<h2>Delivering files</h2>
+<ul>
+{{DELIVERY_ITEMS}}
+</ul>
+</div>
+</div>
+
+<h2>Safety, permissions, privacy</h2>
+<ul>
+{{SAFETY_ITEMS}}
+</ul>
+
+<footer>Questions: {{CONTACT}}. This brief follows the Vantage capture guide; keep it with the drone.</footer>
+</body>
+</html>

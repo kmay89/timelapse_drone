@@ -2,8 +2,8 @@
 
 `build_site` resolves capture references against masters/index.json, renders markdown (raw
 HTML disabled) with `{fact:id}` notes, encodes responsive images and video clips, writes the
-theme's fonts, brand logos, share card, icons, web manifest and service worker, and renders
-index.html (docs/ARCHITECTURE.md: "StoryJSON", "Site output layout").
+theme's fonts, brand logos (SVGs sanitized on the way: `sanitize_svg`), share card, icons, web manifest
+and service worker, and renders index.html (docs/ARCHITECTURE.md: "StoryJSON", "Site output layout").
 """
 
 from __future__ import annotations
@@ -15,12 +15,15 @@ import json
 import os
 import re
 import shutil
+import xml.etree.ElementTree as ET
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from xml.parsers import expat
 
 from markdown_it import MarkdownIt
 
@@ -46,7 +49,7 @@ from vantage.config import (
 from vantage.media import ffmpeg
 from vantage.models import MastersIndex
 from vantage.paths import RUNTIME_DIR
-from vantage.site.facts import FactNotes, check_release
+from vantage.site.facts import BRAND_TEXT, FactNotes, check_release
 from vantage.site.images import CardText, ImageSpec, app_icon, encode_images, fast_mode, initials, share_card
 from vantage.site.render import MONTHS, capture_label, render_page
 from vantage.site.theme import font_file, theme_css
@@ -55,6 +58,22 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _NIGHT_TYPES = {"hero", "scrub", "compare", "video", "explore"}
 _CLIP_VERSION = 1
 _SW_CONFIG = re.compile(r"/\*@config\*/.*?/\*@end\*/", re.S)
+_LINK_SCHEMES = {"", "http", "https", "mailto", "tel"}
+_LOGO_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"}
+# SVG elements that run code or embed HTML, and the URL attributes whose scheme is checked.
+_SVG_DROP = {"script", "foreignobject", "handler", "iframe", "embed", "object"}
+_SVG_ANIMATE = {"set", "animate"}
+_SVG_URL_ATTRS = {"href", "src", "action", "formaction"}
+_SCRIPT_SCHEMES = {"javascript", "vbscript", "livescript"}
+_SVG_NS = "http://www.w3.org/2000/svg"
+_XHTML_NS = "http://www.w3.org/1999/xhtml"
+_XML_PREFIXES = {
+    _SVG_NS: "",
+    "http://www.w3.org/1999/xlink": "xlink",
+    "http://www.w3.org/XML/1998/namespace": "xml",
+}
+_SVG_MAX_DEPTH = 200  # a logo is a few levels deep; this keeps the recursive serializer safe
+_CONTROL = re.compile(r"[\x00-\x20\x7f]+")
 
 
 class ReleaseError(ValueError):
@@ -119,6 +138,158 @@ def markdown() -> MarkdownIt:
 
     md.add_render_rule("link_open", link_open)
     return md
+
+
+def safe_url(url: str | None, where: str) -> str | None:
+    """A YAML-supplied link target, or None (with a warning) for javascript:, data: and other schemes."""
+    if not url:
+        return None
+    if urlsplit(url.strip()).scheme.lower() in _LINK_SCHEMES:
+        return url.strip()
+    log.warn(f"{where}: link {url!r} dropped (only http, https, mailto and tel links are published)")
+    return None
+
+
+def inside(path: Path, root: Path, what: str) -> Path:
+    """`path`, after checking it lies within `root`: YAML must not publish files from elsewhere."""
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"{what} {path} is outside {root}; keep the files it names in that folder")
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# Brand SVGs
+# --------------------------------------------------------------------------- #
+
+
+def _local(name: str) -> str:
+    return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
+
+
+def _scheme(value: str) -> str:
+    """The URL scheme a browser would see: whitespace and control characters inside it are ignored."""
+    head = _CONTROL.sub("", value).lower()
+    return head.split(":", 1)[0] if ":" in head.split("/", 1)[0] else ""
+
+
+def _unsafe_url(value: str) -> bool:
+    scheme = _scheme(value)
+    if scheme == "data":
+        return not _CONTROL.sub("", value).lower().startswith("data:image/")
+    return scheme in _SCRIPT_SCHEMES
+
+
+def _refuse_declarations(data: bytes, what: str) -> None:
+    """Refuse entity declarations and DOCTYPE internal subsets before ElementTree sees the file.
+
+    A plain `<!DOCTYPE svg PUBLIC …>` (common in design-tool exports) is allowed: no DTD is fetched and
+    re-serializing drops it. Entities are where billion-laughs and external-entity tricks live.
+    """
+    reason: list[str] = []
+    depth = [0]
+
+    def refuse(why: str) -> None:
+        reason.append(why)
+        raise ValueError(why)
+
+    def start(*_: object) -> None:
+        depth[0] += 1
+        if depth[0] > _SVG_MAX_DEPTH:
+            refuse(f"elements nested more than {_SVG_MAX_DEPTH} deep")
+
+    def end(*_: object) -> None:
+        depth[0] -= 1
+
+    parser = expat.ParserCreate()
+    parser.StartElementHandler, parser.EndElementHandler = start, end
+    parser.StartDoctypeDeclHandler = lambda _n, _s, _p, internal: (
+        internal and refuse("a DOCTYPE internal subset")
+    )
+    parser.EntityDeclHandler = lambda *_: refuse("an entity declaration")
+    parser.UnparsedEntityDeclHandler = lambda *_: refuse("an entity declaration")
+    parser.ExternalEntityRefHandler = lambda *_: refuse("an external entity")
+    try:
+        parser.Parse(data, True)
+    except (ValueError, expat.ExpatError) as exc:
+        detail = f"it has {reason[0]}" if reason else f"it is not well-formed XML ({exc})"
+        raise ValueError(
+            f"{what}: refusing to publish this SVG: {detail}; re-export it as plain SVG"
+        ) from None
+
+
+def sanitize_svg(data: bytes, what: str = "SVG") -> tuple[bytes, list[str]]:
+    """A copy of an SVG without anything that can run code when the file is opened on its own.
+
+    Logos are shown through <img> (where SVG never runs script), but the copy in assets/brand/ can also
+    be opened directly, on the story's own origin. So this drops <script>, <foreignObject> and any
+    XHTML element, event-handler attributes (on*), javascript: and non-image data: URLs, <set>/<animate>
+    that rewrite links or handlers, comments and processing instructions (xml-stylesheet). Raises
+    ValueError for entity declarations, DOCTYPE internal subsets and roots other than an SVG <svg>.
+    Returns the bytes and what was removed.
+    """
+    _refuse_declarations(data, what)
+    root = ET.fromstring(data)  # comments and processing instructions are not kept
+    if root.tag != f"{{{_SVG_NS}}}svg":
+        raise ValueError(f'{what}: not an SVG document (the root must be <svg xmlns="{_SVG_NS}">)')
+    removed: list[str] = []
+    parents = [root]
+    while parents:  # depth-first; a dropped element's subtree is not visited (or reported)
+        parent = parents.pop()
+        for child in list(parent):
+            name, target = _local(child.tag), _local(child.get("attributeName", ""))
+            animates_code = name in _SVG_ANIMATE and (target in _SVG_URL_ATTRS or target.startswith("on"))
+            if name in _SVG_DROP or child.tag.startswith(f"{{{_XHTML_NS}}}") or animates_code:
+                parent.remove(child)
+                removed.append(f"<{name}>")
+            else:
+                parents.append(child)
+    for el in root.iter():
+        for key, value in list(el.attrib.items()):
+            name, scheme = _local(key), _scheme(value)
+            if name.startswith("on"):
+                removed.append(f"{name}=…")
+            elif (name in _SVG_URL_ATTRS and _unsafe_url(value)) or scheme in _SCRIPT_SCHEMES:
+                removed.append(f"{name}={scheme}:…")
+            else:
+                continue
+            del el.attrib[key]
+    return _xml_bytes(root), removed
+
+
+def _xml_bytes(root: ET.Element) -> bytes:
+    """Serialize with SVG as the default namespace and the usual xlink/xml prefixes (ElementTree would
+    write ns0:svg). Attributes in the SVG namespace itself are not SVG attributes and are dropped."""
+    prefixes = dict(_XML_PREFIXES)
+    used: dict[str, str] = {}
+
+    def qname(name: str) -> str:
+        if not name.startswith("{"):
+            return name
+        uri, local = name[1:].split("}", 1)
+        prefix = used[uri] = prefixes.setdefault(uri, f"ns{len(prefixes) - 2}")
+        return f"{prefix}:{local}" if prefix else local
+
+    def attr(value: str) -> str:
+        return html.escape(value).replace("\t", "&#9;").replace("\n", "&#10;").replace("\r", "&#13;")
+
+    def walk(el: ET.Element) -> str:
+        tag = qname(el.tag)
+        attrs = "".join(
+            f' {qname(k)}="{attr(v)}"' for k, v in el.attrib.items() if not k.startswith(f"{{{_SVG_NS}}}")
+        )
+        if el is root:
+            attrs = (
+                "".join(f' xmlns{":" * bool(p)}{p}="{uri}"' for uri, p in used.items() if p != "xml") + attrs
+            )
+        inner = html.escape(el.text or "", quote=False) + "".join(walk(child) for child in el)
+        tail = html.escape(el.tail or "", quote=False) if el is not root else ""
+        return f"<{tag}{attrs}>{inner}</{tag}>{tail}" if inner else f"<{tag}{attrs}/>{tail}"
+
+    for el in root.iter():  # every namespace in use, so the root can declare them all
+        qname(el.tag)
+        for key in el.attrib:
+            qname(key)
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n{walk(root)}\n'.encode()
 
 
 # --------------------------------------------------------------------------- #
@@ -201,7 +372,7 @@ def encode_clip(project: Project, ref: FrameRef, clip_s: float, *, hevc: bool = 
 
     Encodes from footage when present; otherwise reuses a cached encode; None when neither exists.
     """
-    src = project.footage_dir / ref.source
+    src = inside(project.footage_dir / ref.source, project.footage_dir, "clip source")
     key = hashlib.sha1(f"{_CLIP_VERSION}|{ref.source}|{ref.t:.3f}|{clip_s:.3f}".encode()).hexdigest()[:12]
     base = project.work_dir / "clips" / f"{Path(ref.source).stem}-{key}"
     h264, h265, poster = (
@@ -255,6 +426,11 @@ def _generated_at() -> str:
     epoch = os.environ.get("SOURCE_DATE_EPOCH")
     when = dt.datetime.fromtimestamp(int(epoch), dt.UTC) if epoch else dt.datetime.now(dt.UTC)
     return when.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _camel(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(word.capitalize() for word in rest)
 
 
 def _dest(*parts: str) -> str:
@@ -337,6 +513,10 @@ class StoryBuilder:
         path = brand.resolve(rel)
         if path is None:
             return None
+        if brand.root is not None:
+            inside(path, brand.root, "brand.yaml: logo")
+        if path.suffix.lower() not in _LOGO_TYPES:
+            raise ValueError(f"brand.yaml: logo {rel!r} is not an image ({', '.join(sorted(_LOGO_TYPES))})")
         if not path.is_file():
             log.warn(f"brand file {path} is missing")
             return None
@@ -347,7 +527,13 @@ class StoryBuilder:
         url = "assets/brand/" + "/".join(_dest(p) for p in name.split("/"))
         target = self.site_dir / url
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
+        if path.suffix.lower() == ".svg":
+            data, removed = sanitize_svg(path.read_bytes(), f"brand.yaml: logo {rel!r}")
+            if removed:
+                log.warn(f"brand.yaml: logo {rel!r}: removed {', '.join(sorted(set(removed)))}")
+            target.write_bytes(data)
+        else:
+            shutil.copyfile(path, target)
         return url
 
     # -- references ---------------------------------------------------------- #
@@ -408,7 +594,10 @@ class StoryBuilder:
 
     def _hero(self, ch: HeroChapter, base: dict[str, Any], where: str) -> dict[str, Any]:
         cfg = self.project.config
-        out = base | {"kicker": base["kicker"] or self.plain(cfg.kicker), "title": base["title"] or cfg.title}
+        out = base | {
+            "kicker": base["kicker"] or self.plain(cfg.kicker),
+            "title": base["title"] or self.plain(cfg.title),
+        }
         v = self.vantage(ch.vantage, where)
         if v is not None:
             out |= {"vantage": v.id, "capture": self.ref(v, ch.capture, len(v.captures) - 1, where)}
@@ -470,7 +659,7 @@ class StoryBuilder:
         for item in ch.items:
             entry: dict[str, Any] = {
                 "date": self.plain(item.date), "title": self.plain(item.title), "html": self.md(item.body),
-                "status": item.status, "source": item.source,
+                "status": item.status, "source": safe_url(item.source, f"{where} item {item.title!r}"),
             }  # fmt: skip
             v = self.vantage(item.vantage, f"{where} item {item.title!r}") if item.capture else None
             if v is not None:
@@ -488,13 +677,16 @@ class StoryBuilder:
             refs = ch.captures or [f"#{i}" for i in range(len(v.captures))]
             out |= {"vantage": v.id, "captures": [self.ref(v, r, 0, where) for r in refs]}
         for gi in ch.images:
-            path = self.project.root / gi.file
+            path = inside(
+                self.project.root / gi.file, self.project.root, f"story.yaml {where}: gallery image"
+            )
             if not path.is_file():
                 log.warn(f"{where}: gallery image {gi.file} is missing; skipped")
                 continue
             alt = gi.alt or self.plain(gi.caption) or Path(gi.file).stem.replace("-", " ")
+            name = Path(gi.file).with_suffix("").as_posix()  # the whole path: two folders may share a name
             out["images"].append(_compact({
-                "img": self.img(path, _dest("assets", "img", "gallery", base["id"], Path(gi.file).stem), alt),
+                "img": self.img(path, _dest("assets", "img", "gallery", base["id"], name), alt),
                 "caption": self.inline(gi.caption), "date": self.plain(gi.date), "credit": self.plain(gi.credit),
             }))  # fmt: skip
         return out if out["captures"] or out["images"] else None
@@ -505,7 +697,10 @@ class StoryBuilder:
 
     def _credits(self, ch: CreditsChapter, base: dict[str, Any], where: str) -> dict[str, Any]:
         return base | {
-            "sources": [_compact({"label": self.plain(s.label), "url": s.url}) for s in ch.sources],
+            "sources": [
+                _compact({"label": self.plain(s.label), "url": safe_url(s.url, f"{where} source")})
+                for s in ch.sources
+            ],
             "notes": [self.inline(n) or "" for n in ch.notes],
         }
 
@@ -514,7 +709,7 @@ class StoryBuilder:
     def meta(self) -> dict[str, Any]:
         cfg = self.project.config
         dates = sorted({c.date for v in self.vantages.values() for c in v.captures})
-        url = cfg.output.base_url
+        url = safe_url(cfg.output.base_url, "project.yaml output.base_url")
         return _compact({
             "slug": cfg.slug, "title": self.plain(cfg.title), "subtitle": self.plain(cfg.subtitle),
             "kicker": self.plain(cfg.kicker), "byline": self.plain(cfg.byline), "lang": cfg.lang,
@@ -533,17 +728,18 @@ class StoryBuilder:
     def brand(self) -> dict[str, Any]:
         b = self.project.brand
         return _compact({
-            "name": b.name, "url": b.url, "alt": b.logos.alt or b.name, "theme": b.theme, "grain": b.grain,
+            "name": b.name, "url": safe_url(b.url, "brand.yaml url"), "alt": b.logos.alt or b.name,
+            "theme": b.theme, "grain": b.grain,
             "logos": _compact({
                 "primary": self.brand_file(b.logos.primary), "onDark": self.brand_file(b.logos.on_dark),
                 "mark": self.brand_file(b.logos.mark),
             }),
             "partners": [
-                _compact({"name": p.name, "role": p.role, "url": p.url, "logo": self.brand_file(p.logo),
-                          "logoOnDark": self.brand_file(p.logo_on_dark)})
+                _compact({"name": p.name, "role": p.role, "url": safe_url(p.url, f"brand.yaml {p.name!r} url"),
+                          "logo": self.brand_file(p.logo), "logoOnDark": self.brand_file(p.logo_on_dark)})
                 for p in b.partners
             ],
-            "creditLine": b.credit_line, "copyright": b.copyright, "disclaimer": b.disclaimer,
+            **{_camel(key): self.plain(getattr(b, key)) for key in BRAND_TEXT},
         })  # fmt: skip
 
     def build(self) -> dict[str, Any]:
@@ -617,6 +813,18 @@ def _site_files(site: Path) -> list[Path]:
     return sorted((p for p in site.rglob("*") if p.is_file()), key=lambda p: p.relative_to(site).as_posix())
 
 
+def _fallbacks(node: Any) -> Iterator[str]:
+    """The fallback JPEG of every Img in the story (posters included)."""
+    if isinstance(node, dict):
+        if "fallback" in node and "lqip" in node:
+            yield node["fallback"]
+        for value in node.values():
+            yield from _fallbacks(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _fallbacks(value)
+
+
 def _service_worker(site: Path, story: dict[str, Any]) -> Path:
     files = [p for p in _site_files(site) if p.name != "sw.js"]
     rel = [p.relative_to(site).as_posix() for p in files]
@@ -632,7 +840,7 @@ def _service_worker(site: Path, story: dict[str, Any]) -> Path:
         "apple-touch-icon.png",
     }
     core |= {r for r in rel if r.startswith(("assets/fonts/", "assets/brand/"))}
-    core |= {u for u in re.findall(r'"(assets/img/[^"]+\.jpg)"', json.dumps(story)) if u in rel}
+    core |= set(_fallbacks(story))  # one JPEG per image; the rest is fetched by "Save for offline"
     config = {
         "cache": f"vantage-{story['meta']['slug']}-{digest.hexdigest()[:12]}",
         "core": sorted(core & ({"./"} | set(rel))),

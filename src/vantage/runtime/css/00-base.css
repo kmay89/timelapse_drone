@@ -4,7 +4,8 @@
   --v-ease: cubic-bezier(.2, .7, .2, 1);
   --v-dur-ui: 240ms;
   --v-dur-reveal: 600ms;
-  --v-gutter: clamp(1.25rem, 5vw, 3.5rem);
+  /* viewport-fit=cover: in landscape the gutters clear the sensor housing on either side. */
+  --v-gutter: max(clamp(1.25rem, 5vw, 3.5rem), env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px));
   --v-measure: 34rem;
   --v-wide: 1400px;
   --v-fs-display: clamp(2.75rem, 1.55rem + 5vw, 5rem);
@@ -210,12 +211,27 @@ figcaption .v-date { display: block; margin-bottom: .2rem; color: var(--v-fg); f
 /* Video */
 .v-clip video { aspect-ratio: 16 / 9; object-fit: cover; height: auto; }
 
-/* Stats */
-.v-statgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 clamp(1.25rem, 4vw, 3.5rem); list-style: none; padding: 0; }
-@media (min-width: 48em) { .v-statgrid { grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); } }
-.v-stat { border-top: 1px solid var(--v-fg); padding: .9rem 0 2rem; }
-.v-stat__value { display: block; font-size: clamp(2.6rem, 1.7rem + 4vw, 5rem); line-height: 1; font-weight: 340; letter-spacing: -.03em; font-variant-numeric: lining-nums; white-space: nowrap; }
-.v-stat__unit { font-size: .36em; letter-spacing: 0; margin-left: .15em; color: var(--v-fg-2); }
+/* Stats: a column count the figures fill evenly (phones 2; tablets 3 or 2; desktops 4, 3 or 2); when none
+ * divides, the first figure leads across a row of its own. Values scale with their column, and the unit
+ * wraps under the number before anything can run into the next column. */
+.v-statgrid { --c: 2; display: grid; grid-template-columns: repeat(var(--c), minmax(0, 1fr)); gap: 0 clamp(1.25rem, 4vw, 3.5rem); list-style: none; padding: 0; }
+.v-statgrid > :first-child { grid-column: 1 / var(--lead, auto); }
+.v-statgrid:has(> :last-child:nth-child(odd)) { --lead: -1; }
+@media (min-width: 48em) {
+  .v-statgrid:has(> :last-child:nth-child(6n + 7)) { --c: 3; }
+  .v-statgrid:has(> :last-child:nth-child(3n)) { --c: 3; --lead: auto; }
+}
+@media (min-width: 64em) {
+  .v-statgrid:has(> :last-child:nth-child(4n + 5)) { --c: 4; }
+  .v-statgrid:has(> :last-child:nth-child(3n)) { --c: 3; --lead: auto; }
+  .v-statgrid:has(> :last-child:nth-child(4n)) { --c: 4; --lead: auto; }
+}
+.v-stat { border-top: 1px solid var(--v-fg); padding: .9rem 0 2rem; min-width: 0; container-type: inline-size; }
+.v-stat__value {
+  display: block; font-size: clamp(2.6rem, 1.7rem + 4vw, 5rem); font-size: min(clamp(2.6rem, 1.7rem + 4vw, 5rem), 26cqi, 100cqi / (.6 * var(--n, 1)));
+  line-height: 1; font-weight: 340; letter-spacing: -.03em; font-variant-numeric: lining-nums; overflow-wrap: anywhere;
+}
+.v-stat__unit { display: inline-block; font-size: .36em; letter-spacing: 0; margin-left: .15em; color: var(--v-fg-2); }
 .v-stat__label { display: block; margin-top: .75rem; font-size: .9375rem; line-height: 1.4; max-width: 22ch; }
 .v-stat__source { display: inline-block; margin-top: .6rem; font-size: .75rem; color: var(--v-fg-2); }
 

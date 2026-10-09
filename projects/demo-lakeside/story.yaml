@@ -1,18 +1,20 @@
 # Story for the fictional demo. File names below are fixed by vantage.demo.synth (dates and take-off
-# times are part of its flight plan); hotspot x/y are in the aligned overview frame, computed from the
-# generator's site plan through the exact camera of the 2026-09-20 reference still.
+# times are part of its flight plan). Hotspot x/y, focus and portrait_focus are normalized to the
+# aligned masters: the generator's site plan, projected through the exact camera of the 2026-09-20
+# reference still, then into the common crop the pipeline keeps (overview: x 0.139, y 0.102,
+# w/h 0.774 of the reference; shoreline: x 0.088, y 0.125, w/h 0.820). tests/test_synth.py checks both.
 
 vantages:
   - id: overview
     name: Over the old parking lot, looking north to the lake
     kind: drone
-    portrait_focus: [0.48, 0.52]
+    portrait_focus: [0.44, 0.54]
     reference: { source: "2026-09-20/DJI_20260920172528_0001.JPG" }
     hint: { lat: 40.947858, lon: -82.044708, alt_m: 115, heading_deg: 0, gimbal_pitch_deg: -44 }
   - id: shoreline
     name: From over the water, looking back at the beach
     kind: drone
-    portrait_focus: [0.45, 0.45]
+    portrait_focus: [0.44, 0.40]
     reference: { source: "2026-09-20/DJI_20260920172744_0002.JPG" }
     hint: { lat: 40.950086, lon: -82.044208, alt_m: 74, heading_deg: -164, gimbal_pitch_deg: -45 }
 
@@ -79,16 +81,16 @@ chapters:
         text: >-
           **July.** In ten weeks the slides, the lazy river and two buildings are gone. Concrete is sorted
           into piles to be crushed on site; it will go back under the new paths.
-        focus: [0.62, 0.52, 1.6]
+        focus: [0.62, 0.54, 1.6]
       - capture: "2025-10-24"
         text: >-
           **October.** Graded from the curb to the reeds. The basin is backfilled, the west half of the lot
           is stripped to earth, and orange survey paint marks where the promenades will run.
       - capture: "2026-01-31"
         text: >-
-          **January.** Under snow the plan is legible for the first time: the curving promenades, the
-          round plaza between the gatehouses, a ring of paving where the splash pad will spray.
-        focus: [0.48, 0.55, 1.5]
+          **January.** Under snow the plan is legible for the first time: the curving promenades plowed
+          clear, the round plaza between the gatehouses, and a freshly striped lot.
+        focus: [0.44, 0.58, 1.5]
       - capture: "2026-05-09"
         text: >-
           **May.** Sod goes down in strips from west to east. Sand fills the old fan of the wave pool,
@@ -96,34 +98,34 @@ chapters:
       - capture: "2026-09-20"
         text: >-
           **September.** The deep end is now the shallow end of a beach.
-        focus: [0.48, 0.45, 1.8]
+        focus: [0.44, 0.45, 1.8]
     hotspots:
       - id: slide-tower
-        x: 0.858
-        y: 0.554
+        x: 0.930
+        y: 0.584
         label: The slide tower
         body: Four tubes off one tower, demolished in the first summer.
         from: earliest
         to: "2025-05-30"
       - id: beach
-        x: 0.480
-        y: 0.425
+        x: 0.441
+        y: 0.417
         label: The wave pool, then the beach
         body: The same fan-shaped footprint, backfilled and topped with sand.
       - id: gatehouse-east
-        x: 0.564
-        y: 0.760
+        x: 0.550
+        y: 0.851
         label: The gatehouses
         body: Kept from 1988, re-roofed in standing-seam bronze in the second winter.
       - id: pier
-        x: 0.667
-        y: 0.314
+        x: 0.682
+        y: 0.274
         label: Boardwalk and slips
         body: "{fact:boardwalk} along the shore, and eight slips where the old dock collapsed."
         from: "2026-03-21"
       - id: meadow
-        x: 0.063
-        y: 0.939
+        x: 0.195
+        y: 0.952
         label: Lot to meadow
         body: "{fact:stalls-to-meadow}, returned to coneflower and little bluestem."
         from: "2026-05-09"
@@ -143,13 +145,13 @@ chapters:
         split: 0.85
       - text: The fan of the wave pool survives as the outline of the beach.
         split: 0.5
-        focus: [0.48, 0.46, 1.7]
+        focus: [0.44, 0.46, 1.7]
       - text: The new park, in its first late summer.
         split: 0.12
     hotspots:
-      - { id: beach, x: 0.480, y: 0.425, label: Pool to beach }
-      - { id: gatehouse-west, x: 0.383, y: 0.759, label: "Gatehouse, kept" }
-      - { id: pier, x: 0.667, y: 0.314, label: Dock to boardwalk }
+      - { id: beach, x: 0.441, y: 0.417, label: Pool to beach }
+      - { id: gatehouse-west, x: 0.316, y: 0.849, label: "Gatehouse, kept" }
+      - { id: pier, x: 0.682, y: 0.274, label: Dock to boardwalk }
 
   - type: stats
     id: by-the-numbers
@@ -158,7 +160,7 @@ chapters:
     surface: paper
     items:
       - { value: "12", label: "drone flights, every six to seven weeks", source: Flight logs }
-      - { value: "135", label: parking spaces returned to meadow, source: Site plan }
+      - { value: "132", label: parking spaces returned to meadow, source: Site plan }
       - { value: "13,100", unit: sq ft, label: "of wave pool, now beach and splash pad", source: Site plan }
       - { value: "770", unit: m, label: of new paths and promenade, source: Site plan }
       - { value: "78", label: young trees planted along the paths, source: Planting plan }

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import itertools
+import json
+import os
 import re
+import shutil
 import time
 import typing
 import xml.etree.ElementTree as ET
@@ -21,6 +25,9 @@ from vantage.media.ffmpeg import iter_frames, probe
 from vantage.paths import repo_root
 
 DEMO = repo_root() / "projects" / "demo-lakeside"
+# Common crop the pipeline keeps of each vantage's reference (x0, y0, side; fractions of the reference).
+# story.yaml coordinates are authored in this aligned frame; the slow end-to-end test keeps it honest.
+ALIGNED_CROP = {"overview": (0.139, 0.102, 0.774), "shoreline": (0.088, 0.125, 0.820)}
 SRT_BLOCK = re.compile(
     r"(?P<n>\d+)\n"
     r"(?P<t0>\d\d:\d\d:\d\d,\d{3}) --> (?P<t1>\d\d:\d\d:\d\d,\d{3})\n"
@@ -76,6 +83,14 @@ def _grid_error(h_est: np.ndarray, h_true: np.ndarray, w: int, h: int) -> float:
     pts = np.stack([xs, ys], -1).reshape(-1, 1, 2).astype(np.float32)
     err = cv2.perspectiveTransform(pts, h_est) - cv2.perspectiveTransform(pts, h_true)
     return float(np.median(np.linalg.norm(err, axis=-1)))
+
+
+def _aligned(truth: dict, reference: str, vantage: str, world: tuple[float, float]) -> tuple[float, float]:
+    """Normalized position of a world point in a vantage's aligned (cropped) masters."""
+    ref = next(f for f in synth.truth_files(truth) if f["path"] == reference)
+    u, v, w = synth.truth_homography(truth, reference) @ (*world, 1.0)
+    x0, y0, side = ALIGNED_CROP[vantage]
+    return (u / w / (ref["width"] - 1) - x0) / side, (v / w / (ref["height"] - 1) - y0) / side
 
 
 # --------------------------------------------------------------------------- #
@@ -271,12 +286,65 @@ def test_brand_files_exist_and_are_clean_svg() -> None:
         assert not tags & {"text", "image", "use", "script", "foreignObject"}
 
 
+# sha256 of lowercase words and two-word phrases that must never appear in this public repo (the real
+# client, its site and the people involved). Hashed so the guard does not publish what it guards.
+DENYLIST_SHA256 = frozenset({
+    "c9c5e6dbc91b13c825ee2db27e7f1f7604cfe6b212c780a833d9d07cfd1175fd",
+    "1bd71d4cb4a2f4236f2a9bca2e54bcfb0b6c63eacdb397542d6815f115452d75",
+    "b1c100fe8e3a878f4001f0faec733bc4df3fbf4f1933b804eaee04eebcea72ee",
+    "9b89025ce7a6d932b28f6e15132a70d402f723874a425e9b4c7cc3b179fa66ce",
+    "25064b5df7121a2ed9516867c55ec79063b0286a791139bf35331012557a7813",
+    "ec0d21e4d7b1e9f293845fca49ae1831a534f2f59957216c676609b4ecbbe1ec",
+    "00b41302886b5fd316a6cc0d99d9b8f4683918f7f04933cb5f519eb2f984cc4e",
+    "4eae13f17ca920df9edd66adeecdc0d8c379237a26aa0cf6163b7c9ff5faf9f9",
+    "7aa94415a2c099ea26d09d3c952d8a79a97988103c7bc07411137addd1df751a",
+})  # fmt: skip
+_WORD = re.compile(r"[a-z0-9]+")
+_TEXT_SUFFIXES = {".py", ".md", ".yaml", ".yml", ".toml", ".json", ".mjs", ".js", ".css", ".html", ".svg",
+                  ".txt", ".sh", ".cfg", ".ini"}  # fmt: skip
+_SKIP_DIRS = {".git", ".venv", ".pytest_cache", ".ruff_cache", ".results", "__pycache__", "node_modules",
+              "dist", "work", "footage", "masters"}  # fmt: skip
+
+
+def denied_terms(text: str, hashes: frozenset[str] = DENYLIST_SHA256) -> set[str]:
+    """Words, adjacent pairs ("a b") and joined pairs ("ab") of `text` whose sha256 is in `hashes`."""
+    words = _WORD.findall(text.lower())
+    grams = set(words)
+    grams |= {f"{a} {b}" for a, b in itertools.pairwise(words)}
+    grams |= {a + b for a, b in itertools.pairwise(words)}
+    return {g for g in grams if hashlib.sha256(g.encode()).hexdigest() in hashes}
+
+
+def test_denylist_matches_words_pairs_and_joined_pairs() -> None:
+    fake = frozenset(hashlib.sha256(t.encode()).hexdigest() for t in ("heron", "blue gill", "redwing"))
+    text = "A Heron, a BLUE-gill and a red\nwing; no bluegill pond, no herons."
+    assert denied_terms(text, fake) == {"heron", "blue gill", "redwing"}
+    assert denied_terms("Lakeside Parks Conservancy · Riverside Park", fake) == set()
+    assert len(DENYLIST_SHA256) == 9 and all(re.fullmatch(r"[0-9a-f]{64}", h) for h in DENYLIST_SHA256)
+
+
+def _count(path: Path) -> int:
+    """How many denylisted terms a file holds. Only a count, so a failure never prints a name in CI logs."""
+    return len(denied_terms(path.read_text(encoding="utf-8", errors="replace")))
+
+
 def test_demo_is_fictional() -> None:
-    text = " ".join(
-        p.read_text(encoding="utf-8").lower() for p in DEMO.rglob("*") if p.suffix in {".yaml", ".md", ".svg"}
-    )
-    for name in ("seaworld", "sea world", "geauga", "aurora", "six flags", "cedar fair"):
-        assert name not in text
+    files = sorted(p for p in DEMO.rglob("*") if p.suffix in {".yaml", ".md", ".svg"})
+    assert len(files) >= 5
+    hits = {p.relative_to(DEMO).as_posix(): n for p in files if (n := _count(p))}
+    assert hits == {}, "the demo names the real client (term counts per file)"
+
+
+def test_public_repo_never_names_the_client() -> None:
+    root = repo_root()
+    hits: dict[str, int] = {}
+    for folder, dirs, names in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
+        for name in sorted(names):
+            path = Path(folder) / name
+            if path.suffix in _TEXT_SUFFIXES and (n := _count(path)):
+                hits[path.relative_to(root).as_posix()] = n
+    assert hits == {}, "public files name the real client (term counts per file)"
 
 
 def test_story_matches_generated_footage(footage: tuple[Path, dict]) -> None:
@@ -305,13 +373,127 @@ def test_story_matches_generated_footage(footage: tuple[Path, dict]) -> None:
         if re.fullmatch(r"\d{4}-\d\d-\d\d", ref):
             assert vantage in by_date[ref], (ref, vantage)
 
-    reference = next(v.reference.source for v in story.vantages if v.id == "overview" and v.reference)
-    ref_file = next(f for f in synth.truth_files(truth) if f["path"] == reference)
-    hom = synth.truth_homography(truth, reference)
-    for ch in story.chapters:
-        if isinstance(ch, config.ScrubChapter | config.CompareChapter) and ch.vantage == "overview":
-            for spot in ch.hotspots:
-                x, y = synth.POINTS_OF_INTEREST[spot.id.replace("-", "_")]
-                u, v, w = hom @ (x, y, 1.0)
-                assert abs(u / w / (ref_file["width"] - 1) - spot.x) < 0.02, spot.id
-                assert abs(v / w / (ref_file["height"] - 1) - spot.y) < 0.02, spot.id
+
+def test_hotspots_sit_on_their_features_in_the_aligned_frame(footage: tuple[Path, dict]) -> None:
+    """Hotspots, focus moves and portrait crops are in the masters' cropped frame, not the raw reference."""
+    _, truth = footage
+    story = config.load_project(DEMO).story
+    refs = {v.id: v.reference.source for v in story.vantages if v.reference}
+    spots = [
+        (ch.vantage, spot)
+        for ch in story.chapters
+        if isinstance(ch, config.ScrubChapter | config.CompareChapter)
+        for spot in ch.hotspots
+    ]
+    assert len(spots) >= 5
+    for vantage, spot in spots:
+        x, y = _aligned(truth, refs[vantage], vantage, synth.POINTS_OF_INTEREST[spot.id.replace("-", "_")])
+        assert 0.0 < x < 1.0 and 0.0 < y < 1.0, (spot.id, x, y)
+        assert abs(x - spot.x) < 0.02 and abs(y - spot.y) < 0.02, (spot.id, (x, y), (spot.x, spot.y))
+    focus = [
+        s.focus
+        for ch in story.chapters
+        if isinstance(ch, config.ScrubChapter | config.CompareChapter)
+        for s in ch.steps
+        if s.focus
+    ]
+    assert focus and all(0.1 < fx < 0.9 and 0.1 < fy < 0.9 and z >= 1 for fx, fy, z in focus)
+    assert all(v.portrait_focus and all(0 < c < 1 for c in v.portrait_focus) for v in story.vantages)
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: edge cases of the truth helpers, caching, determinism, the real pipeline
+# --------------------------------------------------------------------------- #
+
+
+def test_truth_homography_clamps_time(footage: tuple[Path, dict]) -> None:
+    _, truth = footage
+    video = _files(truth, "overview", "video")[0]
+    first, last = (np.reshape(video["frame_homographies"][i], (3, 3)) for i in (0, -1))
+    assert np.allclose(synth.truth_homography(truth, video["path"], -0.5), first)
+    assert np.allclose(synth.truth_homography(truth, video["path"], 1e3), last)
+    with pytest.raises(KeyError):
+        synth.truth_homography(truth, "2025-04-12/DJI_9999.MP4")
+
+
+def test_last_video_frame_matches_truth(footage: tuple[Path, dict]) -> None:
+    """Hover drift accumulates over the clip: the final frame must still agree with its recorded homography."""
+    root, truth = footage
+    still = _still(truth, "2026-09-20")
+    video = next(f for f in _files(truth, "overview", "video") if f["path"].startswith("2026-09-20"))
+    *_, (t, frame) = iter_frames(root / video["path"])
+    assert round(t * video["fps"]) == video["frames"] - 1
+    h_true = synth.relative_homography(truth, video["path"], still["path"], t_src=t)
+    img = cv2.imread(str(root / still["path"]))
+    assert _grid_error(_sift_homography(frame, img), h_true, still["width"], still["height"]) < 1.5
+
+
+def test_serial_render_matches_parallel_workers(footage: tuple[Path, dict], tmp_path: Path) -> None:
+    root, truth = footage
+    visit = next(v for v in synth._visits() if v.date == "2025-12-12")  # stills only: no encoder involved
+    try:
+        synth._init_worker(7, True)
+        entry = synth._render_visit(
+            synth._WORKER["world"], visit, synth._FAST, tmp_path, 7, synth._WORKER["grain"]
+        )
+    finally:
+        synth._WORKER.clear()
+    assert entry == next(v for v in truth["visits"] if v["date"] == visit.date)
+    for f in entry["files"]:
+        assert (tmp_path / f["path"]).read_bytes() == (root / f["path"]).read_bytes(), f["path"]
+
+
+def test_interrupted_regeneration_leaves_no_truth_behind(
+    footage: tuple[Path, dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full-size run that dies halfway must not leave the old fast-mode truth vouching for mixed footage."""
+    root, _ = footage
+    copy = tmp_path / "footage"
+    shutil.copytree(root, copy)
+
+    def interrupted(*_: object) -> dict:
+        raise KeyboardInterrupt
+
+    monkeypatch.setenv("VANTAGE_SYNTH_WORKERS", "1")
+    monkeypatch.setattr(synth, "_init_worker", lambda *_: None)
+    monkeypatch.setattr(synth, "_visit_job", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        synth.generate_demo_footage(copy, fast=False)
+    assert not (copy / synth.TRUTH_NAME).exists()
+    assert not synth._is_current(copy / synth.TRUTH_NAME, 7, True)
+
+
+@pytest.mark.slow
+def test_pipeline_aligns_every_visit_in_the_story_frame(footage: tuple[Path, dict], tmp_path: Path) -> None:
+    """ingest → select → masters on the fast footage: every flight of both vantages registers (winter
+    included), the straight-down distractor is never picked, and the common crop is the one story.yaml
+    is authored against."""
+    from vantage.ingest.catalog import build_catalog
+    from vantage.process.masters import make_masters
+    from vantage.process.select import select_frames
+
+    root, truth = footage
+    for name in ("project.yaml", "story.yaml", "facts.yaml"):
+        shutil.copy(DEMO / name, tmp_path / name)
+    shutil.copytree(DEMO / "brand", tmp_path / "brand")
+    text = (tmp_path / "project.yaml").read_text(encoding="utf-8")
+    (tmp_path / "project.yaml").write_text(
+        text.replace("footage_dir: footage", f"footage_dir: {json.dumps(str(root))}"), encoding="utf-8"
+    )
+    project = config.load_project(tmp_path)
+    catalog = build_catalog(project)
+    index = make_masters(project, select_frames(project, catalog))
+
+    dates = [v["date"] for v in truth["visits"]]
+    paths = {s.id: s.path for s in catalog.sources}
+    for vantage in ("overview", "shoreline"):
+        mv = index.vantages[vantage]
+        assert [c.date for c in mv.captures] == dates, vantage
+        assert all(c.align.ok for c in mv.captures), [(c.date, c.align.note) for c in mv.captures]
+        assert not any(paths[c.source].endswith("DJI_0003.MP4") for c in mv.captures)
+        review = json.loads((project.work_dir / "review" / vantage / "review.json").read_text())
+        crop, ref = review["crop"], review["reference"]
+        x0, y0, side = ALIGNED_CROP[vantage]
+        assert abs(crop["x"] / ref["width"] - x0) < 0.015, crop
+        assert abs(crop["y"] / ref["height"] - y0) < 0.015, crop
+        assert abs(crop["w"] / ref["width"] - side) < 0.015, crop

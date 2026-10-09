@@ -1,0 +1,44 @@
+/* Hero choreography (only with JS: the no-JS essay renders still). The image arrives first, then the
+ * type rises; the still drifts slowly; an ambient loop fades in only once it is actually playing. */
+
+.js .v-hero__media { animation: v-fade 1.4s var(--v-ease) both; }
+.js .v-hero__media img { animation: v-drift 30s ease-in-out 1s infinite alternate; }
+.js .v-hero.v-off .v-hero__media img { animation-play-state: paused; }
+.js .v-hero__media video { opacity: 0; transition: opacity 1.2s var(--v-ease); }
+.js .v-hero__media.v-playing video { opacity: 1; }
+.js .v-hero__top { animation: v-fade 1s var(--v-ease) .3s both; }
+.js .v-hero__head > * { animation: v-rise .9s var(--v-ease) .6s both; }
+.js .v-hero__head > :nth-child(2) { animation-delay: .7s; }
+.js .v-hero__head > :nth-child(3) { animation-delay: .85s; }
+.js .v-hero__head > :nth-child(4) { animation-delay: 1s; }
+
+/* Scroll cue: a hairline with a falling highlight, shown after 2 s if the reader hasn't moved. */
+.js .v-hero__cue {
+  display: block; position: absolute; left: 50%; right: auto; bottom: calc(var(--v-safe-b) + 12px); width: 1px; height: 2.25rem;
+  overflow: hidden; background: rgb(var(--v-paper-rgb) / .22); opacity: 0; transition: opacity .8s var(--v-ease);
+}
+.js .v-hero__cue::after { content: ""; position: absolute; left: 0; top: 0; width: 1px; height: 45%; background: var(--v-paper); animation: v-cue 2.2s var(--v-ease) infinite; }
+.js .v-cue .v-hero__cue { opacity: 1; }
+@media (min-width: 48em) { .js .v-hero__cue { left: auto; right: var(--v-gutter); bottom: calc(var(--v-safe-b) + 1.5rem); height: 3.5rem; } }
+
+/* Pause for the ambient motion (WCAG 2.2.2): the bottom corner, in the stage's own padding; on wide
+ * screens the scroll cue stands on it. Paused, the still stops drifting too. */
+.v-hero__pause {
+  position: absolute; z-index: 2; right: calc(var(--v-gutter) - 5px); bottom: var(--v-safe-b); width: 44px; height: 44px;
+  color: var(--v-text-on-night); animation: v-fade 1s var(--v-ease) 1.2s both;
+}
+.v-hero__pause::before {
+  content: ""; position: absolute; inset: 5px; z-index: -1; border-radius: 50%; background: rgb(var(--v-night-rgb) / .5);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: inset 0 0 0 1px rgb(var(--v-paper-rgb) / .2);
+}
+.v-hero__pause .v-ico svg { width: 16px; height: 16px; stroke-width: 2; }
+.js .v-hero.v-still .v-hero__media img { animation-play-state: paused; }
+@media (min-width: 48em) {
+  .v-hero__pause { bottom: calc(var(--v-safe-b) + 1.25rem); }
+  .js .v-hero:has(.v-hero__pause) .v-hero__cue { right: calc(var(--v-gutter) + 17px); bottom: calc(var(--v-safe-b) + 4.5rem); height: 3rem; }
+}
+
+@keyframes v-fade { from { opacity: 0; } }
+@keyframes v-rise { from { opacity: 0; transform: translate3d(0, 1.1rem, 0); } }
+@keyframes v-drift { to { transform: scale(1.07) translate3d(-1%, -1.2%, 0); } }
+@keyframes v-cue { from { transform: translateY(-100%); } to { transform: translateY(230%); } }

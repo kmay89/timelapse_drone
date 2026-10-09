@@ -1,0 +1,23 @@
+/* Stats, timeline, gallery and arrival reveals. */
+
+.v-count { display: inline-block; font-variant-numeric: tabular-nums lining-nums; }
+
+.v-tl__fig .v-media { border-radius: 4px; }
+.v-tl__fig img { transition: transform .5s var(--v-ease); }
+.v-tl__open { position: absolute; inset: 0; z-index: 1; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: 4px; }
+.v-tl__open:hover ~ *, .v-tl__fig:hover img { transform: scale(1.03); }
+.v-tl__fig figcaption { position: relative; }
+
+.v-dots { display: flex; flex-wrap: wrap; justify-content: center; margin-top: .5rem; padding: 0 var(--v-gutter); }
+.v-dot { position: relative; width: 26px; height: 32px; padding: 0; border: 0; background: none; cursor: pointer; }
+.v-dot::before {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 3px;
+  background: var(--v-fg-2); opacity: .45; transition: width .3s var(--v-ease), margin .3s var(--v-ease), opacity .3s, background .3s;
+}
+.v-dot[aria-current="true"]::before { width: 18px; margin-left: -9px; opacity: 1; background: var(--v-acc); }
+
+.v-reveal :is(.v-head, .v-quote, .v-stat, .v-tl, .v-standfirst > *) { transition: opacity .9s var(--v-ease), transform .9s var(--v-ease); }
+.v-reveal :is(.v-head, .v-quote, .v-stat, .v-tl, .v-standfirst > *):not(.v-in) { opacity: 0; transform: translate3d(0, 1.1rem, 0); }
+.v-reveal .v-stat:nth-child(2n) { transition-delay: .08s; }
+
+.v-credits, .v-notes-section { content-visibility: auto; contain-intrinsic-size: auto 1400px; }

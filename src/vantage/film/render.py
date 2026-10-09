@@ -45,11 +45,12 @@ PAN = 0.05  # vertical cut: drift either side of the portrait focus, in image wi
 FAST_LONG_EDGE = 960
 POSTER_QUALITY = 90
 SIMULATED_NOTE = "Simulated imagery for demonstration; not actual aerial footage."
-# BT.709 tags and matrix (players guess wrong otherwise), no timestamps → reproducible bytes.
+# BT.709 tags and matrix (players guess wrong otherwise), no timestamps → reproducible bytes,
+# and an explicit container (films are written to <name>.mp4.part, then renamed).
 _ENCODE = (
     "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
     "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
-    "-fflags", "+bitexact", "-flags:v", "+bitexact", "-map_metadata", "-1",
+    "-fflags", "+bitexact", "-flags:v", "+bitexact", "-map_metadata", "-1", "-f", "mp4",
 )  # fmt: skip
 _SQUARE = ((np.arange(256, dtype=np.float32) / 255) ** 2).reshape(1, 256)  # gamma-2 "linear light"
 
@@ -379,7 +380,7 @@ class _Film:
         """Centered blocks (wrapped to 80 % of the width), shrunk to fit 86 % of the height."""
         t, u, max_w = self.type, self.unit, 0.8 * self.width
         scale = 1.0
-        for _ in range(3):
+        for attempt in range(3):
             lines: list[tuple[str | None, _Style, float]] = []  # text (None = rule), style, baseline
             y = 0.0
             for text, style, gap in blocks:
@@ -393,7 +394,7 @@ class _Film:
                     y += ascent if i == 0 else style.size * u * scale * style.leading
                     lines.append((line, style, y))
                 y += descent
-            if y <= 0.86 * self.height:
+            if y <= 0.86 * self.height or attempt == 2:
                 break
             scale *= 0.86 * self.height / y
         canvas, draw = self._canvas()
@@ -621,7 +622,7 @@ class _Film:
     def render(self, out: Path, *, crf: int, preset: str) -> int:
         """Encode the film to `out` and its poster (the main vantage's final hold) next to it."""
         frames = max(1, round(self.total * self.fps))
-        part = out.with_name(f"{out.stem}.part{out.suffix}")
+        part = out.with_name(f"{out.name}.part")  # not *.mp4: packaging ships every film/*.mp4
         try:
             with FrameWriter(
                 part, self.width, self.height, fps=self.fps, crf=crf, preset=preset, extra=_ENCODE
@@ -642,8 +643,11 @@ def render_film(project: Project, out_dir: Path) -> list[Path]:
     index_path = project.masters_dir / "index.json"
     if not index_path.is_file():
         raise FileNotFoundError(f"no {index_path}; run `vantage process {project.slug}` first")
-    sections = _sections(project, MastersIndex.load(index_path))
     settings, fast = project.config.output.film, _fast()
+    timing = (settings.title_card_s, settings.fade_s, settings.end_card_s)
+    if settings.fps <= 0 or settings.hold_s <= 0 or min(timing) < 0:
+        raise ValueError("output.film needs fps and hold_s > 0, and fade_s, title_card_s, end_card_s >= 0")
+    sections = _sections(project, MastersIndex.load(index_path))
 
     def fit(w: float, h: float) -> tuple[int, int]:
         s = min(1.0, FAST_LONG_EDGE / max(w, h)) if fast else 1.0

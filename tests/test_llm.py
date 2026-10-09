@@ -19,6 +19,7 @@ from test_film import DATES, make_project
 from vantage import config
 from vantage.llm import claude
 from vantage.llm.claude import draft_captions
+from vantage.models import MastersIndex
 
 
 class FakeAPIError(Exception):
@@ -236,3 +237,53 @@ def test_api_errors(tmp_path, monkeypatch):
     install(monkeypatch, fail(FakeAPIError("overloaded")))
     with pytest.raises(ConnectionError, match="re-run to resume"):
         draft_captions(project)
+
+
+def test_a_new_flight_costs_one_request(tmp_path, monkeypatch):
+    project = make_project(tmp_path / "proj")
+    index_path = project.masters_dir / "index.json"
+    full = index_path.read_text(encoding="utf-8")
+    index = MastersIndex.load(index_path)
+    index.vantages["overview"].captures.pop()  # the latest flight hasn't happened yet
+    index.save(index_path)
+    client = install(monkeypatch)
+
+    draft_captions(project)
+    assert len(client.calls) == 2
+
+    index_path.write_text(full, encoding="utf-8")  # it has now
+    entries = load(draft_captions(project))["vantages"]["overview"]
+    assert len(client.calls) == 3 and "January 2026" in client.calls[-1]["messages"][0]["content"][-1]["text"]
+    assert [e["status"] for e in entries] == ["proposed"] * 3
+
+
+def test_survives_broken_cache_entries_and_non_utf8_notes(tmp_path, monkeypatch):
+    project = make_project(tmp_path / "proj")
+    (project.footage_dir / DATES[0]).mkdir(parents=True)
+    (project.footage_dir / DATES[0] / "notes.txt").write_bytes(b"Caf\xe9 tables out.\n")  # Latin-1
+    client = install(monkeypatch)
+    path = draft_captions(project)
+    before = path.read_bytes()
+    assert "Caf� tables out." in client.calls[0]["messages"][0]["content"][-1]["text"]
+
+    cache = sorted((project.work_dir / "llm" / "cache").glob("*.json"))
+    cache[0].write_text('{"model": "claude-opus-5-5", "analy', encoding="utf-8")  # killed mid-write
+    assert draft_captions(project) == path
+    assert len(client.calls) == 4 and path.read_bytes() == before
+    assert not list((project.work_dir / "llm" / "cache").glob("*.tmp"))
+
+
+def test_hotspot_ids_are_unique_and_pixel_boxes_dropped(tmp_path, monkeypatch):
+    project = make_project(tmp_path / "proj")
+    changes = [
+        {"element": "Path", "description": "A path.", "box": [0.1, 0.1, 0.3, 0.3]},
+        {"element": "path", "description": "Another path.", "box": [0.5, 0.5, 0.7, 0.9]},
+        {"element": "lot", "description": "A lot, boxed in pixels.", "box": [120, 40, 300, 200]},
+    ]
+    install(monkeypatch, lambda kwargs: reply_for(kwargs, changes=changes))
+    entry = load(draft_captions(project))["vantages"]["overview"][1]
+
+    assert [h["id"] for h in entry["hotspots"]] == [f"path-{DATES[1]}", f"path-{DATES[1]}-2"]
+    assert entry["analysis"]["changes"][2]["box"] is None
+    for hotspot in entry["hotspots"]:
+        config.Hotspot.model_validate(hotspot)

@@ -75,7 +75,12 @@ ReleaseOpt = Annotated[
 # Plumbing
 # --------------------------------------------------------------------------- #
 
-_YAML_FILES = {"ProjectConfig": "project.yaml", "Story": "story.yaml", "BrandKit": "brand/brand.yaml"}
+_YAML_FILES = {
+    "ProjectConfig": "project.yaml",
+    "Story": "story.yaml",
+    "BrandKit": "brand/brand.yaml",
+    "Facts": "facts.yaml",
+}
 
 
 def _friendly(exc: BaseException) -> str | None:
@@ -318,8 +323,42 @@ def _check_brand(project: Project, errors: list[str], warnings: list[str]) -> No
         path = brand.resolve(rel)
         if path is not None and not path.is_file():
             errors.append(f"brand.yaml {label}: missing file {_show(path)}")
+        elif path is not None and path.suffix.lower() == ".svg":
+            _check_svg(path, f"brand.yaml {label}", errors, warnings)
     if not (brand.logos.primary or brand.logos.on_dark):
         warnings.append("brand.yaml has no logo")
+
+
+def _check_svg(path: Path, label: str, errors: list[str], warnings: list[str]) -> None:
+    """The build publishes a sanitized copy of every SVG logo: say now what it will refuse or remove."""
+    from vantage.site.build import sanitize_svg
+
+    try:
+        _, removed = sanitize_svg(path.read_bytes(), f"{label} ({_show(path)})")
+    except ValueError as exc:
+        errors.append(str(exc))
+        return
+    if removed:
+        warnings.append(f"{label}: the published copy leaves out {', '.join(sorted(set(removed)))}")
+
+
+def _check_facts(project: Project, errors: list[str], warnings: list[str]) -> None:
+    from vantage.config import FACT_TOKEN_RE
+    from vantage.site.facts import BRAND_TEXT, check_facts
+
+    unknown, unreleasable = check_facts(project)
+    errors += unknown
+    if unreleasable:
+        warnings.append(
+            f"{len(unreleasable)} fact(s) not releasable yet (draft builds mark them 'Unverified'; "
+            "--release refuses them): " + "; ".join(unreleasable)
+        )
+    brand = project.brand.model_dump(mode="json", exclude={*BRAND_TEXT, "voice"})  # voice is never printed
+    errors += [
+        f"brand.yaml {key}: {{fact:…}} tokens only resolve in {', '.join(BRAND_TEXT)}"
+        for key, value in brand.items()
+        if FACT_TOKEN_RE.search(json.dumps(value))
+    ]
 
 
 def _check_story(project: Project, errors: list[str], warnings: list[str]) -> None:
@@ -423,10 +462,11 @@ def check_project(project: Project) -> tuple[list[str], list[str]]:
         )
     _check_brand(project, errors, warnings)
     _check_story(project, errors, warnings)
+    _check_facts(project, errors, warnings)
     _check_outputs(project, warnings)
     todos = {
         rel: (project.root / rel).read_text(encoding="utf-8").count("TODO")
-        for rel in ("project.yaml", "story.yaml", project.config.brand)
+        for rel in ("project.yaml", "story.yaml", project.config.brand, "facts.yaml")
         if (project.root / rel).is_file()
     }
     if sum(todos.values()):
@@ -654,7 +694,7 @@ def doctor_checks() -> list[_Check]:
 @_command("new")
 def new_cmd(
     slug: Annotated[
-        str, typer.Argument(help="Project id: lowercase words joined by hyphens, e.g. aurora-park.")
+        str, typer.Argument(help="Project id: lowercase words joined by hyphens, e.g. riverside-park.")
     ],
     title: Annotated[
         str | None, typer.Option("--title", "-t", help="Display title (default: from slug).")

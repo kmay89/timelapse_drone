@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from html.parser import HTMLParser
 from typing import Any
 
 import pytest
@@ -82,7 +83,10 @@ def story(**meta: Any) -> dict[str, Any]:
             {"type": "credits", "id": "cr", "surface": "paper", "title": "Credits", "sources": [{"label": "Src", "url": "https://x.org"}],
              "notes": ["Method <em>note</em>"]},
         ],
-        "notes": [{"n": 1, "factId": "acres", "text": "48", "sources": ["https://www.example.org/plan"], "status": "verified"}],
+        "notes": [{"n": 1, "factId": "acres", "text": "48", "sources": ["https://www.example.org/plan"], "status": "verified",
+                   "releasable": True},
+                  {"n": 2, "factId": "cost", "text": "$5 million", "sources": [], "status": "needs-client", "releasable": False},
+                  {"n": 3, "factId": "says", "text": "a rumor", "sources": ["Paper"], "status": "reported", "releasable": False}],
     }  # fmt: skip
 
 
@@ -108,7 +112,7 @@ def test_page_shell(no_runtime_js):
     assert '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">' in html
     assert 'classList.replace("no-js", "js")' in html
     assert '<style id="vantage-theme">:root{--v-accent:#fff}</style>' in html
-    for needle in ('<link rel="manifest" href="manifest.webmanifest">', '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
+    for needle in ('m.rel="manifest";m.href="manifest.webmanifest"', '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
                    '<meta property="og:image" content="share.jpg">', '<meta name="twitter:card" content="summary_large_image">',
                    '<link rel="canonical" href="https://example.org/s/">', '<meta name="theme-color" content="#0b0c0b">',
                    '<meta name="apple-mobile-web-app-capable" content="yes">', '<meta name="robots" content="noindex">',
@@ -137,7 +141,8 @@ def test_every_chapter_is_a_semantic_section(no_runtime_js):
     assert '<img class="v-logo" src="assets/brand/w.svg" alt="Brand logo">' in html
     assert 'style="--fx:40.0%;--fy:60.0%"' in html  # portrait focus
     assert (
-        '<video autoplay muted loop playsinline preload="metadata" poster="assets/img/poster-960.jpg"' in html
+        '<video muted loop playsinline preload="metadata" poster="assets/img/poster-960.jpg"' in html
+        and "autoplay" not in html.split("<video", 1)[1].split(">", 1)[0]
     )
     hevc, h264 = html.index('src="assets/video/v-hevc.mp4"'), html.index('src="assets/video/v.mp4"')
     assert hevc < h264
@@ -158,7 +163,7 @@ def test_every_chapter_is_a_semantic_section(no_runtime_js):
     assert '<sup class="v-note-ref"><a href="#v-note-1" aria-label="Note 1">1</a></sup>' in html
     assert '<li class="v-tl" data-status="planned">' in html
     assert (
-        '<ul class="v-strip" aria-label="Gallery">' in html
+        '<ul class="v-strip" aria-label="Gallery" tabindex="0">' in html
         and '<span class="v-credit">Archive</span>' in html
     )
     assert (
@@ -166,6 +171,65 @@ def test_every_chapter_is_a_semantic_section(no_runtime_js):
         in html
     )
     assert 'Generated <time datetime="2026-10-09T12:00:00Z">Oct. 9, 2026</time> · Made with Vantage' in html
+    assert (  # non-releasable facts are labelled in the notes list
+        '<li id="v-note-2" data-releasable="false">$5 million <span class="v-label v-unverified">'
+        "Unverified: needs client</span></li>"
+        in html
+        and '<li id="v-note-3" data-releasable="false">a rumor <span class="v-label v-unverified">'
+        'Unverified: needs attribution</span><span class="v-meta">Paper</span></li>'
+        in html
+    )
+    assert html.count("v-unverified") == 2 and "v-intro" not in html  # the hero leads
+
+
+def _headings(html: str) -> list[tuple[str, str]]:
+    return re.findall(r'<(h[12]) class="([^"]+)"', html)
+
+
+def _main(html: str) -> str:
+    """The rendered story, without the inlined CSS (which names every class too)."""
+    return html[html.index('<main id="v-main">') : html.index("</main>")]
+
+
+def test_story_without_a_lead_hero_still_has_a_title_and_dek(no_runtime_js):
+    s = story()
+    s["chapters"] = s["chapters"][1:]  # opens with a text chapter
+    html = render_page(s, theme_css="")
+    main = _main(html)
+    assert html.count("<h1") == 1 and _headings(html)[0] == ("h1", "v-sr")
+    assert main.startswith(
+        '<main id="v-main">\n<section class="v-chapter v-intro v-surface-paper"'
+        ' aria-labelledby="v-story-title">\n<div class="v-standfirst v-flow">\n<h1 class="v-sr" id="v-story-title">The Title</h1>\n'
+        '<p class="v-dek">A <em>dek</em></p>'
+    )
+    assert html.count("A <em>dek</em>") == 1 and main.index("v-standfirst") < main.index('id="t"')
+    assert "simulated: a demonstration of the format" in main[: main.index('id="t"')]
+    chapters = re.findall(r'<section class="v-chapter [^"]*" id="[\w-]+" data-type="', html)
+    assert len(chapters) == len(s["chapters"])  # the intro is not a story chapter: no id, no data-type
+
+    bare = story(simulated=False, dek=None, dekHtml=None)
+    bare["chapters"] = bare["chapters"][2:]  # opens with a scrub; nothing to put in a standfirst
+    html = render_page(bare, theme_css="")
+    assert "v-intro" not in html and "v-standfirst" not in _main(html)
+    assert (
+        '<main id="v-main">\n<h1 class="v-sr" id="v-story-title">The Title</h1>\n<section class="v-chapter v-scrub'
+        in html
+    )
+
+
+def test_a_second_hero_is_a_part_opener(no_runtime_js):
+    s = story()
+    part = {"type": "hero", "id": "part-2", "surface": "night", "title": "Part two", "kicker": "Later",
+            "html": "<p>Next</p>", "vantage": "ov", "capture": 1}  # fmt: skip
+    s["chapters"].insert(3, part)
+    html = render_page(s, theme_css="")
+    assert _headings(html)[:3] == [("h1", "v-display"), ("h2", "v-title"), ("h2", "v-display")]
+    assert '<h2 class="v-display" id="part-2-title">Part two</h2>' in html
+    second = html[html.index('id="part-2"') : html.index('id="s2"')]
+    assert '<p class="v-kicker">Later</p>' in second and "<p>Next</p>" in second
+    for once in ("A <em>dek</em>", '<span class="v-badge">Preview</span>', "Simulated imagery", "v-hero__cue",
+                 'class="v-logo"', "v-standfirst"):  # fmt: skip
+        assert _main(html).count(once) == 1, once
 
 
 def test_pictures_are_responsive_and_stable():
@@ -220,3 +284,28 @@ def test_runtime_js_is_one_strict_iife(monkeypatch, tmp_path):
     html = render_page(story(), theme_css="")
     assert "var b = '<\\/script>';" in html and '<script id="vantage-runtime">' in html
     assert json.loads(json.dumps(read_story(html))) == story()
+
+
+def test_raw_style_and_script_cannot_be_closed_in_any_case(monkeypatch):
+    monkeypatch.setattr(render, "runtime_js", lambda: "var s = '</SCRIPT><img src=x onerror=alert(1)>';")
+    monkeypatch.setattr(render, "runtime_css", lambda: "a{}</Style><script>alert(2)</script>")
+    html = render_page(story(), theme_css='@font-face{font-family:"x</sTyLe><script>alert(3)</script>"}')
+
+    class Tags(HTMLParser):  # the browser's view: which elements does the page really open?
+        def __init__(self) -> None:
+            super().__init__()
+            self.opened: list[tuple[str, str | None]] = []
+            self.handlers = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            self.opened.append((tag, dict(attrs).get("id")))
+            self.handlers += any(name.startswith("on") for name, _ in attrs)
+
+    parser = Tags()
+    parser.feed(html)
+    assert parser.handlers == 0
+    assert [t for t in parser.opened if t[0] in ("script", "style")] == [
+        ("script", None), ("style", "vantage-theme"), ("style", "vantage-css"),
+        ("script", "vantage-story"), ("script", "vantage-runtime"),
+    ]  # fmt: skip
+    assert read_story(html) == story()

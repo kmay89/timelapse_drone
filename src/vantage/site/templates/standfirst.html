@@ -1,0 +1,15 @@
+{# The story's standfirst: under the opening hero, or in the intro when the story opens with another chapter. #}
+{% if meta.dekHtml %}
+<p class="v-dek">{{ meta.dekHtml|safe }}</p>
+{% endif %}
+<p class="v-meta">
+{% if meta.byline %}
+<span>{{ meta.byline }}</span>
+{% endif %}
+{% if meta.dateRange %}
+<span>Latest flight <time datetime="{{ meta.dateRange.end }}">{{ meta.dateRange.end|date }}</time></span>
+{% endif %}
+</p>
+{% if meta.simulated %}
+<p class="v-disclosure">The aerial imagery in this story is simulated: a demonstration of the format, not photographs of a real place.</p>
+{% endif %}

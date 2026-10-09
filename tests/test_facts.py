@@ -9,7 +9,7 @@ import yaml
 
 from vantage.config import Facts, load_project
 from vantage.site.build import markdown
-from vantage.site.facts import FactError, FactNotes, check_release
+from vantage.site.facts import FactError, FactNotes, check_facts, check_release
 
 FACTS = Facts.model_validate({
     "facts": {
@@ -43,8 +43,12 @@ def test_tokens_render_text_and_numbered_notes():
     assert [n["factId"] for n in notes.notes()] == ["date", "price", "acres"]
     assert notes.notes()[0] == {
         "n": 1, "factId": "date", "text": "Oct. 23, 2025", "sources": ["https://example.org/a"], "status": "verified",
+        "releasable": True,
     }  # fmt: skip
+    assert [n["releasable"] for n in notes.notes()] == [True, False, True]  # reported + attribution is fine
     assert notes.unverified() == 1
+    notes.plain("{fact:rumor}")
+    assert notes.notes()[-1]["releasable"] is False and notes.unverified() == 2  # reported, no attribution
 
 
 def test_plain_contexts_resolve_without_markup():
@@ -64,10 +68,10 @@ def test_unknown_fact_is_an_error():
         FactNotes(FACTS.facts).mark("{fact:nope}")
 
 
-def _project(root: Path, *, draft: bool, body: str) -> Path:
+def _project(root: Path, *, draft: bool, body: str, brand: dict[str, str] | None = None) -> Path:
     root.mkdir()
     (root / "brand").mkdir()
-    (root / "brand" / "brand.yaml").write_text("name: X\n")
+    (root / "brand" / "brand.yaml").write_text(yaml.safe_dump({"name": "X", **(brand or {})}))
     (root / "project.yaml").write_text(
         yaml.safe_dump({"slug": "x", "title": "X {fact:date}", "draft": draft})
     )
@@ -90,3 +94,22 @@ def test_check_release(tmp_path: Path):
     assert "story.yaml.chapters[0].body: fact 'rumor' is 'reported' without an attribution" in problems
     assert "story.yaml.chapters[0].body: unknown fact {fact:ghost} (not in facts.yaml)" in problems
     assert len(problems) == 4  # each fact reported once
+
+
+def test_brand_text_is_part_of_the_release_gate(tmp_path: Path):
+    brand = {
+        "credit_line": "Flown since {fact:date}",
+        "copyright": "© {fact:ghost-year} X",
+        "disclaimer": "{fact:rumor}, {fact:price}.",
+    }
+    project = load_project(_project(tmp_path / "p", draft=False, body="On {fact:acres}.", brand=brand))
+    unknown, unreleasable = check_facts(project)
+    assert unknown == ["brand.yaml.copyright: unknown fact {fact:ghost-year} (not in facts.yaml)"]
+    assert unreleasable == [
+        "brand.yaml.disclaimer: fact 'rumor' is 'reported' without an attribution",
+        "brand.yaml.disclaimer: fact 'price' has status 'needs-client'",
+    ]
+    assert check_release(project) == unknown + unreleasable  # date (verified) and acres pass
+
+    ok = load_project(_project(tmp_path / "q", draft=False, body="x", brand={"credit_line": "{fact:date}"}))
+    assert check_release(ok) == []

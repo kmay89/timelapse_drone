@@ -3,7 +3,8 @@
 Template files (src/vantage/templates/project/) use ``{{slug}}``, ``{{title}}``
 and ``{{initial}}`` placeholders, escaped for the file they land in (YAML
 double-quoted strings, SVG/XML text, or verbatim). The rendered YAML is
-validated against the config models before anything is written.
+validated against the config models before anything is written, and every
+`{fact:id}` the template story cites must be defined in the template facts.yaml.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from vantage.config import SLUG_RE, BrandKit, ProjectConfig, Story
+from vantage.config import FACT_TOKEN_RE, SLUG_RE, BrandKit, Facts, ProjectConfig, Story
 from vantage.paths import TEMPLATE_PROJECT_DIR
 
 _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
@@ -58,8 +59,12 @@ def create_project(dest: Path, slug: str, title: str | None = None) -> Path:
             files[rel] = render_template(src.read_text(encoding="utf-8"), values, src.suffix.lower())
 
     config = ProjectConfig.model_validate(yaml.safe_load(files[Path("project.yaml")]))
-    Story.model_validate(yaml.safe_load(files[Path("story.yaml")]))
+    story = Story.model_validate(yaml.safe_load(files[Path("story.yaml")]))
     BrandKit.model_validate(yaml.safe_load(files[Path(config.brand)]))
+    facts = Facts.model_validate(yaml.safe_load(files[Path("facts.yaml")]))
+    cited = set(FACT_TOKEN_RE.findall(story.model_dump_json()))
+    if not cited <= set(facts.facts):  # a template bug, not a user error
+        raise RuntimeError(f"template story cites undefined facts: {sorted(cited - set(facts.facts))}")
 
     for rel, text in files.items():
         out = dest / rel

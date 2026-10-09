@@ -122,7 +122,7 @@ def test_render_film(tmp_path, monkeypatch):
         assert info.duration_s == pytest.approx(expected, abs=1.5 / 12)
         poster = cv2.imread(str(film.with_suffix(".jpg")))
         assert poster is not None and poster.shape[:2] == (h, w)
-    assert not list((tmp_path / "film").glob("*.part.*"))
+    assert not list((tmp_path / "film").glob("*.part"))
 
     def grab(t: float) -> np.ndarray:
         out = extract_frame(films[0], t, tmp_path / f"frame-{t:.2f}.png")
@@ -151,6 +151,33 @@ def test_render_film_without_vertical_removes_stale_cut(tmp_path, monkeypatch):
 
     assert [f.name for f in render_film(project, out)] == ["tiny-site-16x9.mp4"]
     assert sorted(p.name for p in out.iterdir()) == ["tiny-site-16x9.jpg", "tiny-site-16x9.mp4"]
+
+
+def test_render_film_is_reproducible_and_never_leaves_partial_mp4s(tmp_path, monkeypatch):
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    film = {**FILM, "vertical": False, "title_card_s": 0.5, "end_card_s": 0.5}
+    project = make_project(tmp_path / "proj", film=film)
+    first, second = tmp_path / "a", tmp_path / "b"
+    second.mkdir()
+    (second / "tiny-site-16x9.mp4.part").write_bytes(b"killed mid-encode")
+
+    for out in (first, second):
+        render_film(project, out)
+
+    # Packaging ships every film/*.mp4: only finished films may match, and they are byte-identical.
+    assert sorted(p.name for p in second.iterdir()) == ["tiny-site-16x9.jpg", "tiny-site-16x9.mp4"]
+    for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.jpg"):
+        assert (first / name).read_bytes() == (second / name).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "bad", [{"hold_s": 0}, {"fade_s": -0.5}, {"fps": 0}, {"end_card_s": -1}], ids=lambda b: next(iter(b))
+)
+def test_render_film_rejects_impossible_timing(tmp_path, bad):
+    project = make_project(tmp_path / "proj", film={**FILM, **bad})
+    with pytest.raises(ValueError, match=r"output\.film needs"):
+        render_film(project, tmp_path / "film")
+    assert not (tmp_path / "film").exists()
 
 
 def test_render_film_needs_masters(tmp_path):

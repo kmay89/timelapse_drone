@@ -187,7 +187,7 @@ _SEASON_KEYS = np.array(
         (263, 0.00, 0.00, 0.72, 1.00, 0.22, 0.00),
         (297, 0.00, 0.00, 0.58, 0.85, 0.90, 0.00),
         (322, 0.05, 0.00, 0.35, 0.12, 1.00, 0.00),
-        (346, 0.55, 0.15, 0.22, 0.00, 0.00, 0.00),
+        (346, 0.32, 0.10, 0.22, 0.00, 0.00, 0.00),  # a patchy first snow: bridges autumn and deep winter
         (366, 0.90, 0.70, 0.15, 0.00, 0.00, 0.00),
     ],
     np.float64,
@@ -421,7 +421,7 @@ POINTS_OF_INTEREST: dict[str, tuple[float, float]] = {
     "garden_ring": (_LAZY[0], _LAZY[1]),
     "great_lawn": (356.0, 246.0),
     "slide_tower": _TOWER,
-    "meadow": (190.0, 322.0),
+    "meadow": (226.0, 310.0),  # the strip of the old lot that stays inside the aligned overview frame
     "parking": (330.0, 322.0),
     "island": (150.0, 140.0),
 }
@@ -2029,6 +2029,8 @@ def generate_demo_footage(footage_dir: Path, *, fast: bool = False, seed: int = 
     if _is_current(truth_path, seed, fast):
         log.info(f"demo footage is up to date in {footage_dir}")
         return truth_path
+    # An interrupted run must not leave behind a truth file that vouches for half-rewritten footage.
+    truth_path.unlink(missing_ok=True)
     footage_dir.mkdir(parents=True, exist_ok=True)
     visits = _visits()
     workers = int(os.environ.get("VANTAGE_SYNTH_WORKERS", 0)) or min(3, max(1, (os.cpu_count() or 1) - 1))
@@ -2231,7 +2233,7 @@ def truth_homography(truth: dict, rel_path: str, t: float = 0.0) -> np.ndarray:
         if f["path"] == rel_path:
             flat = f["homography"]
             if f["kind"] == "video":
-                flat = f["frame_homographies"][min(round(t * f["fps"]), f["frames"] - 1)]
+                flat = f["frame_homographies"][min(max(round(t * f["fps"]), 0), f["frames"] - 1)]
             return np.array(flat, np.float64).reshape(3, 3)
     raise KeyError(rel_path)
 

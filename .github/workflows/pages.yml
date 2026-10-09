@@ -1,0 +1,51 @@
+# Pushes to main publish the fictional demo story to GitHub Pages. Only the demo: Pages sites are
+# public even from private repositories, so client stories are never deployed here (docs/DELIVERY.md).
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the demo site
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install ffmpeg (not on the runner image)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+      - run: uv sync --frozen
+      - name: Synthesize full-quality footage and build the story
+        run: uv run vantage demo --no-film
+      - name: Size budgets
+        run: uv run python scripts/budgets.py dist/demo-lakeside
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist/demo-lakeside/site
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

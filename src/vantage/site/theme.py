@@ -187,6 +187,10 @@ def _faces(spec: FontSpec, styles: set[str], brand: BrandKit) -> list[_Face]:
     for rel in spec.files:
         path = brand.resolve(rel)
         assert path is not None
+        if brand.root is not None and not path.resolve().is_relative_to(brand.root.resolve()):
+            raise ValueError(f"brand.yaml: font {rel!r} is outside the brand folder {brand.root}")
+        if path.suffix.lower() != ".woff2":
+            raise ValueError(f"brand.yaml: font {rel!r} is not a .woff2 file")
         style = "italic" if "italic" in path.stem.lower() else spec.style
         if style in styles:
             faces.append(_Face(spec.family, path, style, spec.weight, None))
@@ -204,17 +208,22 @@ def font_file(brand: BrandKit, role: str) -> Path:
     return face.src
 
 
+def _family(name: str) -> str:
+    """A family name as a CSS string."""
+    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _stack(spec: FontSpec) -> str:
     fallback = spec.fallback
     info = bundled_fonts().get(spec.bundled or "", {})
     if fallback == _DEFAULT_FALLBACK and info.get("category") == "serif":
         fallback = _SERIF_FALLBACK
-    return f'"{spec.family}", {fallback}'
+    return f"{_family(spec.family)}, {fallback}"
 
 
 def _font_face(face: _Face, url: str) -> str:
     rules = [
-        f'font-family:"{face.family}"',
+        f"font-family:{_family(face.family)}",
         f'src:url("{url}") format("woff2")',
         f"font-weight:{face.weight}",
         f"font-style:{face.style}",
@@ -280,11 +289,11 @@ def theme_css(brand: BrandKit, *, font_prefix: str = "assets/fonts/", italic: bo
         (typo.text, {typo.text.style} | ({"italic"} if italic else set())),
         (numeric, {numeric.style}),
     ]
-    faces: dict[Path, _Face] = {}
+    faces: dict[tuple[str, Path], _Face] = {}  # roles may share a file under different family names
     for spec, styles in roles:
         for face in _faces(spec, styles, brand):
-            faces.setdefault(face.src, face)
-    fonts = [FontAsset(face.src, font_prefix + face.src.name) for face in faces.values()]
+            faces.setdefault((face.family, face.src), face)
+    fonts = list({f.src: FontAsset(f.src, font_prefix + f.src.name) for f in faces.values()}.values())
     decls = {f"--v-{name}": value for name, value in colors.items()}
     decls |= {
         "--v-night-rgb": _rgb_triplet(colors["night"]),
