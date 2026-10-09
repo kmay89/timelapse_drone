@@ -45,8 +45,11 @@ and the site's points of interest, so alignment can be measured instead of eyeba
 
 ```python
 from vantage.demo.synth import load_truth, relative_homography
+
 truth = load_truth("projects/demo-lakeside/footage")
-H = relative_homography(truth, "2025-04-12/DJI_20250412154159_0001.JPG", "2026-09-20/DJI_20260920172528_0001.JPG")
+H = relative_homography(
+    truth, "2025-04-12/DJI_20250412154159_0001.JPG", "2026-09-20/DJI_20260920172528_0001.JPG"
+)
 ```
 
 ## Files
