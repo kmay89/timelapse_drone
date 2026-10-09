@@ -654,6 +654,15 @@ def test_sanitize_svg_refuses_entities_and_non_svg(svg: str, error: str):
         build.sanitize_svg(svg.replace("{ns}", "http://www.w3.org/2000/svg").encode(), "logo")
 
 
+def test_unverified_count_includes_facts_only_in_brand_text(tmp_path):
+    facts = json.loads(json.dumps(FACTS))
+    facts["facts"]["year"] = {"text": "2026", "status": "needs-client"}
+    root = make_project(tmp_path / "p", facts=facts)
+    _edit_yaml(root / "brand/brand.yaml", lambda b: b.update({"copyright": "© {fact:year} Tiny Parks"}))
+    story = read_story(build_site(load_project(root), tmp_path / "site").read_text())
+    assert story["meta"]["unverifiedFacts"] == 2  # cost in the story, year only in the copyright line
+
+
 def test_brand_text_facts_and_hostile_logos(tmp_path, capsys):
     facts = json.loads(json.dumps(FACTS))
     facts["facts"]["year"] = {"text": "2026", "status": "client-approved", "sources": ["Client brief"]}

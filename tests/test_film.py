@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from vantage.config import Project, load_project
-from vantage.film.render import _sections, capture_labels, render_film
+from vantage.film.render import _Film, _sections, capture_labels, render_film
 from vantage.media.ffmpeg import extract_frame, probe
 from vantage.models import AlignInfo, MasterCapture, MastersIndex, MastersVantage
 
@@ -218,3 +218,43 @@ def test_sections_order_exclusions_and_focus(tmp_path):
         "2025-06-14": "June 14, 2025",
         "2026-01-20": "Midwinter",
     }
+
+
+def test_cards_and_lower_thirds_print_facts_not_tokens(tmp_path, monkeypatch):
+    root = tmp_path / "proj"
+    make_project(
+        root,
+        film=FILM,
+        kicker="{fact:town}",
+        subtitle="{fact:acres} by the water",
+        story={
+            "vantages": [{"id": "overview", "name": "Over {fact:town}"}],
+            "captures": [{"date": "2026-01-20", "label": "{fact:opening}", "note": "Opened {fact:opening}."}],
+        },
+    )
+    facts = {"town": "Testville", "acres": "12 acres", "opening": "Jan. 20, 2026", "year": "2026"}
+    _write_yaml(
+        root / "facts.yaml", {"facts": {k: {"text": v, "status": "verified"} for k, v in facts.items()}}
+    )
+    brand = yaml.safe_load((root / "brand" / "brand.yaml").read_text(encoding="utf-8"))
+    brand |= {"credit_line": "Flown over {fact:town}", "copyright": "© {fact:year} Tiny Brand"}
+    _write_yaml(root / "brand" / "brand.yaml", brand)
+    project = load_project(root)
+    stacked: list[str] = []
+    stack = _Film._stack
+    monkeypatch.setattr(
+        _Film,
+        "_stack",
+        lambda self, blocks: stack(self, stacked.extend(b[0] or "" for b in blocks) or blocks),
+    )
+
+    sections = _sections(project, MastersIndex.load(project.masters_dir / "index.json"))
+    _Film(project, sections, 320, 180, portrait=False)
+
+    assert sections[0].name == "Over Testville"
+    assert (sections[0].shots[-1].label, sections[0].shots[-1].note) == (
+        "Jan. 20, 2026",
+        "Opened Jan. 20, 2026.",
+    )
+    assert {"Testville", "12 acres by the water", "Flown over Testville", "© 2026 Tiny Brand"} <= set(stacked)
+    assert not any("{fact:" in t for t in stacked)

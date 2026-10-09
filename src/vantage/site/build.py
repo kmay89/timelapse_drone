@@ -776,11 +776,12 @@ class StoryBuilder:
             })
             for v in self.vantages.values()
         ]  # fmt: skip
+        brand = self.brand()  # before counting: brand text can cite facts too
         meta["unverifiedFacts"] = self.notes.unverified()
         story = {
             "version": 1,
             "meta": meta,
-            "brand": self.brand(),
+            "brand": brand,
             "vantages": vantages,
             "chapters": chapters,
             "notes": self.notes.notes(),

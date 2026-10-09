@@ -14,7 +14,7 @@ vantages:
     # other visit is aligned to (path relative to footage/, t in seconds for videos):
     # reference: { source: "2026-09-12/DJI_0042.MP4", t: 12.5 }
     # Optional telemetry hint, so unrelated shots from the same flights are ignored:
-    # hint: { lat: 41.0000, lon: -81.0000, alt_m: 90, heading_deg: 180 }
+    # hint: { lat: 12.3456, lon: -45.6789, alt_m: 90, heading_deg: 180 }
     # Manual override when the automatic pick for a visit is wrong:
     # picks:
     #   "2025-06-14": { source: "2025-06-14/DJI_0007.MP4", t: 31.0 }

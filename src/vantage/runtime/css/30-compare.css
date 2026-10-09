@@ -2,7 +2,9 @@
 
 .v-cmp { touch-action: pan-y; cursor: ew-resize; }
 .v-cmp--blink { cursor: pointer; }
-.v-cmp__layer { position: absolute; inset: 0; overflow: hidden; }
+/* The pictures take no pointer events: a mouse drag over an <img> starts the browser's image drag and cancels ours. */
+.v-cmp__layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.v-stage img { -webkit-user-drag: none; }
 .v-cmp__img { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
 .v-cmp__img picture, .v-cmp__img img { display: block; width: 100%; height: 100%; }
 .v-cmp__img img { object-fit: cover; }

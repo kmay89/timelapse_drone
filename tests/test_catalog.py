@@ -51,8 +51,8 @@ def _srt(path: Path, start: dt.datetime, *, frames: int = 20, fps: int = 10) -> 
             f"{i + 1}\n00:00:{t0:06.3f} --> 00:00:{t1:06.3f}\n".replace(".", ",")
             + f'<font size="28">FrameCnt: {i + 1}, DiffTime: 100ms\n'
             f"{when:%Y-%m-%d %H:%M:%S}.{when.microsecond // 1000:03d}\n"
-            f"[iso: 100] [shutter: 1/1000.0] [fnum: 2.8] [ev: 0] [latitude: {41.34 + i * 1e-5:.6f}] "
-            f"[longitude: -81.37] [rel_alt: {60 + i * 0.1:.3f} abs_alt: 350.000] "
+            f"[iso: 100] [shutter: 1/1000.0] [fnum: 2.8] [ev: 0] [latitude: {12.34 + i * 1e-5:.6f}] "
+            f"[longitude: -45.67] [rel_alt: {60 + i * 0.1:.3f} abs_alt: 350.000] "
             f"[gb_yaw: -90.0 gb_pitch: -30.0 gb_roll: 0.0] </font>\n"
         )
     path.write_text("\n".join(blocks), encoding="utf-8")
@@ -63,8 +63,8 @@ def _photo(path: Path, *, seed: int, size: tuple[int, int] = (320, 200), when: s
     if when:
         exif.get_ifd(ExifTags.IFD.Exif)[ExifTags.Base.DateTimeOriginal] = when
         gps = exif.get_ifd(ExifTags.IFD.GPSInfo)
-        gps[ExifTags.GPS.GPSLatitudeRef], gps[ExifTags.GPS.GPSLatitude] = "N", (41.0, 20.0, 24.0)
-        gps[ExifTags.GPS.GPSLongitudeRef], gps[ExifTags.GPS.GPSLongitude] = "W", (81.0, 22.0, 12.0)
+        gps[ExifTags.GPS.GPSLatitudeRef], gps[ExifTags.GPS.GPSLatitude] = "N", (12.0, 20.0, 24.0)
+        gps[ExifTags.GPS.GPSLongitudeRef], gps[ExifTags.GPS.GPSLongitude] = "W", (45.0, 40.0, 12.0)
     path.parent.mkdir(parents=True, exist_ok=True)
     rgb = cv2.cvtColor(_texture(seed, *size), cv2.COLOR_BGR2RGB)
     Image.fromarray(rgb).save(path, exif=exif)
@@ -118,7 +118,7 @@ def test_catalog_dates_telemetry_and_candidates(project: Project) -> None:
     assert video.start == "2025-04-12T10:41:07"
     assert (video.kind, video.width, video.height, video.fps) == ("video", 160, 96, 10.0)
     assert video.duration_s == pytest.approx(2.0, abs=0.15)
-    assert video.lat == pytest.approx(41.3401, abs=1e-4) and video.lon == -81.37
+    assert video.lat == pytest.approx(12.3401, abs=1e-4) and video.lon == -45.67
     assert video.heading_deg == 270.0 and video.gimbal_pitch_deg == -30.0
     assert by_path["flights/DJI_0002.MP4"].telemetry == "flights/DJI_0002.srt"
     assert by_path["flights/clip.mov"].start == "2025-09-05T22:30:00"
@@ -127,7 +127,7 @@ def test_catalog_dates_telemetry_and_candidates(project: Project) -> None:
 
     still = by_path["stills/IMG_0007.JPG"]
     assert (still.kind, still.width, still.height) == ("photo", 2000, 1200)
-    assert still.lat == pytest.approx(41.34) and still.lon == pytest.approx(-81.37)
+    assert still.lat == pytest.approx(12.34) and still.lon == pytest.approx(-45.67)
 
     vids = [c for c in catalog.candidates if c.source == video.id]
     assert 3 <= len(vids) <= 5  # 2 s sampled every 0.5 s
@@ -135,7 +135,7 @@ def test_catalog_dates_telemetry_and_candidates(project: Project) -> None:
     for cand in vids:
         assert cand.file == f"candidates/{video.id}/{cand.t:09.3f}.jpg"
         assert cand.sharpness > 0 and cand.rel_alt is not None and 60 <= cand.rel_alt <= 62
-        assert cand.lat == pytest.approx(41.34, abs=1e-3) and cand.heading_deg == 270.0
+        assert cand.lat == pytest.approx(12.34, abs=1e-3) and cand.heading_deg == 270.0
     (big,) = [c for c in catalog.candidates if c.source == still.id]
     assert big.t == 0.0
     assert cv2.imread(str(project.work_dir / big.file)).shape[:2] == (960, 1600)

@@ -36,8 +36,9 @@ for (const [edition, url] of EDITIONS) {
       await page.goto(url);
       const story = await readStory(page);
       await expect(page.locator("html")).toHaveClass(/\bno-js\b/);
-      const hero = story.chapters.find((ch) => ch.type === "hero");
-      await expect(page.locator("h1")).toHaveText(hero?.title ?? story.meta.title);
+      // The opening hero's title is the <h1>; a story that opens otherwise has a hidden <h1> with its title.
+      const lead = story.chapters[0]?.type === "hero" ? story.chapters[0] : null;
+      await expect(page.locator("h1")).toHaveText(lead?.title || story.meta.title);
       for (const ch of story.chapters) {
         await expect(section(page, ch)).toBeVisible();
         if (ch.title) await expectReadable(page.locator(`#${ch.id}-title`), ch.title);

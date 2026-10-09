@@ -1,7 +1,10 @@
 /* Explore: vantage chips, a pinch/pan stage, a real-date scrubber, play, and two-flight modes. */
 
 .v-flow > .v-x { grid-column: full; }
-@media (min-width: 48em) { .v-flow > .v-x { grid-column: wide; width: min(100%, 76svh * var(--ar)); } }
+/* Wide screens: the instrument and its heading share the stage's width, centred in the wide column. */
+@media (min-width: 48em) {
+  .v-flow > .v-x, .v-explore.v-live .v-head { grid-column: wide; justify-self: center; width: min(100%, 76svh * var(--ar, 1.6)); }
+}
 .v-x__chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 var(--v-gutter) 1rem; scrollbar-width: none; }
 @media (min-width: 48em) { .v-x__chips { padding-inline: 0; } }
 .v-chip {
@@ -50,17 +53,18 @@
 .v-x__input:focus-visible { outline: 0; }
 .v-x__input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--v-accent); }
 
-.v-x__pick { display: none; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.v-x__pick { display: none; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: .75rem; }
 .v-x:not([data-mode="single"]) .v-x__pick { display: grid; }
 .v-x:not([data-mode="single"]) .v-x__time { display: none; }
 .v-x__pick label { position: relative; display: grid; gap: .45rem; }
 .v-x__pick label::after {
-  content: ""; position: absolute; right: 1rem; bottom: 18px; width: 7px; height: 7px; pointer-events: none;
+  content: ""; position: absolute; right: .8rem; bottom: 19px; width: 6px; height: 6px; pointer-events: none;
   border: solid var(--v-fg-2); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
 }
 .v-x__pick .v-label { color: var(--v-fg-2); }
+@media (max-width: 24.9em) { .v-x__pick .v-x__select { font-size: .875rem; } }
 .v-x__select {
-  -webkit-appearance: none; appearance: none; width: 100%; min-height: 44px; padding: 0 2.25rem 0 .9rem; border-radius: 10px;
+  -webkit-appearance: none; appearance: none; width: 100%; min-height: 44px; padding: 0 1.75rem 0 .75rem; border-radius: 10px;
   border: 1px solid var(--v-rule); background: var(--v-bg-2); color: var(--v-fg); font: 500 .9375rem/1.2 var(--v-font-text);
 }
 .v-seg { display: inline-flex; justify-self: start; padding: 3px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--v-rule); }

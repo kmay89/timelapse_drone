@@ -3,8 +3,8 @@
 {% include "intro.html" %}
 <section {{ attrs(ch, index) }}>
 <div class="v-flow">
-{{ head(ch) }}
-<ol class="v-tl-list">
+{{ head(ch, "v-wide") }}
+<ol class="v-tl-list v-wide">
 {% for it in ch["items"] %}
 <li class="v-tl"{% if it.status %} data-status="{{ it.status }}"{% endif %}>
 <span class="v-tl__date v-label">{{ it.date }}</span>

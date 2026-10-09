@@ -14,7 +14,7 @@
 
 /* Scroll cue: a hairline with a falling highlight, shown after 2 s if the reader hasn't moved. */
 .js .v-hero__cue {
-  display: block; position: absolute; left: 50%; right: auto; bottom: calc(var(--v-safe-b) + 12px); width: 1px; height: 2.25rem;
+  display: block; position: absolute; left: 50%; right: auto; bottom: calc(var(--v-safe-b) + 10px); width: 1px; height: 1.75rem;
   overflow: hidden; background: rgb(var(--v-paper-rgb) / .22); opacity: 0; transition: opacity .8s var(--v-ease);
 }
 .js .v-hero__cue::after { content: ""; position: absolute; left: 0; top: 0; width: 1px; height: 45%; background: var(--v-paper); animation: v-cue 2.2s var(--v-ease) infinite; }
@@ -23,15 +23,7 @@
 
 /* Pause for the ambient motion (WCAG 2.2.2): the bottom corner, in the stage's own padding; on wide
  * screens the scroll cue stands on it. Paused, the still stops drifting too. */
-.v-hero__pause {
-  position: absolute; z-index: 2; right: calc(var(--v-gutter) - 5px); bottom: var(--v-safe-b); width: 44px; height: 44px;
-  color: var(--v-text-on-night); animation: v-fade 1s var(--v-ease) 1.2s both;
-}
-.v-hero__pause::before {
-  content: ""; position: absolute; inset: 5px; z-index: -1; border-radius: 50%; background: rgb(var(--v-night-rgb) / .5);
-  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: inset 0 0 0 1px rgb(var(--v-paper-rgb) / .2);
-}
-.v-hero__pause .v-ico svg { width: 16px; height: 16px; stroke-width: 2; }
+.v-hero__pause { position: absolute; z-index: 2; right: calc(var(--v-gutter) - 5px); bottom: var(--v-safe-b); animation: v-fade 1s var(--v-ease) 1.2s both; }
 .js .v-hero.v-still .v-hero__media img { animation-play-state: paused; }
 @media (min-width: 48em) {
   .v-hero__pause { bottom: calc(var(--v-safe-b) + 1.25rem); }

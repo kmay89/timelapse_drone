@@ -28,7 +28,10 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const selects = ["Before", "After"].map((t) => h("select", { class: "v-x__select", "aria-label": `${t} flight` }));
   const modes = { single: "Time", curtain: "Curtain", blink: "Blink" };
   const modeBtns = Object.entries(modes).map(([m, t]) => h("button", { class: "v-seg__btn", type: "button", "data-mode": m, text: t }));
-  const chips = ids.map((id) => h("button", { class: "v-chip", type: "button", "data-id": id, text: VANTAGES[id].name }));
+  const chips = ids.map((id) => {
+    const name = VANTAGES[id].name;
+    return h("button", { class: "v-chip", type: "button", "data-id": id, "aria-label": name, title: name, text: name.split(/[,;(]/)[0].trim() });
+  });
   const odo = new Odometer("");
   stage.append(odo.el);
   const ui = h("div", { class: "v-x" }, [
@@ -102,7 +105,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     odo.label = "";
     chips.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.id === id)));
     canvas.setAttribute("aria-label", v.name);
-    ui.style.setProperty("--ar", String(v.aspect));
+    sec.style.setProperty("--ar", String(v.aspect)); // the stage and the heading above it share its width
     u = seq.length - 1;
     cx = cy = 0.5;
     z = 1;

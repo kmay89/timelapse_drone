@@ -14,8 +14,8 @@ lang: en
 location:
   name: "TODO: Site name"
   region: "TODO: City, State"
-  # lat: 41.0000
-  # lon: -81.0000
+  # lat: 12.3456
+  # lon: -45.6789
 timezone: America/New_York # IANA zone the flights happened in (dates are local calendar days)
 brand: brand/brand.yaml
 footage_dir: footage # raw flights, one sub-folder per visit: footage/2026-09-12/DJI_0042.MP4 (+ .SRT)

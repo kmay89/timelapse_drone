@@ -120,17 +120,28 @@ function gallery(/** @type {HTMLElement} */ sec) {
   mark();
 }
 
-/** VIDEO: plays (muted, inline) while at least half on screen, unless the reader paused it. A player the
- * runtime built (single files) gets its blob as it nears the viewport, so its controls work on arrival. */
+/** VIDEO: plays (muted, inline) while at least half on screen, unless the reader paused it. The browser's
+ * control bar gives way to one round play/pause (the clip is a short silent loop); a tap on the picture
+ * toggles too. A player the runtime built (single files) gets its blob as it nears the viewport. */
 function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let el = $("video", sec);
   const media = $(".v-clip .v-media", sec);
   const built = !el && media && ch.video.sources.length;
   if (built) {
-    el = buildVideo(ch.video, { controls: true, loop: ch.loop, width: ch.video.poster.w, height: ch.video.poster.h });
+    el = buildVideo(ch.video, { loop: ch.loop, width: ch.video.poster.w, height: ch.video.poster.h });
     media.replaceChildren(el);
   }
   if (!el) return;
+  el.controls = false;
+  const btn = h("button", { class: "v-btn v-round v-clip__btn", type: "button" });
+  const sync = () => {
+    btn.setAttribute("aria-label", `${el.paused ? "Play" : "Pause"} the video`);
+    btn.replaceChildren(icon(el.paused ? "play" : "pause"));
+  };
+  btn.addEventListener("click", () => (el.paused ? loadVideo(el, ch.video).then(() => tryPlay(el)) : el.pause()));
+  el.addEventListener("click", () => btn.click());
+  el.after(btn);
+  sync();
   let auto = false; // the next "pause" event is ours, not the reader's
   let userPaused = false;
   el.addEventListener("pause", () => {
@@ -138,6 +149,7 @@ function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     auto = false;
   });
   el.addEventListener("play", () => (userPaused = false));
+  for (const type of ["play", "pause"]) el.addEventListener(type, sync);
   if (built) watchWarm(el, { update() {}, warm: () => loadVideo(el, ch.video) });
   let seen = false;
   new IntersectionObserver(

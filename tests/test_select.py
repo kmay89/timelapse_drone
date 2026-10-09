@@ -22,8 +22,8 @@ from vantage.media.ffmpeg import FrameWriter
 from vantage.models import Candidate, Catalog, Selection, Source
 from vantage.process.select import CHAIN_TRIES, chain_by_date, haversine_m, load_frame, select_frames
 
-SITE = (41.3170, -81.3530)  # the vantage hint
-FAR = (41.3260, -81.3530)  # ~1 km north of it
+SITE = (12.3400, -45.6700)  # the vantage hint (synthetic: open ocean)
+FAR = (12.3490, -45.6700)  # ~1 km north of it
 CANDIDATE_WIDTH = 800
 
 
