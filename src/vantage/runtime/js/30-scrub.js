@@ -109,6 +109,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       trackH = track.offsetHeight;
       railW = ticks.clientWidth;
       s = fitCanvas(canvas, W, H);
+      pins.measure();
       cams = steps.map((/** @type {any} */ st) => st.focus || homeCam(v, W, H));
       const widest = Math.max(...[homeCam(v, W, H), ...cams].map((c) => frameRect(W, H, v.aspect, c).w));
       need = decodeWidth(imgs[0], widest, s, v.aspect);

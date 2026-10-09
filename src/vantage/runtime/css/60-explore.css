@@ -1,7 +1,7 @@
 /* Explore: vantage chips, a pinch/pan stage, a real-date scrubber, play, and two-flight modes. */
 
 .v-flow > .v-x { grid-column: full; }
-@media (min-width: 48em) { .v-flow > .v-x { grid-column: wide; } }
+@media (min-width: 48em) { .v-flow > .v-x { grid-column: wide; width: min(100%, 76svh * var(--ar)); } }
 .v-x__chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 var(--v-gutter) 1rem; scrollbar-width: none; }
 @media (min-width: 48em) { .v-x__chips { padding-inline: 0; } }
 .v-chip {
@@ -16,7 +16,7 @@
   background: var(--v-night); color: var(--v-text-on-night); touch-action: pan-y; cursor: grab;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
-@media (min-width: 48em) { .v-x__stage { aspect-ratio: var(--ar); width: min(100%, 76svh * var(--ar)); margin-inline: auto; border-radius: 6px; } }
+@media (min-width: 48em) { .v-x__stage { aspect-ratio: var(--ar); border-radius: 6px; } }
 .v-x__stage.v-zoomed { touch-action: none; }
 .v-x__stage:active { cursor: grabbing; }
 .v-x__stage .v-scrim { background: linear-gradient(rgb(var(--v-night-rgb) / .55), rgb(var(--v-night-rgb) / 0) 9rem); }

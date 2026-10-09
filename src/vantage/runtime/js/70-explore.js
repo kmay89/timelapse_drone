@@ -96,7 +96,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     odo.label = "";
     chips.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.id === id)));
     canvas.setAttribute("aria-label", v.name);
-    stage.style.setProperty("--ar", String(v.aspect));
+    ui.style.setProperty("--ar", String(v.aspect));
     u = seq.length - 1;
     cx = cy = 0.5;
     z = 1;

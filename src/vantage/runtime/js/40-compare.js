@@ -143,6 +143,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         l.img.sizes = `${Math.ceil(widest)}px`;
       }
       tagW = tags.map((t) => t.offsetWidth);
+      pins.measure();
       drawn = "";
     },
     enter() {
@@ -171,8 +172,8 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         } else {
           after.style.clipPath = `inset(0 0 0 ${X.toFixed(1)}px)`;
           handle.style.transform = `translate3d(${X.toFixed(1)}px,0,0)`;
-          tags[0].style.opacity = String(clamp((X - 24 - tagW[0]) / 32));
-          tags[1].style.opacity = String(clamp((W - X - 24 - tagW[1]) / 32));
+          tags[0].style.opacity = String(clamp((X - 18 - tagW[0]) / 20));
+          tags[1].style.opacity = String(clamp((W - X - 18 - tagW[1]) / 20));
         }
       }
       const now = Math.round(clamp(split) * 100);
@@ -182,7 +183,7 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         grip.setAttribute("aria-valuetext", `${100 - now}% ${labels[1]}, ${now}% ${labels[0]}`);
       }
       cards.set(wins.map((w) => (steps[0].html ? cardAlpha(w, x) : 0)));
-      pins.place(r, W, H, (hs, px) => (blink ? vis(hs, before ? ch.before : ch.after) : vis(hs, px < X ? ch.before : ch.after)), 72, 24);
+      pins.place(r, W, H, (hs, px) => (blink ? vis(hs, before ? ch.before : ch.after) : vis(hs, px < X ? ch.before : ch.after)), 72, 24, blink ? undefined : (px) => px < X);
       return false;
     },
   };

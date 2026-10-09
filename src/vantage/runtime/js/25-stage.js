@@ -117,16 +117,22 @@ class Pins {
         openSheet({ kicker: "Point of interest", title: hs.label, html: hs.html || "", from: el }),
       );
       layer.append(el);
-      return { hs, el, x: -1e4, y: -1e4, o: -1, flip: false };
+      return { hs, el, x: -1e4, y: -1e4, o: -1, w: 0, flip: false };
     });
+  }
+
+  /** Cache each pin's width (dot + label) for edge-aware label placement; call on resize. */
+  measure() {
+    for (const it of this.items) it.w = it.el.offsetWidth;
   }
 
   /**
    * @param {any} r image rect @param {number} W @param {number} H
    * @param {(hs: any, x: number) => number} vis opacity for a hotspot at stage x
    * @param {number} top @param {number} bottom pins outside [top, H - bottom] hide (odometer, rail)
+   * @param {(x: number) => boolean} [left] label side; default: wherever the label fits
    */
-  place(r, W, H, vis, top, bottom) {
+  place(r, W, H, vis, top, bottom, left) {
     for (const it of this.items) {
       const x = r.x + it.hs.x * r.w;
       const y = r.y + it.hs.y * r.h;
@@ -145,7 +151,8 @@ class Pins {
         it.o = o;
         it.el.style.opacity = String(o);
       }
-      const flip = x > W * 0.58;
+      const reach = it.w - 22;
+      const flip = left ? left(x) : x + reach > W - 12 && (x - reach >= 12 || x > W / 2);
       if (flip !== it.flip) it.el.classList.toggle("v-hs--l", (it.flip = flip));
     }
   }
