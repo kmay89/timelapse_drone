@@ -350,7 +350,10 @@ a `family` without control characters: a brand kit cannot add CSS rules or `url(
   and `meta.unverifiedFacts: number`. Draft builds style non-releasable facts visibly
   (`.v-fact[data-releasable="false"]`, titled "Unverified: <status>"), and the notes list labels
   them "Unverified: needs client", "Unverified: needs attribution" (`reported` without an
-  `attribution`) or "Unverified: do not print" (`templates/refs.html`). `vantage build --release`
+  `attribution`) or "Unverified: do not print" (`templates/refs.html`). A `do-not-print` fact is
+  withheld from every build, draft or release: wherever it is used the build prints
+  `facts.WITHHELD` ("[withheld: do-not-print]") inside the usual marker, and its note carries that
+  placeholder as `text` with empty `sources`. `vantage build --release`
   fails if any fact used in the story is not releasable (`Fact.releasable`), if a token references
   an unknown fact, or if the project is `draft: true`.
 * Brand text: `brand.yaml`'s `credit_line`, `disclaimer` and `copyright` (`facts.BRAND_TEXT`)
