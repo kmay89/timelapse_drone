@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from vantage.demo.synth import ORIGIN
-from vantage.paths import repo_root
+from vantage.paths import PUBLIC_PROJECTS, repo_root
 
 ROOT = repo_root()
 TEST_SITE = (12.34, -45.67)  # open Atlantic: the place every test, doc and template example uses
@@ -140,4 +140,35 @@ def test_published_files_hold_only_synthetic_coordinates() -> None:
             ]
     assert not found, (
         "real-looking coordinates (use the synthetic TEST_SITE or the demo ORIGIN):\n" + "\n".join(found)
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "projects/acme-park/project.yaml",
+        "projects/acme-park/facts.yaml",
+        "projects/acme-park/README.md",
+        "projects/acme-park/brand/logo.svg",
+        "projects/acme-park/masters/overview/2025-06-14.jpg",
+        "acme-park/project.yaml",  # `vantage new acme-park --dir ""` used to land at the top level
+        "acme-park/story.yaml",
+        "acme-park/facts.yaml",
+        "acme-park/brand/brand.yaml",
+        "acme-park/masters/overview/2025-06-14.jpg",
+    ],
+)
+def test_gitignore_keeps_client_projects_out(path: str) -> None:
+    result = subprocess.run(["git", "check-ignore", "-q", "--no-index", path], cwd=ROOT, check=False)
+    if result.returncode == 128:
+        pytest.skip("not a git checkout")
+    assert result.returncode == 0, f"{path} is not ignored: one `git add -A` would publish a client project"
+
+
+def test_only_fictional_projects_are_published() -> None:
+    project_files = [p for p in _published_files() if p.name == "project.yaml"]
+    allowed = {ROOT / "projects" / slug / "project.yaml" for slug in PUBLIC_PROJECTS}
+    allowed.add(ROOT / "src" / "vantage" / "templates" / "project" / "project.yaml")
+    assert project_files and set(project_files) <= allowed, sorted(
+        p.relative_to(ROOT).as_posix() for p in set(project_files) - allowed
     )

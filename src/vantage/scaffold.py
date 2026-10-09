@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 
 from vantage.config import FACT_TOKEN_RE, SLUG_RE, BrandKit, Facts, ProjectConfig, Story
-from vantage.paths import TEMPLATE_PROJECT_DIR
+from vantage.paths import TEMPLATE_PROJECT_DIR, exposed_in_public_checkout
 
 _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 _XML_SUFFIXES = frozenset({".svg", ".xml", ".html"})
@@ -41,11 +41,21 @@ def default_title(slug: str) -> str:
     return " ".join(word.capitalize() for word in slug.split("-"))
 
 
-def create_project(dest: Path, slug: str, title: str | None = None) -> Path:
-    """Write a new project into `dest` (created; must be empty or absent) and return its path."""
+def create_project(dest: Path, slug: str, title: str | None = None, *, public: bool = False) -> Path:
+    """Write a new project into `dest` (created; must be empty or absent) and return its path.
+
+    Client projects never go inside the public Vantage checkout, where one `git add -A` would publish
+    their YAML, facts, brand files and masters; `public=True` is for a new fictional demo only.
+    """
     if not SLUG_RE.match(slug):
         raise ValueError(f"invalid slug {slug!r}: use lowercase letters/digits separated by single hyphens")
     dest = dest.expanduser().resolve()
+    if not public and exposed_in_public_checkout(dest):
+        raise ValueError(
+            f"refusing to create {dest} inside the public Vantage checkout: client projects live in the "
+            "private projects repo. Set VANTAGE_PROJECTS or pass --dir with a folder outside this "
+            "checkout (--public is for a fictional demo only)."
+        )
     if dest.exists() and (not dest.is_dir() or any(dest.iterdir())):
         raise FileExistsError(f"{dest} already exists and is not empty")
     title = " ".join((title or default_title(slug)).split())

@@ -97,7 +97,7 @@ placeholder logos), a README and an empty `footage/` from `src/vantage/templates
 
 | command | does |
 |---|---|
-| `vantage new <slug> [--title T] [--dir D]` | scaffold a project from the template |
+| `vantage new <slug> [--title T] [--dir D] [--public]` | scaffold a project from the template; refuses an empty `--dir` and a folder inside this public checkout unless `--public` (fictional demos) |
 | `vantage validate <project>` | load + cross-check YAML, brand files, capture refs |
 | `vantage ingest <project>` | catalog footage + sample candidate frames + contact sheets |
 | `vantage select <project>` | choose best frame per vantage per visit |

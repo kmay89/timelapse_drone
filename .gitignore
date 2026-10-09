@@ -18,6 +18,17 @@ test-results/
 **/work/
 dist/
 
+# Client projects never enter this public repo (CLAUDE.md invariant 1): only the fictional demo is
+# tracked under projects/, and a project folder dropped at the top level keeps its YAML, facts, brand
+# files and masters out of `git add -A`.
+/projects/*
+!/projects/demo-lakeside/
+/*/project.yaml
+/*/story.yaml
+/*/facts.yaml
+/*/brand/
+/*/masters/
+
 # Demo masters are regenerated from synthetic footage in CI
 projects/demo-lakeside/masters/
 

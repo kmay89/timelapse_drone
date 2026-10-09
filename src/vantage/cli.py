@@ -148,7 +148,13 @@ def main(
 def _load(ref: str | Path) -> Project:
     from vantage.config import load_project
 
-    return load_project(paths.find_project(ref, _opts.projects_dir))
+    project = load_project(paths.find_project(ref, _opts.projects_dir))
+    if paths.exposed_in_public_checkout(project.root):
+        log.warn(
+            f"{_show(project.root)} is inside the public Vantage checkout: move client projects to the "
+            "private projects repo (VANTAGE_PROJECTS) before anything is committed"
+        )
+    return project
 
 
 def _dist(project: Project) -> Path:
@@ -700,15 +706,21 @@ def new_cmd(
         str | None, typer.Option("--title", "-t", help="Display title (default: from slug).")
     ] = None,
     parent: Annotated[
-        Path | None,
+        str | None,
         typer.Option("--dir", "-d", help="Folder to create <slug>/ in (default: the projects root)."),
     ] = None,
+    public: Annotated[
+        bool,
+        typer.Option("--public", help="Allow a folder inside this public checkout (fictional demos only)."),
+    ] = False,
 ) -> None:
-    """Scaffold a new project from the template."""
+    """Scaffold a new project from the template (outside this public checkout)."""
     from vantage.scaffold import create_project
 
-    root = parent.expanduser().resolve() if parent else paths.projects_root(_opts.projects_dir)
-    dest = create_project(root / slug, slug, title)
+    if parent is not None and not parent.strip():  # `--dir "$VANTAGE_PROJECTS"` with the variable unset
+        raise ValueError("--dir is empty: set VANTAGE_PROJECTS or name the folder to create the project in")
+    root = Path(parent).expanduser().resolve() if parent else paths.projects_root(_opts.projects_dir)
+    dest = create_project(root / slug, slug, title, public=public)
     ref = slug if root == paths.projects_root(_opts.projects_dir) else _show(dest)
     log.ok(f"created {_show(dest)}")
     typer.echo(

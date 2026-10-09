@@ -2,7 +2,9 @@
 
 The engine (this repository) is public and generic. **Client projects live in a separate, private
 repository** and are pointed to with `VANTAGE_PROJECTS`. Only the fictional demo,
-`projects/demo-lakeside`, lives here.
+`projects/demo-lakeside`, lives here. `vantage new` refuses a folder inside this checkout (`--public`
+is for another fictional demo), `.gitignore` ignores anything else under `projects/`, and every
+command warns when it loads a project from inside this checkout.
 
 ## Layout of the private projects repo
 
