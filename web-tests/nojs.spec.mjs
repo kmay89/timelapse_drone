@@ -3,6 +3,7 @@
 import { expect, test } from "@playwright/test";
 import {
   SLUG,
+  byId,
   chapterCheckpoints,
   distUrl,
   effectiveOpacity,
@@ -41,7 +42,7 @@ for (const [edition, url] of EDITIONS) {
       await expect(page.locator("h1")).toHaveText(lead?.title || story.meta.title);
       for (const ch of story.chapters) {
         await expect(section(page, ch)).toBeVisible();
-        if (ch.title) await expectReadable(page.locator(`#${ch.id}-title`), ch.title);
+        if (ch.title) await expectReadable(byId(page, `${ch.id}-title`), ch.title);
       }
       for (const prose of await page.locator(".v-text .v-prose").all()) await expectReadable(prose);
       expect(errors).toEqual([]);

@@ -69,6 +69,11 @@ _CLIP_VERSION = 1
 _SW_CONFIG = re.compile(r"/\*@config\*/.*?/\*@end\*/", re.S)
 _LINK_SCHEMES = {"", "http", "https", "mailto", "tel"}
 _LOGO_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"}
+# DOM ids the page itself uses (template, intro, notes, the runtime's sheet), and the ids whose
+# "<id>-title" heading id would be one of them: no chapter may take these.
+_PAGE_ID = re.compile(
+    r"(?:v-main|v-story|v-notes|v-dlg|v-note-\d+|vantage-(?:theme|css|story|runtime))(?:-title)?"
+)
 # SVG elements that run code or embed HTML, and the URL attributes whose scheme is checked.
 _SVG_DROP = {"script", "foreignobject", "handler", "iframe", "embed", "object"}
 _SVG_ANIMATE = {"set", "animate"}
@@ -766,17 +771,19 @@ class StoryBuilder:
             raise ValueError(f"{self.project.slug}: no vantage has any masters to build from")
         meta = self.meta()
         chapters: list[dict[str, Any]] = []
-        ids = Counter[str]()
+        taken: set[str] = set()  # chapter ids and their "<id>-title" heading ids
         story_chapters = self.project.story.chapters
         # the dek is read right under the opening hero, so its facts are numbered there
         lead_hero = bool(story_chapters) and isinstance(story_chapters[0], HeroChapter)
         if not lead_hero:
             meta |= self._dek(cfg.dek)
         for i, ch in enumerate(story_chapters):
-            cid = _dest(ch.id or f"{ch.type}-{i + 1}")
-            ids[cid] += 1
-            if ids[cid] > 1:
-                cid = f"{cid}-{ids[cid]}"
+            cid = base = _dest(ch.id or f"{ch.type}-{i + 1}")
+            n = 1  # a repeat or one of the page's own ids takes the next free "-2", "-3", ...
+            while {cid, f"{cid}-title"} & taken or _PAGE_ID.fullmatch(cid):
+                n += 1
+                cid = f"{base}-{n}"
+            taken |= {cid, f"{cid}-title"}
             built = self.chapter(ch, cid)
             if built is not None:
                 chapters.append(built)

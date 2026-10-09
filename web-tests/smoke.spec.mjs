@@ -2,6 +2,7 @@
 // image it shows actually loads, and nothing scrolls sideways on a phone.
 import { expect, test } from "@playwright/test";
 import {
+  byId,
   chapterCheckpoints,
   escapeRe,
   expectNoSidewaysScroll,
@@ -21,6 +22,16 @@ test.describe("smoke", () => {
     expect(ids).toEqual(story.chapters.map((ch) => ch.id));
     for (const ch of story.chapters) {
       await expect(section(page, ch)).toHaveAttribute("data-type", ch.type);
+    }
+  });
+
+  test("chapter locators find any id the build keeps", async ({ page }) => {
+    // Chapter ids keep [A-Za-z0-9._-], so a client story may have "2025" or "phase-1.5": no `#id` CSS.
+    const ids = ["2025", "phase-1.5", "1.5", "_draft"];
+    await page.setContent(ids.map((id) => `<section id="${id}"><h2 id="${id}-title">${id}</h2></section>`).join(""));
+    for (const id of ids) {
+      await expect(section(page, { id })).toHaveCount(1);
+      await expect(byId(page, `${id}-title`)).toHaveText(id);
     }
   });
 

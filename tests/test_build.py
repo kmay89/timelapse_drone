@@ -634,6 +634,29 @@ def test_script_links_are_dropped_and_gallery_names_do_not_collide(tmp_path):
     assert (site / first).read_bytes() != (site / second).read_bytes()
 
 
+def test_chapter_ids_are_unique_and_never_the_pages_own(tmp_path):
+    text = {"type": "text", "body": "Words."}
+    chapters = [
+        {"id": "vantage-story", "title": "Clash"},  # would precede the StoryJSON <script> in the page
+        {"id": "v story", "title": "Clash"},  # its heading id would be the intro's v-story-title
+        {"id": "a", "title": "A"},
+        {"id": "a"},
+        {"id": "a-2"},  # the repeat above already took a-2
+        {"id": "a-title"},  # the heading id of the first "a"
+        {"id": "2025", "title": "Kept"},  # a leading digit or a dot is a legal id: kept as written
+        {"id": "phase-1.5"},
+    ]
+    story = {"vantages": STORY["vantages"], "chapters": [text | c for c in chapters]}
+    root = make_project(tmp_path / "p", story=story)
+    html = build_site(load_project(root), tmp_path / "site").read_text()
+    ids = [c["id"] for c in read_story(html)["chapters"]]
+    assert ids == ["vantage-story-2", "v-story-2", "a", "a-2", "a-2-2", "a-title-2", "2025", "phase-1.5"]
+    page_ids = re.findall(r'\sid="([^"]*)"', html)
+    assert len(page_ids) == len(set(page_ids)), sorted(page_ids)
+    assert {"v-story-title", "2025-title", "a-title"} <= set(page_ids)
+    assert re.search(r'<(\w+)[^>]*\sid="vantage-story"', html).group(1) == "script"
+
+
 def test_service_worker_installs_one_jpeg_per_image(built):
     _, site, story = built
     config = json.loads(re.search(r"const CONFIG = (\{.*?\});", (site / "sw.js").read_text()).group(1))

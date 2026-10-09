@@ -213,6 +213,13 @@ type StoryJSON = {
 };
 ```
 
+Chapter ids are the chapter's `id` (default `<type>-<n>`) with each run of
+characters outside `[A-Za-z0-9._-]` turned into `-`, so an id may start with a
+digit or hold a dot (`2025`, `phase-1.5`): find one with `getElementById` or
+`[id="…"]`, never `#id` CSS. Each id, and the `<id>-title` id of its heading, is
+unique in the page: a repeat, or an id the page uses itself (`v-main`,
+`vantage-story`, `v-note-<n>`, …), takes the next free `-2`, `-3` suffix.
+
 Capture references in YAML (`"2026-09-12"`, `"earliest"`, `"latest"`, `"#3"`)
 are resolved to indices into the vantage's date-sorted `captures` at build time.
 A date that is not an exact capture resolves to the nearest capture on or

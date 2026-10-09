@@ -36,7 +36,7 @@ Playwright's WebKit is not iOS Safari: real-device checks per release are listed
 
 | Spec | Checks |
 |---|---|
-| `smoke` | chapters render in StoryJSON order; scrolling the whole story gives no console errors, page errors, HTTP errors or failed requests, and every on-screen image loads; no sideways scroll; stats figures fill their rows evenly and never run past their column (at the device width and at 768 px); checkpoint screenshots |
+| `smoke` | chapters render in StoryJSON order; the chapter locators find ids such as `2025` and `phase-1.5`; scrolling the whole story gives no console errors, page errors, HTTP errors or failed requests, and every on-screen image loads; no sideways scroll; stats figures fill their rows evenly and never run past their column (at the device width and at 768 px); checkpoint screenshots |
 | `nojs` | JavaScript off (the iOS Quick Look case) for the site, the single file and the lite file: headline, hero, every chapter title and text paragraph visible at full opacity; every `<img>` has `alt`, figure images non-empty; images load; no sideways scroll; screenshots |
 | `interactions` | the runtime's controls by role and ARIA (contract below), with default motion and again with `prefers-reduced-motion: reduce` (set through `contextOptions`), where every control still works, nothing errors and the hero has no pause button and never plays its loop; default motion only: the pinned scrub stage, the hero pause button, a compare step with no text (made by editing the StoryJSON in flight) leaving the next step's card visible, and save for offline failing (a stubbed service worker that never activates, is refused or runs out of space) |
 | `file` | `file://` loads of `site/index.html`, the unzipped offline zip, the single file and the lite file: right `data-edition`, every chapter, images load, zero errors, **zero network requests** |
@@ -57,7 +57,7 @@ Playwright clears `.results/test-results/` at the start of each run.
 
 | Feature | Contract |
 |---|---|
-| chapters | `<section id="<chapter id>" data-type="<type>">` in StoryJSON order (rendered by `site/render.py`) |
+| chapters | `<section id="<chapter id>" data-type="<type>">` in StoryJSON order (rendered by `site/render.py`); an id may start with a digit or hold a dot (`2025`, `phase-1.5`), so specs find it with `section()` / `byId()` from `support.mjs` (`[id="…"]`), never `#id` |
 | hero pause | in each hero with a picture, a `button` named "Pause the background video" ("Pause the background motion" when there is no video, only the still's slow drift); activating it pauses and renames it "Play the background video" / "…motion"; the choice is kept per story for the session (`sessionStorage` `vantage:<slug>:still`), so the loop stays paused after a reload; with reduced motion the button is hidden and the loop never plays |
 | video chapter | the browser's control bar is replaced by one round `button` named "Play the video" or "Pause the video" (following the player); a tap on the picture toggles it too |
 | scrub stage | a `<canvas>` inside the scrub section that stays pinned (same top within 2 px) while the section scrolls |

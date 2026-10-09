@@ -46,7 +46,13 @@ export function watchNetwork(page) {
 export const readStory = (page) =>
   page.locator("#vantage-story").evaluate((el) => JSON.parse(el.textContent));
 
-export const section = (page, ch) => page.locator(`section#${ch.id}`);
+/**
+ * The element with this exact id. An attribute selector, never `#id`: a chapter id may start with a
+ * digit or hold a dot ("2025", "phase-1.5"), which `#id` CSS reads as a syntax error or a class.
+ */
+export const byId = (page, id, tag = "") => page.locator(`${tag}[id="${id.replace(/["\\]/g, "\\$&")}"]`);
+
+export const section = (page, ch) => byId(page, ch.id, "section");
 
 export const vantageOf = (story, ch) => story.vantages.find((v) => v.id === ch.vantage);
 
