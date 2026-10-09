@@ -1,0 +1,9 @@
+/* Reduced motion and print for the runtime layer (the base sheet already zeroes durations). */
+
+@media (prefers-reduced-motion: reduce) {
+  .js .v-hero__media img, .v-hs__dot::after, .js .v-hero__cue::after { animation: none; }
+}
+
+@media print {
+  .v-chrome, .v-progress, .v-dlg-wrap, .v-toast, .v-track, .v-x, .v-dots, .v-hero__cue { display: none; }
+}

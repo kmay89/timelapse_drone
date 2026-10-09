@@ -1,0 +1,68 @@
+/* Explore: vantage chips, a pinch/pan stage, a real-date scrubber, play, and two-flight modes. */
+
+.v-flow > .v-x { grid-column: full; }
+@media (min-width: 48em) { .v-flow > .v-x { grid-column: wide; } }
+.v-x__chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 var(--v-gutter) 1rem; scrollbar-width: none; }
+@media (min-width: 48em) { .v-x__chips { padding-inline: 0; } }
+.v-chip {
+  flex: none; min-height: 40px; padding: .5rem 1rem; border-radius: 999px; border: 1px solid var(--v-rule); background: none;
+  color: var(--v-fg-2); font: 500 .875rem/1.2 var(--v-font-text); cursor: pointer;
+}
+.v-chip[aria-pressed="true"] { background: var(--v-fg); border-color: var(--v-fg); color: var(--v-bg); }
+
+.v-x__stage {
+  position: relative; width: 100%; aspect-ratio: 4 / 5; max-height: 76svh; overflow: hidden; isolation: isolate;
+  background: var(--v-night); color: var(--v-text-on-night); touch-action: pan-y; cursor: grab;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+@media (min-width: 48em) { .v-x__stage { aspect-ratio: 16 / 10; border-radius: 6px; } }
+.v-x__stage.v-zoomed { touch-action: none; }
+.v-x__stage:active { cursor: grabbing; }
+.v-x__stage .v-scrim { background: linear-gradient(rgb(var(--v-night-rgb) / .55), rgb(var(--v-night-rgb) / 0) 9rem); }
+.v-x__stage .v-odo { top: 16px; left: 18px; }
+.v-x__stage .v-odo__date { font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2.25rem); }
+.v-x__stage .v-cmp__tag { top: 16px; }
+.v-x__reset { position: absolute; z-index: 4; right: 12px; bottom: 12px; }
+.v-x__reset[hidden] { display: none; }
+.v-x:not([data-mode="curtain"]) .v-cmp__handle, .v-x[data-mode="single"] .v-cmp__tag, .v-x:not([data-mode="single"]) .v-odo { display: none; }
+
+.v-x__bar { display: grid; gap: 1rem; padding: 1.1rem var(--v-gutter) 0; }
+@media (min-width: 48em) { .v-x__bar { grid-template-columns: 1fr auto; align-items: start; padding-inline: 0; } }
+.v-x__time { display: flex; align-items: center; gap: .75rem; }
+.v-x__play { flex: none; width: 44px; height: 44px; background: var(--v-accent); color: var(--v-on-accent); }
+.v-x__play .v-ico svg { stroke-width: 2; }
+.v-x__range { position: relative; flex: 1; height: 44px; margin-bottom: .9rem; }
+.v-x__ticks { position: absolute; left: 14px; right: 14px; top: 22px; height: 1px; background: var(--v-rule); pointer-events: none; }
+.v-x__ticks .v-tick { background: var(--v-fg-2); }
+.v-x__ticks .v-tick--year { background: var(--v-rule); }
+.v-x__ticks .v-tick__label { top: 17px; color: var(--v-fg-2); }
+.v-x__input { -webkit-appearance: none; appearance: none; position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; background: none; cursor: pointer; }
+.v-x__input::-webkit-slider-runnable-track { height: 44px; background: none; }
+.v-x__input::-moz-range-track { background: none; }
+.v-x__input::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 28px; height: 28px; margin-top: 8px; border: 0; border-radius: 50%;
+  background: var(--v-paper); box-shadow: 0 0 0 4px rgb(var(--v-night-rgb) / .55), 0 2px 10px rgb(0 0 0 / .4);
+}
+.v-x__input::-moz-range-thumb { width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--v-paper); }
+.v-x__input:focus-visible { outline: 0; }
+.v-x__input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--v-accent); }
+
+.v-x__pick { display: none; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.v-x:not([data-mode="single"]) .v-x__pick { display: grid; }
+.v-x:not([data-mode="single"]) .v-x__time { display: none; }
+.v-x__pick label { position: relative; display: grid; gap: .45rem; }
+.v-x__pick label::after {
+  content: ""; position: absolute; right: 1rem; bottom: 18px; width: 7px; height: 7px; pointer-events: none;
+  border: solid var(--v-fg-2); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
+}
+.v-x__pick .v-label { color: var(--v-fg-2); }
+.v-x__select {
+  -webkit-appearance: none; appearance: none; width: 100%; min-height: 44px; padding: 0 2.25rem 0 .9rem; border-radius: 10px;
+  border: 1px solid var(--v-rule); background: var(--v-bg-2); color: var(--v-fg); font: 500 .9375rem/1.2 var(--v-font-text);
+}
+.v-seg { display: inline-flex; justify-self: start; padding: 3px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--v-rule); }
+.v-seg__btn {
+  min-height: 38px; padding: 0 1.05rem; border: 0; border-radius: 999px; background: none; cursor: pointer;
+  color: var(--v-fg-2); font: 600 .8125rem/1 var(--v-font-text); letter-spacing: .01em;
+}
+.v-seg__btn[aria-pressed="true"] { background: var(--v-fg); color: var(--v-bg); }
