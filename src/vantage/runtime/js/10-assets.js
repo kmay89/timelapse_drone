@@ -86,12 +86,17 @@ async function decodeImg(/** @type {any} */ img, /** @type {number} */ need) {
   return { src: el, w: el.naturalWidth, h: el.naturalHeight, close() {} };
 }
 
-/** Tiny LQIP images (data: URIs), decoded once and shared. */
+/** Tiny LQIP images (data: URIs), decoded once and shared; lqipGen counts arrivals (stages redraw). */
 const lqips = new Map();
+let lqipGen = 0;
 function lqip(/** @type {any} */ img) {
   let el = lqips.get(img.lqip);
   if (!el) {
     el = new Image();
+    el.onload = () => {
+      lqipGen++;
+      kick();
+    };
     el.src = img.lqip;
     lqips.set(img.lqip, el);
   }

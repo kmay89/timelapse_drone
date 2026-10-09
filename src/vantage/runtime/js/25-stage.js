@@ -154,12 +154,15 @@ class Pins {
 class Odometer {
   constructor(/** @type {string} */ total) {
     this.total = total;
-    this.count = h("span", { class: "v-odo__count v-label" });
+    this.count = h("span", { class: "v-odo__count" });
     this.month = h("span", { class: "v-wheel" });
     this.year = h("span", { class: "v-wheel" });
     this.note = h("p", { class: "v-odo__note" });
     this.el = h("div", { class: "v-odo", "aria-hidden": "true" }, [
-      this.count,
+      h("p", { class: "v-odo__top v-label" }, [
+        this.count,
+        story.meta.simulated && h("span", { class: "v-odo__sim", text: "Simulated" }),
+      ]),
       h("div", { class: "v-odo__date" }, [this.month, this.year]),
       this.note,
     ]);
