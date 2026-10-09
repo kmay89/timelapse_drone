@@ -35,7 +35,10 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   );
   const cards = new Cards(steps.map((/** @type {any} */ st) => st.html));
   const layer = h("div", { class: "v-hs-layer" });
-  const pins = new Pins(layer, ch.hotspots);
+  const pins = new Pins(layer, ch.hotspots, (hs, x) => {
+    const img = layers[+!(blink ? before : x < clamp(split + nudge) * W)].sized[0]; // the side the pin is on
+    return img.naturalWidth ? crop({ src: img, w: img.naturalWidth, h: img.naturalHeight }, hs.x, hs.y) : null;
+  });
   const stage = h("div", { class: `v-stage v-cmp${blink ? " v-cmp--blink" : ""}` }, [
     ...layers.map((l) => l.el),
     h("div", { class: "v-scrim" }),
@@ -209,7 +212,8 @@ function compare(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       }
       cards.set(steps[0].html ? cardAlphas(wins, x) : wins.map(() => 0));
       const side = (/** @type {number} */ px) => px < X;
-      pins.place(r, W, H, (hs, px) => vis(hs, (blink ? before : side(px)) ? ch.before : ch.after), top, 24, cards, blink ? undefined : side);
+      const off = (/** @type {number} */ px) => (blink ? 1 : clamp((Math.abs(px - X) - 14) / 22)); // clear of the rule
+      pins.place(r, W, H, (hs, px) => vis(hs, (blink ? before : side(px)) ? ch.before : ch.after) * off(px), top, 24, cards, blink ? undefined : side);
       return false;
     },
   };

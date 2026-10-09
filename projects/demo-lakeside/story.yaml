@@ -66,8 +66,8 @@ chapters:
   - type: scrub
     id: twelve-flights
     kicker: Twelve flights
-    title: Eighteen months from the same patch of sky
-    body: Scroll to fly the site forward in time. Every frame is aligned to the last flight.
+    title: Eighteen months, one frame
+    body: Every flight is aligned to the last one, so the camera holds still and only the site changes.
     vantage: overview
     from: earliest
     to: latest
@@ -75,29 +75,29 @@ chapters:
     steps:
       - capture: "2025-04-12"
         text: >-
-          **April 2025.** Weeds split the old lot. The wave pool is dry except for its deep end, and four
+          **Before.** Weeds split the old lot. The wave pool is dry except for its deep end, and four
           slide tubes still coil off a single concrete tower.
       - capture: "2025-07-18"
         text: >-
-          **July.** In ten weeks the slides, the lazy river and two buildings are gone. Concrete is sorted
+          **Demolition.** In ten weeks the slides, the lazy river and two buildings are gone. Concrete is sorted
           into piles to be crushed on site; it will go back under the new paths.
         focus: [0.62, 0.54, 1.6]
       - capture: "2025-10-24"
         text: >-
-          **October.** Graded from the curb to the reeds. The basin is backfilled, the west half of the lot
+          **Grading.** The site is shaped from the curb to the reeds. The basin is backfilled, the west half of the lot
           is stripped to earth, and orange survey paint marks where the promenades will run.
       - capture: "2026-01-31"
         text: >-
-          **January.** Under snow the plan is legible for the first time: the curving promenades plowed
+          **The plan appears.** Under snow the layout is legible for the first time: the curving promenades plowed
           clear, the round plaza between the gatehouses, and a freshly striped lot.
         focus: [0.44, 0.58, 1.5]
       - capture: "2026-05-09"
         text: >-
-          **May.** Sod goes down in strips from west to east. Sand fills the old fan of the wave pool,
+          **Planting.** Sod goes down in strips from west to east. Sand fills the old fan of the wave pool,
           and the first of {fact:new-trees} go into the ground along the paths.
       - capture: "2026-09-20"
         text: >-
-          **September.** The deep end is now the shallow end of a beach.
+          **The beach.** The deep end is now the shallow end of a beach.
         focus: [0.44, 0.45, 1.8]
     hotspots:
       - id: slide-tower
@@ -133,7 +133,7 @@ chapters:
     id: before-after
     kicker: Before and after
     title: Seventeen months apart
-    body: Drag the line. Left is April 2025; right is September 2026.
+    body: April 2025 against September 2026, from the same point in the sky.
     vantage: overview
     mode: curtain
     before: earliest
@@ -209,6 +209,7 @@ chapters:
 
   - type: video
     id: last-evening
+    kicker: Flight footage
     title: The last summer evening of the old park
     body: Late May 2025, from over the water. The slide tower still stands; the fence is already up.
     clip: { source: "2025-05-30/DJI_0002.MP4", t: 0 }
@@ -231,6 +232,7 @@ chapters:
 
   - type: credits
     id: credits
+    kicker: Credits
     title: About this story
     body: >-
       A demonstration of Vantage. The site, the organizations, the people quoted and every figure are

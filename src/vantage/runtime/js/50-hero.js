@@ -58,7 +58,7 @@ function hero(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
 
   if (media) {
     const what = video ? "video" : "motion";
-    const btn = h("button", { class: "v-btn v-hero__pause", type: "button" });
+    const btn = h("button", { class: "v-btn v-round v-hero__pause", type: "button" });
     const setStill = (/** @type {boolean} */ s) => {
       still = s;
       session(key, s ? "1" : "0");

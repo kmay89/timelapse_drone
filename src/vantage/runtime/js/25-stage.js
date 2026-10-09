@@ -127,19 +127,42 @@ class Cards {
   }
 }
 
-/** Hotspot pins: a dot and a label pill pinned in image coordinates; tap opens a sheet. */
+/**
+ * The sheet's detail view of a pin: a 16:9 crop, a third of the picture wide, around (x, y) of decoded
+ * picture `d` (null while none is decoded), with the pin drawn where it falls.
+ */
+function crop(/** @type {any} */ d, /** @type {number} */ x, /** @type {number} */ y) {
+  if (!d) return null;
+  const c = h("canvas", { class: "v-dlg__crop", width: 960, height: 540, "aria-hidden": "true" });
+  const ctx = c.getContext("2d");
+  const w = d.w / 3;
+  const sx = clamp(x * d.w - w / 2, 0, d.w - w);
+  const sy = clamp(y * d.h - (w * 9) / 32, 0, d.h - (w * 9) / 16);
+  ctx.drawImage(d.src, sx, sy, w, (w * 9) / 16, 0, 0, 960, 540);
+  ctx.beginPath();
+  ctx.arc(((x * d.w - sx) * 960) / w, ((y * d.h - sy) * 960) / w, 34, 0, 7);
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = ACCENT;
+  ctx.stroke();
+  return c;
+}
+const ACCENT = getComputedStyle(root).getPropertyValue("--v-accent").trim() || "#fff";
+
+/** Hotspot pins: a dot and a label pill pinned in image coordinates; tap opens a sheet, with a detail
+ * crop of the picture under the pin when `detail(hotspot, stage x)` can make one. */
 class Pins {
-  constructor(/** @type {HTMLElement} */ layer, /** @type {any[]} */ hotspots) {
+  constructor(/** @type {HTMLElement} */ layer, /** @type {any[]} */ hotspots, detail = (/** @type {any} */ _hs, /** @type {number} */ _x) => /** @type {any} */ (null)) {
     this.items = hotspots.map((hs) => {
       const el = h("button", { class: "v-hs", type: "button", tabindex: "-1", "aria-label": `${hs.label}: details` }, [
         h("span", { class: "v-hs__dot" }),
         h("span", { class: "v-hs__label", text: hs.label }),
       ]);
+      const it = { hs, el, x: -1e4, y: -1e4, o: -1, w: 0, hh: 0, flip: false };
       el.addEventListener("click", () =>
-        openSheet({ kicker: "Point of interest", title: hs.label, html: hs.html || "", from: el }),
+        openSheet({ kicker: "Point of interest", title: hs.label, from: el, node: h("div", {}, [detail(hs, it.x), h("div", { class: "v-prose", html: hs.html || "" })]) }),
       );
       layer.append(el);
-      return { hs, el, x: -1e4, y: -1e4, o: -1, w: 0, hh: 0, flip: false };
+      return it;
     });
   }
 

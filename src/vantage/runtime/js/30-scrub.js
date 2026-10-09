@@ -32,7 +32,7 @@ function scrub(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const odo = new Odometer(pad(n));
   const cards = new Cards(steps.map((/** @type {any} */ s) => s.html));
   const layer = h("div", { class: "v-hs-layer" });
-  const pins = new Pins(layer, ch.hotspots);
+  const pins = new Pins(layer, ch.hotspots, (hs) => crop(store.get(cur), hs.x, hs.y));
   const ticks = h("div", { class: "v-rail__ticks" });
   const fill = h("div", { class: "v-rail__fill" });
   const knob = h("div", { class: "v-rail__knob" });
