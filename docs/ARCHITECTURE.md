@@ -301,7 +301,8 @@ vantage.ingest.catalog.build_catalog(project: Project, *, force: bool = False) -
 vantage.process.select.select_frames(project: Project, catalog: Catalog | None = None) -> Selection
     # writes work/selection.json (loads catalog.json when not given)
 vantage.process.masters.make_masters(project: Project, selection: Selection | None = None) -> MastersIndex
-    # writes masters/<vantage>/<date>.jpg + masters/index.json + work/review/**
+    # writes masters/<vantage>/<date>.jpg + masters/index.json + work/review/**; raises ValueError,
+    # touching nothing, if a master's visit is neither in the catalog nor excluded in story.yaml
 vantage.site.build.build_site(project: Project, out_dir: Path) -> Path
     # out_dir = dist/<slug>/site ; returns out_dir / "index.html"
 vantage.film.render.render_film(project: Project, out_dir: Path) -> list[Path]

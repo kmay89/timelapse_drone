@@ -12,6 +12,8 @@ write
 
 Frames are streamed twice (register, then render) so memory stays bounded by
 one full-resolution frame plus the reference, whatever the number of visits.
+All visits are processed together, so a master whose visit has no footage here
+stops the run instead of being deleted (see `_check_footage`).
 """
 
 from __future__ import annotations
@@ -304,14 +306,50 @@ def _check_names(vantage: Vantage, vs: VantageSelection | None) -> None:
         )
 
 
+def _abbrev(dates: list[str], keep: int = 3) -> str:
+    return ", ".join(dates[:keep]) + (f" and {len(dates) - keep} more" if len(dates) > keep else "")
+
+
+def _check_footage(project: Project, catalog: Catalog, selection: Selection) -> None:
+    """Refuse to delete masters of visits with no footage here (only some visits pulled into footage/).
+
+    Committed masters are the only copy a build needs, so they must not vanish because a session
+    holds just the newest flight. Nor can they be kept beside new ones: every master of a vantage is
+    cut to one common crop and graded to one reference, so the visits are processed together. A
+    master is removed only when its visit was processed again or is excluded in story.yaml.
+    """
+    have = set(catalog.dates()) | {c.date.isoformat() for c in project.story.captures if c.exclude}
+    lost: list[str] = []
+    for vantage in project.story.vantages:
+        vs = selection.vantages.get(vantage.id)
+        if vs is None or not vs.picks:
+            continue  # left as is (make_masters skips it)
+        stems = sorted(p.stem for p in (project.masters_dir / vantage.id).glob("*.jpg"))
+        gone = [d for d in stems if ISO_DATE_RE.fullmatch(d) and d not in have and d not in vs.picks]
+        if gone:
+            lost.append(f"{vantage.id} {_abbrev(gone)}")
+    if lost:
+        raise ValueError(
+            f"masters/ has visits with no footage in {project.footage_dir} ({'; '.join(lost)}); "
+            "aligning crops and grades every visit together, so it needs the footage of all of them. "
+            "Pull the missing visits, or build from the committed masters (`vantage build`) without "
+            "processing; to drop a visit, set `exclude: true` on its date under captures in story.yaml"
+        )
+
+
 def make_masters(project: Project, selection: Selection | None = None) -> MastersIndex:
-    """Write masters/<vantage>/<date>.jpg, masters/index.json and work/review/** for every vantage."""
+    """Write masters/<vantage>/<date>.jpg, masters/index.json and work/review/** for every vantage.
+
+    Raises ValueError before touching anything when a master on disk belongs to a visit that is
+    neither in the catalog (footage/) nor excluded in story.yaml: see `_check_footage`.
+    """
     if selection is None:
         selection = Selection.load(project.work_dir / "selection.json")
     catalog = Catalog.load(project.work_dir / "catalog.json")
     sources = {s.id: s for s in catalog.sources}
     for vantage in project.story.vantages:
         _check_names(vantage, selection.vantages.get(vantage.id))
+    _check_footage(project, catalog, selection)
     index = MastersIndex()
     for vantage in project.story.vantages:
         vs = selection.vantages.get(vantage.id)

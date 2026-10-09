@@ -73,8 +73,9 @@ Cloudflare Access or a Netlify password for review.
 - Keep a second copy on a local drive. After a project ends, move the bucket to infrequent access.
 - Masters (aligned JPEGs) **are** committed in the private projects repo: they are small and let CI
   rebuild the story without footage.
-- Cloud Claude Code sessions have limited disk (about 30 GB): pull only the visits being processed,
-  or run heavy ingests locally.
+- Cloud Claude Code sessions have limited disk (about 30 GB). `vantage process` crops and grades
+  every visit together, so it needs the footage of all of them; with only some visits pulled it stops
+  before touching `masters/`. Run heavy processing locally, or build from the committed masters.
 
 ## Release process
 
