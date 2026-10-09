@@ -212,6 +212,8 @@ test.describe("interactions", () => {
     test.skip(!/^https?:/.test(page.url()) || !(await page.locator("html[data-sw]").count()), "not a hosted edition");
     await page.getByRole("button", { name: /chapters|contents|index/i }).first().click();
     const save = page.getByRole("dialog").getByRole("button", { name: "Save for offline" });
+    await expect(page.getByRole("dialog")).toBeVisible();
+    test.skip(!(await save.count()), "this browser has no service workers here, so no Save for offline");
     await expect(save).toBeEnabled();
     return save;
   };

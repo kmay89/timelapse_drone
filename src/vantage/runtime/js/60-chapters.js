@@ -143,7 +143,7 @@ function videoChapter(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   new IntersectionObserver(
     (entries) => {
       seen = entries[entries.length - 1].isIntersecting; // a fast fling can batch an arrival and a departure
-      if (seen && !userPaused && !reduced) (built ? loadVideo(el, ch.video) : Promise.resolve()).then(() => seen && tryPlay(el));
+      if (seen && !userPaused && !reduced) loadVideo(el, ch.video).then(() => seen && tryPlay(el));
       else if (!seen && !el.paused) {
         auto = true;
         el.pause();

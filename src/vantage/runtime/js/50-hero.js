@@ -1,9 +1,8 @@
 // @ts-check
 /* HERO: the reveal (CSS, gated on .js), a scroll cue that appears after 2 s only if the reader hasn't
  * scrolled, and the ambient loop: muted, inline, attempted autoplay. A rejected play() (Low Power Mode,
- * thermal limits) keeps the still, which also carries a slow Ken Burns drift. Both pause off screen, and
- * a pause button stops both for the rest of the session (WCAG 2.2.2). Under reduced motion there is
- * neither, so no button either, and the loop is never even decoded. */
+ * thermal limits) keeps the still, which also carries a slow Ken Burns drift. Both pause off screen and
+ * at the pause button, for the rest of the session (WCAG 2.2.2); reduced motion has neither. */
 
 /** Muted inline <video> for a single-file edition; loadVideo() gives it its blob when first needed. */
 function buildVideo(/** @type {any} */ video, /** @type {Record<string, any>} */ attrs) {
@@ -12,13 +11,10 @@ function buildVideo(/** @type {any} */ video, /** @type {Record<string, any>} */
   return el;
 }
 
-/** @type {WeakMap<HTMLVideoElement, Promise<void>>} */
-const videoLoads = new WeakMap();
-/** A built video's blob, decoded once (H.264 is the last source, and the only one in single files). */
-function loadVideo(/** @type {HTMLVideoElement} */ el, /** @type {any} */ video) {
-  let p = videoLoads.get(el);
-  if (!p) videoLoads.set(el, (p = assetURL(video.sources[video.sources.length - 1].src).then((u) => void (el.src = u))));
-  return p;
+/** Resolves once a video has a source: a built one gets its blob, decoded once (H.264 is the last
+ * source, and the only one in single files). */
+function loadVideo(/** @type {any} */ el, /** @type {any} */ video) {
+  return (el.vLoad = el.vLoad || (el.src || $("source", el) ? Promise.resolve() : assetURL(video.sources[video.sources.length - 1].src).then((u) => void (el.src = u))));
 }
 
 /** Play muted and inline; resolves false when the browser refuses (the poster stays). */
@@ -31,28 +27,21 @@ function tryPlay(/** @type {HTMLVideoElement} */ el) {
   );
 }
 
-/** Per-tab memory (sessionStorage), silent where storage is blocked. */
-const session = (/** @type {string} */ key, /** @type {string | null} */ value = null) => {
+/** sessionStorage get (one argument) or set; silent where storage is blocked. */
+function session(/** @type {string} */ key, /** @type {string} */ value = "") {
   try {
-    if (value === null) return sessionStorage.getItem(key);
-    sessionStorage.setItem(key, value);
+    return value ? sessionStorage.setItem(key, value) : sessionStorage.getItem(key);
   } catch {
-    /* private mode, blocked storage: forget */
+    return null;
   }
-  return null;
-};
+}
 
 /** @returns {Component} */
 function hero(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const media = $(".v-hero__media", sec);
   /** @type {HTMLVideoElement | null} */
-  let video = $("video", sec);
-  const built = !video && media && ch.video?.sources.length;
-  if (built) {
-    video = buildVideo(ch.video, { loop: true, "aria-hidden": "true", tabindex: "-1" });
-    media.append(video);
-  }
-  const vid = /** @type {HTMLVideoElement} */ (video);
+  const video =
+    $("video", sec) || (media && ch.video?.sources.length ? media.appendChild(buildVideo(ch.video, { loop: true, "aria-hidden": "true", tabindex: "-1" })) : null);
   if (video) {
     video.addEventListener("playing", () => media.classList.add("v-playing"));
     if (!video.paused) media.classList.add("v-playing");
@@ -60,10 +49,7 @@ function hero(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   const key = `vantage:${story.meta.slug}:still`;
   let still = session(key) === "1";
   let shown = false;
-  const play = () => {
-    if (!video || reduced || still || !shown) return;
-    (built ? loadVideo(vid, ch.video) : Promise.resolve()).then(() => shown && !still && !reduced && tryPlay(vid));
-  };
+  const play = () => video && !reduced && !still && shown && loadVideo(video, ch.video).then(() => shown && !still && !reduced && tryPlay(video));
   motionQuery.addEventListener("change", () => (reduced ? video?.pause() : play()));
 
   if (media) {

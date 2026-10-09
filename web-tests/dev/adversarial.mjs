@@ -73,15 +73,29 @@ const browser = await chromium.launch();
   await ex.scrollIntoViewIfNeeded();
   await page.getByRole("button", { name: "Blink", exact: true }).click();
   const eb = await ex.boundingBox();
-  await page.mouse.move(eb.x + eb.width / 2, eb.y + eb.height - 30);
+  const hx = eb.x + eb.width * 0.2; // clear of the blink toggle at the bottom centre
+  await page.mouse.move(hx, eb.y + eb.height - 30);
   await page.mouse.down();
   await page.waitForTimeout(250);
   const held = await page.locator("#explore .v-cmp__tag--b").evaluate((e) => e.classList.contains("v-on"));
-  await page.mouse.move(eb.x + eb.width / 2, eb.y + eb.height + 60, { steps: 5 }); // below the stage
+  await page.mouse.move(hx, eb.y + eb.height + 60, { steps: 5 }); // below the stage
   await page.mouse.up();
   await page.waitForTimeout(300);
   const stuck = await page.locator("#explore .v-cmp__tag--b").evaluate((e) => e.classList.contains("v-on"));
   check("explore blink: release outside the stage shows the after flight again", held && !stuck, `held=${held} stuck=${stuck}`);
+  // The toggle is a real button: a hold never leaves it pressed, and it survives a hold-and-release.
+  const toggle = page.locator("#explore").getByRole("button", { name: /^Show / });
+  await toggle.click();
+  const pressed = await toggle.getAttribute("aria-pressed");
+  await page.mouse.move(hx, eb.y + eb.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(250);
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  check(
+    "explore blink: toggle on, then a hold and release ends on the after flight, unpressed",
+    pressed === "true" && (await toggle.getAttribute("aria-pressed")) === "false" && !(await page.locator("#explore .v-cmp__tag--b").evaluate((e) => e.classList.contains("v-on"))),
+  );
   check("no console errors (mouse)", errors.length === 0, errors.join(" | "));
   await ctx.close();
 }

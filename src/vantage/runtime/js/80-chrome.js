@@ -20,8 +20,7 @@ async function share() {
 }
 
 /* Save for offline: one status line + meter, kept across openings of the contents sheet. A worker that
- * never activates (or registers) and a save that stalls both end, after a while, in a retry state; the
- * outcome is announced politely. */
+ * won't register or activate, a stalled save and a full disk end in a retry state, announced politely. */
 const saveStatus = h("p", { class: "v-offline__status v-meta", text: "Keep the whole story on this device for airplane mode." });
 const saveMeter = h("progress", { class: "v-meter", max: "1", value: "0", hidden: true });
 const saveBtn = h("button", { class: "v-btn v-btn--pill", type: "button" }, [icon("save"), "Save for offline"]);
@@ -32,7 +31,7 @@ const saveSet = (/** @type {string} */ text) => saveSay.say((saveStatus.textCont
 /** No word from the worker for `ms`: give up (it may still finish; its next message is honoured). */
 const saveWatch = (/** @type {number} */ ms) => {
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => saveFail("Saving didn’t start. Check the connection and try again."), ms);
+  saveTimer = window.setTimeout(() => saveFail(`Saving ${saveMeter.hidden ? "didn’t start" : "stalled"}. Check the connection and try again.`), ms);
 };
 
 function saveFail(/** @type {string} */ text) {
@@ -74,7 +73,7 @@ if (canSave) {
     } else if (m.type === "vantage:saved" || (m.type === "vantage:status" && m.total && m.cached >= m.total)) saved();
     else if (m.type === "vantage:error")
       saveFail(
-        /quota/i.test(`${m.name} ${m.message}`)
+        /quota/i.test(m.message)
           ? "Not enough free space on this device to save it all. Free some up and try again."
           : "Couldn’t save everything. Check the connection and try again.",
       );

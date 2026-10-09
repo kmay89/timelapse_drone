@@ -51,18 +51,19 @@ test.describe("smoke", () => {
         await list.scrollIntoViewIfNeeded();
         await page.waitForTimeout(300); // let the figures count up and the layout settle
         const { rows, overflow } = await list.evaluate((ul) => {
+          // Layout boxes (offset*), not painted ones: arrival reveals slide figures in with a transform.
           const cells = [...ul.children].map((li) => {
             const r = li.getBoundingClientRect();
             let right = r.left;
             for (const n of li.querySelectorAll("*")) right = Math.max(right, n.getBoundingClientRect().right);
-            return { top: Math.round(r.top), left: r.left, right: r.right, over: right - r.right };
+            return { top: li.offsetTop, left: li.offsetLeft, right: li.offsetLeft + li.offsetWidth, over: right - r.right };
           });
           const tops = [...new Set(cells.map((c) => c.top))];
-          const box = ul.getBoundingClientRect();
+          const [left, right] = [ul.offsetLeft, ul.offsetLeft + ul.offsetWidth];
           // A row is full when its cells reach from the list's left edge to its right edge.
           const rows = tops.map((t) => {
             const row = cells.filter((c) => c.top === t);
-            return Math.min(...row.map((c) => c.left)) - box.left < 2 && box.right - Math.max(...row.map((c) => c.right)) < 2;
+            return Math.min(...row.map((c) => c.left)) - left < 2 && right - Math.max(...row.map((c) => c.right)) < 2;
           });
           return { rows, overflow: cells.map((c) => Math.round(c.over)).filter((o) => o > 0) };
         });
