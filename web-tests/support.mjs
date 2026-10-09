@@ -3,7 +3,6 @@
 import { expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -14,9 +13,9 @@ export const DIST = path.join(path.resolve(here, "..", process.env.VANTAGE_DIST 
 /** file:// URL of a file under dist/<slug>/. */
 export const distUrl = (rel) => pathToFileURL(path.join(DIST, rel)).href;
 
-/** Unzips dist/<slug>/<slug>-offline.zip into a temp folder; returns the file:// URL of its index.html. */
-export function unzipOffline() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vantage-offline-"));
+/** Unzips dist/<slug>/<slug>-offline.zip into `dir`; returns the file:// URL of its index.html. */
+export function unzipOffline(dir) {
+  fs.mkdirSync(dir, { recursive: true });
   execFileSync("python3", ["-m", "zipfile", "-e", path.join(DIST, `${SLUG}-offline.zip`), dir]);
   return pathToFileURL(path.join(dir, SLUG, "index.html")).href;
 }
