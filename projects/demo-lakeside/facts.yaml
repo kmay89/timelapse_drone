@@ -20,6 +20,6 @@ facts:
     sources: ["Synthetic site plan (vantage.demo.synth layout)"]
     status: verified
   stalls-to-meadow:
-    text: 135 parking spaces
+    text: 132 parking spaces
     sources: ["Synthetic site plan (vantage.demo.synth layout)"]
     status: verified

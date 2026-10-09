@@ -1,0 +1,99 @@
+/* Pinned stages (scrub, compare): a 100svh sticky stage inside a track whose height is the scroll length. */
+
+@media screen {
+  .v-live :is(.v-seq, .v-pins, .v-pair, .v-notes-list, .v-sheet, .v-also) { display: none; }
+}
+.v-pinned { padding-bottom: 0; }
+:not(.v-live) > .v-track { display: none; }
+.v-track { position: relative; height: calc(var(--len) * 1vh); height: calc(var(--len) * 1svh); }
+.v-stage {
+  position: sticky; top: 0; height: 100vh; height: 100svh; overflow: hidden; isolation: isolate;
+  background: var(--v-night); color: var(--v-text-on-night);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.v-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.v-scrim {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(rgb(var(--v-night-rgb) / .66), rgb(var(--v-night-rgb) / 0) calc(var(--v-safe-t) + 9rem)),
+    linear-gradient(0deg, rgb(var(--v-night-rgb) / .82), rgb(var(--v-night-rgb) / 0) 38%);
+}
+.v-grain .v-scrim::after { content: ""; position: absolute; inset: 0; background: var(--v-noise); background-size: 160px; opacity: .06; }
+
+/* Date odometer */
+.v-odo {
+  position: absolute; z-index: 3; top: calc(var(--v-safe-t) + 18px); left: var(--v-gutter); max-width: calc(100% - 2 * var(--v-gutter) - 96px);
+  pointer-events: none; text-shadow: 0 1px 14px rgb(var(--v-night-rgb) / .55);
+}
+.v-odo__top { display: flex; gap: .9em; color: var(--v-accent-on-night); }
+.v-odo__sim { color: rgb(var(--v-paper-rgb) / .6); }
+.v-odo__date {
+  display: flex; align-items: baseline; gap: .26em; margin-top: .4rem; white-space: nowrap;
+  font: 600 clamp(1.875rem, 1.35rem + 2.2vw, 3rem)/1.08 var(--v-font-numeric); letter-spacing: -.025em;
+  font-feature-settings: var(--v-numeric-features); font-variant-numeric: tabular-nums lining-nums;
+}
+.v-wheel { display: inline-grid; overflow: hidden; padding-bottom: .12em; margin-bottom: -.12em; }
+.v-wheel > * { grid-area: 1 / 1; }
+.v-wheel + .v-wheel { font-weight: 300; color: rgb(var(--v-paper-rgb) / .78); }
+.v-odo__note { margin-top: .7rem; max-width: 25ch; font-size: .9375rem; line-height: 1.42; color: rgb(var(--v-paper-rgb) / .88); text-wrap: pretty; transition: opacity .3s; }
+
+/* Step cards: bottom sheet over the image on phones, a side column on wide screens. */
+.v-cards { position: absolute; z-index: 4; left: 12px; right: 12px; bottom: calc(var(--v-safe-b) + 78px); pointer-events: none; }
+.v-card {
+  position: absolute; left: 0; right: 0; bottom: 0; max-width: 32rem; margin: 0 auto; opacity: 0;
+  padding: 1rem 1.2rem 1.1rem; border-radius: 16px; font-size: 1rem; line-height: 1.5; color: var(--v-text-on-night);
+  background: rgb(var(--v-night-rgb) / .72); -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: 0 10px 34px rgb(0 0 0 / .26), inset 0 0 0 1px rgb(var(--v-paper-rgb) / .09);
+}
+.v-card:empty { display: none; }
+.v-card.v-on { pointer-events: auto; }
+.v-card strong { font-weight: 650; color: var(--v-paper); }
+.v-card a { color: var(--v-accent-on-night); }
+@media (min-width: 60em) and (min-aspect-ratio: 1/1) {
+  .v-cards { left: var(--v-gutter); right: auto; top: 0; bottom: 0; width: 25rem; }
+  .v-card { top: 50%; bottom: auto; translate: 0 -50%; padding: 1.4rem 1.5rem 1.5rem; font-size: 1.0625rem; }
+  .v-scrim { background: linear-gradient(rgb(var(--v-night-rgb) / .6), rgb(var(--v-night-rgb) / 0) 10rem), linear-gradient(0deg, rgb(var(--v-night-rgb) / .7), rgb(var(--v-night-rgb) / 0) 9rem), linear-gradient(90deg, rgb(var(--v-night-rgb) / .45), rgb(var(--v-night-rgb) / 0) 38rem); }
+}
+
+/* Calendar rail: ticks at the real flight dates; the knob moves through real time. */
+.v-rail { position: absolute; z-index: 3; left: var(--v-gutter); right: var(--v-gutter); bottom: calc(var(--v-safe-b) + 8px); height: 56px; touch-action: pan-y; cursor: pointer; border-radius: 8px; }
+.v-rail:focus-visible { outline-offset: 2px; }
+.v-rail__track { position: absolute; left: 0; right: 0; top: 20px; height: 1px; background: rgb(var(--v-paper-rgb) / .3); }
+.v-rail__ticks { position: absolute; inset: 0; }
+.v-tick { position: absolute; left: calc(var(--f) * 100%); top: -4px; width: 1px; height: 9px; background: rgb(var(--v-paper-rgb) / .5); }
+.v-tick.v-past { background: var(--v-paper); }
+.v-tick--year { top: -10px; height: 21px; background: rgb(var(--v-paper-rgb) / .3); }
+.v-tick__label {
+  position: absolute; top: 14px; left: calc(var(--f) * 100%); translate: -50% 0; white-space: nowrap;
+  font: 600 .6875rem/1 var(--v-font-numeric); letter-spacing: .09em; text-transform: uppercase; color: rgb(var(--v-paper-rgb) / .66);
+  font-feature-settings: var(--v-numeric-features);
+}
+.v-tick__label.v-first { translate: 0 0; }
+.v-tick__label.v-last { translate: -100% 0; }
+.v-rail__fill { position: absolute; left: 0; right: 0; top: -.5px; height: 2px; background: var(--v-accent); transform: scaleX(0); transform-origin: 0 50%; }
+.v-rail__knob {
+  position: absolute; left: -7px; top: -7px; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--v-accent); box-shadow: 0 0 0 3px rgb(var(--v-night-rgb) / .5), 0 2px 8px rgb(0 0 0 / .4);
+}
+
+/* Hotspots: dot + label pill, positioned by transform at the dot centre; the label flips near the right edge. */
+.v-hs-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.v-hs {
+  position: absolute; left: 0; top: 0; margin: -22px 0 0 -22px; height: 44px; padding: 0; border: 0; background: none;
+  display: flex; align-items: center; gap: 4px; color: var(--v-text-on-night); font: 600 .8125rem/1.1 var(--v-font-text);
+  cursor: pointer; opacity: 0; pointer-events: none; -webkit-tap-highlight-color: transparent;
+}
+.v-hs:not(.v-on) { visibility: hidden; }
+.v-hs.v-on { pointer-events: auto; }
+.v-hs--l { flex-direction: row-reverse; translate: calc(44px - 100%) 0; }
+.v-hs__dot { position: relative; flex: none; width: 44px; height: 44px; display: grid; place-items: center; }
+.v-hs__dot::before, .v-hs__dot::after { content: ""; grid-area: 1 / 1; width: 12px; height: 12px; border-radius: 50%; }
+.v-hs__dot::before { z-index: 1; background: var(--v-accent); box-shadow: 0 0 0 2px var(--v-paper), 0 2px 10px rgb(0 0 0 / .5); }
+.v-hs__dot::after { background: rgb(var(--v-paper-rgb) / .5); animation: v-pulse 2.6s var(--v-ease) infinite; }
+.v-hs__label {
+  padding: .45rem .7rem; border-radius: 999px; white-space: nowrap; letter-spacing: .005em;
+  background: rgb(var(--v-night-rgb) / .7); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  box-shadow: inset 0 0 0 1px rgb(var(--v-paper-rgb) / .14);
+}
+.v-hs:focus-visible { outline: 0; }
+.v-hs:focus-visible .v-hs__label { outline: 2px solid var(--v-accent); outline-offset: 2px; }
+@keyframes v-pulse { 0% { transform: scale(1); opacity: .7; } 70%, 100% { transform: scale(3.2); opacity: 0; } }

@@ -160,7 +160,7 @@ chapters:
     surface: paper
     items:
       - { value: "12", label: "drone flights, every six to seven weeks", source: Flight logs }
-      - { value: "135", label: parking spaces returned to meadow, source: Site plan }
+      - { value: "132", label: parking spaces returned to meadow, source: Site plan }
       - { value: "13,100", unit: sq ft, label: "of wave pool, now beach and splash pad", source: Site plan }
       - { value: "770", unit: m, label: of new paths and promenade, source: Site plan }
       - { value: "78", label: young trees planted along the paths, source: Planting plan }
