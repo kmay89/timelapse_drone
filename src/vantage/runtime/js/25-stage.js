@@ -11,17 +11,18 @@
 function frameRect(/** @type {number} */ W, /** @type {number} */ H, /** @type {number} */ aspect, /** @type {number[]} */ cam) {
   const contain = Math.min(H, W / aspect);
   const cover = Math.max(H, W / aspect);
-  const portrait = W < H;
-  const base = portrait ? cover * (1 + (cam[2] - 1) / 4) : Math.min(cover, contain * 1.12);
+  const base = W < H ? cover * (1 + (cam[2] - 1) / 4) : Math.min(cover, contain * 1.12);
   const hh = Math.max(base, contain * cam[2]);
-  const ww = hh * aspect;
-  return {
-    x: ww > W ? clamp(W / 2 - cam[0] * ww, W - ww, 0) : (W - ww) / 2,
-    y: hh > H ? clamp(H / 2 - cam[1] * hh, H - hh, 0) : (H - hh) / 2,
-    w: ww,
-    h: hh,
-  };
+  return place(W, H, hh * aspect, hh, cam[0], cam[1]);
 }
+
+/** A ww×hh image centred on (cx, cy), kept covering the stage where it is larger than the stage. */
+const place = (/** @type {number} */ W, /** @type {number} */ H, /** @type {number} */ ww, /** @type {number} */ hh, /** @type {number} */ cx, /** @type {number} */ cy) => ({
+  x: ww > W ? clamp(W / 2 - cx * ww, W - ww, 0) : (W - ww) / 2,
+  y: hh > H ? clamp(H / 2 - cy * hh, H - hh, 0) : (H - hh) / 2,
+  w: ww,
+  h: hh,
+});
 
 /** The resting camera: centred, or on the vantage's portrait focus on phones. */
 const homeCam = (/** @type {any} */ v, /** @type {number} */ W, /** @type {number} */ H) =>

@@ -421,7 +421,7 @@ POINTS_OF_INTEREST: dict[str, tuple[float, float]] = {
     "garden_ring": (_LAZY[0], _LAZY[1]),
     "great_lawn": (356.0, 246.0),
     "slide_tower": _TOWER,
-    "meadow": (190.0, 322.0),
+    "meadow": (226.0, 310.0),  # the strip of the old lot that stays inside the aligned overview frame
     "parking": (330.0, 322.0),
     "island": (150.0, 140.0),
 }
