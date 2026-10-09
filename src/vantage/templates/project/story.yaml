@@ -1,0 +1,139 @@
+# story.yaml — the editorial layer: viewpoints ("vantages"), visit labels and chapters.
+# Models: src/vantage/config.py (Story). Copy marked TODO must be replaced before delivery;
+# `vantage validate {{slug}}` counts what is left.
+#
+# Capture references (capture / from / to / before / after):
+#   "earliest" | "latest" | a flight date in quotes, e.g. "2025-06-14" (nearest visit on or before it)
+# Text fields are Markdown. Coordinates (x, y, focus) are 0–1 fractions of the aligned image.
+
+vantages:
+  - id: overview
+    name: "TODO: Overview from the north"
+    # After `vantage ingest {{slug}}`, open work/contact/<date>.jpg and pin the frame that every
+    # other visit is aligned to (path relative to footage/, t in seconds for videos):
+    # reference: { source: "2026-09-12/DJI_0042.MP4", t: 12.5 }
+    # Optional telemetry hint, so unrelated shots from the same flights are ignored:
+    # hint: { lat: 41.0000, lon: -81.0000, alt_m: 90, heading_deg: 180 }
+    # Manual override when the automatic pick for a visit is wrong:
+    # picks:
+    #   "2025-06-14": { source: "2025-06-14/DJI_0007.MP4", t: 31.0 }
+
+captures: []
+# Optional per-visit labels, notes and exclusions (dates are flight dates):
+# captures:
+#   - date: 2025-06-14
+#     label: "June 2025"
+#     note: "Demolition begins"
+#   - date: 2025-07-02
+#     exclude: true
+
+chapters:
+  - type: hero
+    id: opening
+    kicker: "TODO: Place, Region · 2025–2026"
+    title: "{{title}}"
+    body: "TODO: One sentence that makes someone keep scrolling."
+    vantage: overview
+    capture: latest
+    # video: { source: "2026-09-12/DJI_0042.MP4", t: 4.0 }  # optional looping clip behind the title
+    # clip_s: 8
+
+  - type: text
+    id: before
+    kicker: "Before"
+    title: "TODO: What this place used to be"
+    body: |
+      TODO: Two or three short paragraphs of history. Short sentences; let the imagery carry
+      the emotion. Every fact here should have a source in the credits.
+    pull_quote: "TODO: A line from someone who remembers it."
+    attribution: "TODO: Name, role"
+
+  - type: scrub
+    id: transformation
+    kicker: "Time-lapse"
+    title: "TODO: Every flight, one view"
+    body: "Scroll to travel through time. Each frame is a separate drone flight, aligned to the same viewpoint."
+    vantage: overview
+    from: earliest
+    to: latest
+    scroll_vh: 500
+    steps:
+      - capture: earliest
+        text: "**TODO: Month YYYY.** The first flight. Say what the reader is looking at."
+      - text: "TODO: The turning point: demolition, grading, the first structures."
+        focus: [0.5, 0.5, 1.6]
+      - capture: latest
+        text: "**TODO: Month YYYY.** Where things stand today."
+    hotspots:
+      - id: landmark
+        x: 0.5
+        y: 0.5
+        label: "TODO: Landmark"
+        body: "TODO: One sentence about it."
+
+  - type: compare
+    id: then-and-now
+    kicker: "Then and now"
+    title: "TODO: Drag to compare"
+    body: "TODO: What changed the most, in one sentence."
+    vantage: overview
+    before: earliest
+    after: latest
+    # before_label: "June 2025"
+    # after_label: "Today"
+    steps:
+      - text: "TODO: The first difference worth pointing at."
+        split: 0.3
+      - text: "TODO: And the second."
+        split: 0.7
+
+  - type: stats
+    id: by-the-numbers
+    kicker: "By the numbers"
+    title: "TODO: The project at a glance"
+    items:
+      - value: "TODO"
+        unit: "acres"
+        label: "TODO: Site area"
+        source: "TODO: source URL"
+      - value: "TODO"
+        label: "TODO: Investment or capacity"
+        source: "TODO: source URL"
+      - value: "TODO"
+        label: "TODO: Opening date"
+
+  - type: timeline
+    id: milestones
+    kicker: "Milestones"
+    title: "TODO: How we got here"
+    items:
+      - date: "TODO: Year"
+        title: "TODO: Where it began"
+        body: "TODO: One or two sentences."
+        source: "TODO: source URL"
+      - date: "TODO: Month YYYY"
+        title: "TODO: Work begins"
+        vantage: overview
+        capture: earliest
+      - date: "TODO: Month YYYY"
+        title: "TODO: Latest milestone"
+        vantage: overview
+        capture: latest
+
+  - type: explore
+    id: explore
+    kicker: "Explore"
+    title: "Every flight, side by side"
+    body: "Pick any two dates, blink between them, or pinch to zoom."
+    vantages: [overview]
+
+  - type: credits
+    id: credits
+    title: "Credits & sources"
+    body: "TODO: Who made this, and for whom."
+    sources:
+      - label: "TODO: Source title"
+        url: "https://example.org"
+    notes:
+      - "Each frame is a separate drone flight, aligned and color-matched to a common viewpoint."
+      - "TODO: Aerial imagery credit and any disclosures (renderings, approximate dates)."

@@ -1,0 +1,3 @@
+# Raw flights and heavy intermediates stay out of git; masters/ is small and committed.
+footage/
+work/

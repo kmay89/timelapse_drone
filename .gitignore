@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+
+# Node / Playwright
+node_modules/
+web-tests/.results/
+playwright-report/
+test-results/
+
+# Vantage: raw footage and heavy intermediates never go in git
+**/footage/
+**/work/
+dist/
+
+# Demo masters are regenerated from synthetic footage in CI
+projects/demo-lakeside/masters/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
