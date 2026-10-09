@@ -166,6 +166,23 @@ const browser = await chromium.launch();
   check("explore curtain slider", (await eg.getAttribute("aria-valuetext"))?.includes("July 2025"), await eg.getAttribute("aria-valuetext"));
   await stage.scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(out, "iphone-explore-curtain.png") });
+  await page.getByRole("button", { name: "Blink", exact: true }).tap();
+  const blinkBtn = page.locator("#explore").getByRole("button", { name: /^Show / });
+  check("explore blink: a toggle button, named for the before flight", (await blinkBtn.isVisible()) && (await blinkBtn.textContent()) === "Show July 2025", await blinkBtn.textContent());
+  await blinkBtn.tap();
+  await page.waitForTimeout(300);
+  check(
+    "explore blink: the toggle shows the before flight",
+    (await blinkBtn.getAttribute("aria-pressed")) === "true" && (await page.locator("#explore canvas").getAttribute("aria-label")).endsWith("July 2025"),
+    await page.locator("#explore canvas").getAttribute("aria-label"),
+  );
+  await stage.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(out, "iphone-explore-blink-toggle.png") });
+  await blinkBtn.focus();
+  await page.keyboard.press("Space");
+  check("explore blink: Space toggles back to the after flight", (await blinkBtn.getAttribute("aria-pressed")) === "false");
+  await page.getByRole("button", { name: "Time", exact: true }).tap();
+  check("explore blink: the toggle leaves with blink mode", await blinkBtn.isHidden());
 
   // Contents → Save for offline (served from localhost: a secure context).
   await page.getByRole("button", { name: "Contents" }).tap();
@@ -185,6 +202,31 @@ const browser = await chromium.launch();
   await page.waitForTimeout(400);
   check("share falls back to a toast", (await page.locator(".v-toast.v-on").count()) === 1, await page.locator(".v-toast").textContent());
   check("no console errors (site)", errors.length === 0, errors.join(" | "));
+  await ctx.close();
+}
+
+/* 1b. Hero: the ambient loop and drift pause from a button, and stay paused for the session. */
+{
+  const { ctx, page, errors } = await open(browser, url);
+  await page.waitForTimeout(2600);
+  const pause = page.getByRole("button", { name: "Pause the background video" });
+  check("hero: pause button for the ambient video", await pause.isVisible());
+  await page.screenshot({ path: path.join(out, "iphone-hero-pause.png") });
+  await pause.tap();
+  await page.waitForTimeout(300);
+  const drift = () => page.$eval(".v-hero__media img", (i) => getComputedStyle(i).animationPlayState);
+  check("hero: paused, the video stops and the still stops drifting", (await page.$eval("#opening video", (v) => v.paused)) && (await drift()) === "paused");
+  await page.screenshot({ path: path.join(out, "iphone-hero-paused.png") });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(1500);
+  check(
+    "hero: the pause is remembered for the session",
+    (await page.getByRole("button", { name: "Play the background video" }).isVisible()) && (await page.$eval("#opening video", (v) => v.paused)) && (await drift()) === "paused",
+  );
+  await page.getByRole("button", { name: "Play the background video" }).tap();
+  await page.waitForTimeout(300);
+  check("hero: play resumes the drift", (await drift()) === "running");
+  check("no console errors (hero)", errors.length === 0, errors.join(" | "));
   await ctx.close();
 }
 
@@ -257,6 +299,40 @@ const browser = await chromium.launch();
     await page.waitForTimeout(150);
   }
   check("blink: auto-blink alternates", seen.size === 2);
+  // The loop sleeps off screen and in a hidden tab: count animation frames requested over a second.
+  await page.evaluate(() => {
+    window.__raf = 0;
+    const raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (cb) => (window.__raf++, raf(cb));
+  });
+  const frames = async () => {
+    await page.evaluate(() => (window.__raf = 0));
+    await page.waitForTimeout(1000);
+    return page.evaluate(() => window.__raf);
+  };
+  const onScreen = await frames();
+  await page.evaluate(() => scrollTo(0, document.getElementById("timeline").getBoundingClientRect().top + scrollY));
+  await page.waitForTimeout(600);
+  const offScreen = await frames();
+  check("blink: auto-blink stops off screen", onScreen > 20 && offScreen <= 2, `${onScreen} frames on screen, ${offScreen} off`);
+  await page.evaluate((y) => scrollTo(0, y), await trackY(page, "before-after", 0.3));
+  await page.waitForTimeout(400);
+  const back = await frames();
+  const hide = (hidden) =>
+    page.evaluate((hidden) => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, hidden);
+  await hide(true);
+  await page.waitForTimeout(100);
+  const hiddenFrames = await frames();
+  await hide(false);
+  const shownAgain = await frames();
+  check(
+    "blink: auto-blink resumes on return, sleeps while the tab is hidden",
+    back > 20 && hiddenFrames <= 2 && shownAgain > 20 && (await page.getByRole("button", { name: "Blink automatically" }).getAttribute("aria-pressed")) === "true",
+    `back ${back}, hidden ${hiddenFrames}, shown ${shownAgain}`,
+  );
   check("no console errors (variants)", errors.length === 0, errors.join(" | "));
 
   // Explore vantage chips and gallery dots.
@@ -293,7 +369,10 @@ for (const [name, file] of [["file site", "site/index.html"], ["single file", "d
   check(`${name}: scrub canvas painted`, await painted(page, "#twelve-flights canvas"));
   await page.screenshot({ path: path.join(out, `iphone-${name.replace(/ /g, "-")}-scrub.png`) });
   if (file.endsWith("demo-lakeside.html")) {
-    check("single file: hero video built from the embedded blob", await page.$eval(".v-hero__media video", (v) => v.src.startsWith("blob:")).catch(() => false));
+    check(
+      "single file: hero video and poster built from the embedded blobs",
+      await page.$eval(".v-hero__media video", (v) => v.src.startsWith("blob:") && v.poster.startsWith("blob:")).catch(() => false),
+    );
     await page.locator("#last-evening").scrollIntoViewIfNeeded();
     await page.waitForTimeout(1500);
     // Playwright's Chromium has no H.264 decoder: there, check the player exists with its blob source.
@@ -304,6 +383,13 @@ for (const [name, file] of [["file site", "site/index.html"], ["single file", "d
     );
   }
   check(`no console errors (${name})`, errors.length === 0, errors.join(" | "));
+  await ctx.close();
+}
+{
+  // Under reduced motion the single file never even decodes the hero loop.
+  const { ctx, page } = await open(browser, pathToFileURL(path.join(dist, "demo-lakeside.html")).href, { reducedMotion: "reduce" });
+  await page.waitForTimeout(1200);
+  check("single file, reduced motion: hero loop never decoded", await page.$eval(".v-hero__media video", (v) => v.getAttribute("src") === null).catch(() => false));
   await ctx.close();
 }
 

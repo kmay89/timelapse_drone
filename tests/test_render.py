@@ -197,14 +197,14 @@ def test_story_without_a_lead_hero_still_has_a_title_and_dek(no_runtime_js):
     main = _main(html)
     assert html.count("<h1") == 1 and _headings(html)[0] == ("h1", "v-sr")
     assert main.startswith(
-        '<main id="v-main">\n<section class="v-intro v-surface-paper" aria-labelledby="v-story-title">\n'
-        '<div class="v-standfirst v-flow">\n<h1 class="v-sr" id="v-story-title">The Title</h1>\n'
+        '<main id="v-main">\n<section class="v-chapter v-intro v-surface-paper"'
+        ' aria-labelledby="v-story-title">\n<div class="v-standfirst v-flow">\n<h1 class="v-sr" id="v-story-title">The Title</h1>\n'
         '<p class="v-dek">A <em>dek</em></p>'
     )
     assert html.count("A <em>dek</em>") == 1 and main.index("v-standfirst") < main.index('id="t"')
     assert "simulated: a demonstration of the format" in main[: main.index('id="t"')]
-    chapters = re.findall(r'<section class="v-chapter ', html)
-    assert len(chapters) == len(s["chapters"])  # the intro is not a chapter
+    chapters = re.findall(r'<section class="v-chapter [^"]*" id="[\w-]+" data-type="', html)
+    assert len(chapters) == len(s["chapters"])  # the intro is not a story chapter: no id, no data-type
 
     bare = story(simulated=False, dek=None, dekHtml=None)
     bare["chapters"] = bare["chapters"][2:]  # opens with a scrub; nothing to put in a standfirst

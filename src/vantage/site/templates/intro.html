@@ -3,7 +3,7 @@
    the standfirst (dek, byline, simulated-imagery note) on the first chapter's surface. #}
 {% if index == 0 and ch.type != "hero" %}
 {% if meta.dekHtml or meta.byline or meta.simulated %}
-<section class="v-intro v-surface-{{ ch.surface }}" aria-labelledby="v-story-title">
+<section class="v-chapter v-intro v-surface-{{ ch.surface }}" aria-labelledby="v-story-title">
 <div class="v-standfirst v-flow">
 <h1 class="v-sr" id="v-story-title">{{ meta.title }}</h1>
 {% include "standfirst.html" %}

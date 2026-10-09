@@ -38,6 +38,40 @@ test.describe("smoke", () => {
     await expectNoSidewaysScroll(page);
   });
 
+  test("stats: figures fill their rows evenly and never run into the next column", async ({ page }) => {
+    await page.goto("./");
+    const story = await readStory(page);
+    const chs = story.chapters.filter((c) => c.type === "stats" && c.items.length > 1);
+    test.skip(!chs.length, "this story has no stats chapter with two or more figures");
+    const width = page.viewportSize().width;
+    for (const w of [width, 768]) {
+      await page.setViewportSize({ width: w, height: page.viewportSize().height });
+      for (const ch of chs) {
+        const list = section(page, ch).getByRole("list").last(); // after any list in the lede
+        await list.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(300); // let the figures count up and the layout settle
+        const { rows, overflow } = await list.evaluate((ul) => {
+          const cells = [...ul.children].map((li) => {
+            const r = li.getBoundingClientRect();
+            let right = r.left;
+            for (const n of li.querySelectorAll("*")) right = Math.max(right, n.getBoundingClientRect().right);
+            return { top: Math.round(r.top), left: r.left, right: r.right, over: right - r.right };
+          });
+          const tops = [...new Set(cells.map((c) => c.top))];
+          const box = ul.getBoundingClientRect();
+          // A row is full when its cells reach from the list's left edge to its right edge.
+          const rows = tops.map((t) => {
+            const row = cells.filter((c) => c.top === t);
+            return Math.min(...row.map((c) => c.left)) - box.left < 2 && box.right - Math.max(...row.map((c) => c.right)) < 2;
+          });
+          return { rows, overflow: cells.map((c) => Math.round(c.over)).filter((o) => o > 0) };
+        });
+        expect(rows.every(Boolean), `${ch.id} at ${w}px: a row that doesn't reach across (${JSON.stringify(rows)})`).toBe(true);
+        expect(overflow, `${ch.id} at ${w}px: figures wider than their column`).toEqual([]);
+      }
+    }
+  });
+
   test("chapter checkpoint screenshots", async ({ page }, testInfo) => {
     await page.goto("./");
     const story = await readStory(page);

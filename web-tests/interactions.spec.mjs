@@ -120,6 +120,28 @@ function controlTests() {
     await expect(sheet).toBeHidden();
   });
 
+  test("explore: blink has a toggle button for keyboards and screen readers", async ({ page }) => {
+    const { story, ch } = await open(page, "explore");
+    const sec = section(page, ch);
+    const mode = sec.getByRole("button", { name: "Blink", exact: true });
+    test.skip(!(await mode.count()), "this explore chapter has no two-flight modes");
+    await mode.scrollIntoViewIfNeeded();
+    await mode.click();
+    const v = story.vantages.find((x) => x.id === ch.vantages[0]);
+    const toggle = sec.getByRole("button", { name: /^Show / });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const first = v.captures.find((c) => c.img.sources.length || c.img.fallback !== c.img.lqip); // not a placeholder
+    await expect(sec.getByRole("img", { name: new RegExp(`^${escapeRe(v.name)}, `) })).toHaveAttribute("aria-label", new RegExp(`${escapeRe(first.label)}$`));
+    await page.keyboard.press("Enter");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await sec.getByRole("button", { name: "Curtain", exact: true }).click();
+    await expect(toggle).toBeHidden();
+  });
+
   test("chapter index: opens, lists the chapters, and jumps to one", async ({ page }) => {
     await page.goto("./");
     const story = await readStory(page);
@@ -148,11 +170,86 @@ test.describe("interactions", () => {
     expect(Math.abs(tops[0] - tops[1]), "the stage moved: it is not pinned").toBeLessThan(2);
   });
 
+  test("hero: the ambient motion has a pause button, remembered for the session", async ({ page }) => {
+    const { ch } = await open(page, "hero", (c) => c.vantage || c.video);
+    const sec = section(page, ch);
+    const pause = sec.getByRole("button", { name: /^pause the background/i });
+    await expect(pause).toBeVisible();
+    await pause.focus();
+    await page.keyboard.press("Enter");
+    const play = sec.getByRole("button", { name: /^play the background/i });
+    await expect(play).toBeVisible();
+    const paused = () => sec.locator("video").evaluateAll((vs) => vs.every((v) => v.paused));
+    expect(await paused()).toBe(true);
+    await page.reload();
+    await expect(play).toBeVisible();
+    await page.waitForTimeout(800); // the loop would have started by now
+    expect(await paused()).toBe(true);
+    await play.click();
+    await expect(pause).toBeVisible();
+  });
+
+  /* Save for offline when the service worker misbehaves: it is stubbed in the page, so these run against
+   * any hosted (http/https) copy. */
+  const stubWorker = (page, mode) =>
+    page.addInitScript((mode) => {
+      const sw = navigator.serviceWorker;
+      if (!sw) return;
+      const post = (data, ms) => setTimeout(() => sw.dispatchEvent(new MessageEvent("message", { data })), ms);
+      const active = {
+        postMessage(m) {
+          if (m.type !== "vantage:save" || mode !== "quota") return;
+          post({ type: "vantage:progress", done: 1, total: 4, bytes: 1048576, totalBytes: 4194304 }, 20);
+          post({ type: "vantage:error", url: "x", message: "QuotaExceededError: The quota has been exceeded." }, 60);
+        },
+      };
+      sw.register = () => (mode === "refused" ? Promise.reject(new TypeError("refused")) : Promise.resolve({}));
+      Object.defineProperty(sw, "ready", { get: () => (mode === "stalled" ? new Promise(() => {}) : Promise.resolve({ active })) });
+    }, mode);
+
+  const saveSheet = async (page) => {
+    await page.goto("./");
+    test.skip(!/^https?:/.test(page.url()) || !(await page.locator("html[data-sw]").count()), "not a hosted edition");
+    await page.getByRole("button", { name: /chapters|contents|index/i }).first().click();
+    const save = page.getByRole("dialog").getByRole("button", { name: "Save for offline" });
+    await expect(save).toBeEnabled();
+    return save;
+  };
+
+  test("save for offline: a worker that never activates ends in a retry state", async ({ page }) => {
+    await page.clock.install();
+    await stubWorker(page, "stalled");
+    const save = await saveSheet(page);
+    await save.click();
+    await expect(save).toBeDisabled();
+    await page.clock.fastForward(21_000);
+    await expect(page.getByRole("dialog").getByRole("button", { name: "Try again" })).toBeEnabled();
+    await expect(page.getByRole("dialog").getByText(/didn’t start/).first()).toBeVisible();
+  });
+
+  for (const [mode, says] of [["refused", /can’t save a copy/], ["quota", /Not enough free space/]]) {
+    test(`save for offline: ${mode === "quota" ? "a full disk" : "a refused registration"} says so and offers a retry`, async ({ page }) => {
+      await stubWorker(page, mode);
+      const save = await saveSheet(page);
+      await save.click();
+      const sheet = page.getByRole("dialog");
+      await expect(sheet.getByRole("button", { name: "Try again" })).toBeEnabled();
+      await expect(sheet.getByText(says).first()).toBeVisible();
+      await expect(sheet.getByRole("progressbar")).toBeHidden();
+    });
+  }
+
   controlTests();
 });
 
 test.describe("interactions with reduced motion", () => {
-  test.use({ reducedMotion: "reduce" });
+  // reducedMotion is a context option, not a fixture of its own: `use({ reducedMotion })` is silently ignored.
+  test.use({ contextOptions: { reducedMotion: "reduce" } });
+
+  test("the page sees prefers-reduced-motion", async ({ page }) => {
+    await page.goto("./");
+    expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+  });
 
   test("no errors, every chapter renders; checkpoint screenshots", async ({ page }, testInfo) => {
     const errors = watchErrors(page);
@@ -161,6 +258,14 @@ test.describe("interactions with reduced motion", () => {
     for (const ch of story.chapters) await expect(section(page, ch)).toHaveCount(1);
     await chapterCheckpoints(page, testInfo, story, "reduced-motion");
     expect(errors).toEqual([]);
+  });
+
+  test("hero: no ambient motion, so no pause button, and the loop never plays", async ({ page }) => {
+    const { ch } = await open(page, "hero", (c) => c.vantage || c.video);
+    const sec = section(page, ch);
+    await page.waitForTimeout(800);
+    await expect(sec.getByRole("button", { name: /background/i })).toBeHidden();
+    expect(await sec.locator("video").evaluateAll((vs) => vs.every((v) => v.paused))).toBe(true);
   });
 
   controlTests();
