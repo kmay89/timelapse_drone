@@ -113,7 +113,7 @@ function contents(/** @type {HTMLElement} */ from) {
     ]);
     a.addEventListener("click", (/** @type {Event} */ e) => {
       e.preventDefault();
-      closeSheet();
+      closeTo(sec);
       sec.scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
     });
     return h("li", {}, [a]);
@@ -141,7 +141,9 @@ function chrome() {
     shareURL && h("button", { class: "v-btn v-btn--glass", type: "button", "aria-label": "Share this story", onclick: share }, [icon("share")]),
     menu,
   ]);
-  doc.body.append(h("div", { class: "v-progress", "aria-hidden": "true" }, [fillEl]), nav, sheetWrap, toastEl);
+  // Before <main>: the tab order follows the screen (skip link, Share, Contents, story).
+  $("main").before(h("div", { class: "v-progress", "aria-hidden": "true" }, [fillEl]), nav);
+  doc.body.append(sheetWrap, toastEl);
   // The buttons take the colour of whichever surface passes under them (a band at the top 6%).
   const band = new IntersectionObserver(
     (entries) => entries.forEach((e) => e.isIntersecting && nav.classList.toggle("v-on-paper", e.target.classList.contains("v-surface-paper"))),

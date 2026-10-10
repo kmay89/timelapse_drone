@@ -205,6 +205,26 @@ function controlTests() {
     const target = titled.at(-1);
     await page.getByRole("link", { name: target.title }).first().click();
     await expect(section(page, target)).toBeInViewport();
+    // Focus follows the jump, so the next Tab carries on from the chapter, not from the Contents button.
+    await expect(section(page, target).getByRole("heading", { name: target.title, exact: true })).toBeFocused();
+  });
+
+  test("timeline: Explore from this flight moves focus to the explore chapter", async ({ page }) => {
+    await page.goto("./");
+    const story = await readStory(page);
+    const ex = story.chapters.find((c) => c.type === "explore");
+    const tl = story.chapters.find((c) => c.type === "timeline");
+    const it = ex && tl?.items.find((x) => x.vantage && x.capture != null && ex.vantages.includes(x.vantage));
+    test.skip(!it, "no timeline flight from a vantage the explore chapter covers");
+    const label = story.vantages.find((v) => v.id === it.vantage).captures[it.capture].label;
+    const thumb = section(page, tl).getByRole("button", { name: `View the ${label} flight` }).first();
+    await thumb.scrollIntoViewIfNeeded();
+    await thumb.click();
+    const go = page.getByRole("dialog").getByRole("button", { name: "Explore from this flight" });
+    test.skip(!(await go.count()), "the explore chapter leaves this vantage out");
+    await go.click();
+    const sec = section(page, ex);
+    await expect(ex.title ? sec.getByRole("heading", { name: ex.title, exact: true }) : sec).toBeFocused();
   });
 
   test("stats: assistive tech reads every figure's real value, before and after it counts up", async ({ page }) => {
@@ -267,6 +287,14 @@ test.describe("interactions", () => {
       most = Math.max(most, await effectiveOpacity(card));
     }
     expect(most, "scrolling through the chapter never showed the second step's card").toBeGreaterThan(0.9);
+  });
+
+  test("chrome: Share and Contents come before the story in the tab order, as they do on screen", async ({ page }) => {
+    await page.goto("./");
+    const menu = page.getByRole("navigation", { name: "Story" }).getByRole("button", { name: "Contents" });
+    await expect(menu).toBeVisible();
+    const main = await page.getByRole("main").elementHandle();
+    expect(await menu.evaluate((el, main) => !!(el.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING), main)).toBe(true);
   });
 
   test("hero: the ambient motion has a pause button, remembered for the session", async ({ page }) => {

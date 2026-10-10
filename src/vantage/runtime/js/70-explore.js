@@ -4,7 +4,7 @@
  * flights in order, or compare any two flights with a curtain or a blink. Pinch, double-tap and drag
  * zoom and pan inside the stage only; a vertical swipe still scrolls the page until you zoom in. */
 
-/** @type {{has(id: string): boolean, show(id: string, i: number): void}[]} */
+/** @type {{sec: HTMLElement, has(id: string): boolean, show(id: string, i: number): void}[]} */
 const explorers = [];
 
 /** @returns {Component | null} */
@@ -354,6 +354,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   }
 
   const api = {
+    sec,
     has: (/** @type {string} */ id) => ids.includes(id),
     show(/** @type {string} */ id, /** @type {number} */ i) {
       if (v.id !== id) setVantage(id);

@@ -61,8 +61,9 @@ function openCapture(/** @type {any} */ v, /** @type {number} */ i, /** @type {H
     .finally(() => releaseAsset(path));
   const ex = explorers.find((x) => x.has(v.id));
   const go = () => {
-    closeSheet();
-    ex?.show(v.id, i);
+    if (!ex) return;
+    closeTo(ex.sec);
+    ex.show(v.id, i);
   };
   openSheet({
     kicker: v.name,
