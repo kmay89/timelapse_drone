@@ -74,6 +74,28 @@ function controlTests() {
     await expect.poll(() => currentDate(sec, labels)).toBe(labels[ch.to]);
   });
 
+  test("scrub: a step card's links are in the tab order exactly while the card shows", async ({ page }) => {
+    const { ch } = await open(page, "scrub", (c) => c.steps.some((s) => /<a\s/.test(s.html || "")));
+    const sec = section(page, ch);
+    const { top, height, vh } = await geometry(sec);
+    let showing = 0;
+    for (let k = 0; k <= 48; k++) {
+      await scrollToY(page, top + (k / 48) * (height - vh));
+      const links = await sec.getByRole("link").evaluateAll((els) =>
+        els.filter((a) => onScreen(a)).map((a) => {
+          let o = 1;
+          for (let n = a; n instanceof Element; n = n.parentElement) o *= Number(getComputedStyle(n).opacity);
+          return { name: a.getAttribute("aria-label") || a.textContent, o, tabbable: a.tabIndex >= 0 };
+        }),
+      );
+      for (const l of links) {
+        showing += l.o > 0.5;
+        expect(l.tabbable, `"${l.name}" at opacity ${l.o.toFixed(2)}`).toBe(l.o > 0.5);
+      }
+    }
+    expect(showing, "a step card with a link came into view").toBeGreaterThan(0);
+  });
+
   test("compare: the curtain is a keyboard slider with date text", async ({ page }) => {
     const { ch } = await open(page, "compare", curtain);
     const slider = section(page, ch).getByRole("slider").first();
@@ -192,6 +214,26 @@ function controlTests() {
     await stage.scrollIntoViewIfNeeded();
     const want = await tapAcross(page, stage, slider);
     await expect.poll(async () => Math.abs((await settled(slider)) - want)).toBeLessThanOrEqual(3);
+  });
+
+  test("keyboard: every Tab stop can be seen (none in a faded step card or pin)", async ({ page }) => {
+    await page.goto("./");
+    const stops = [];
+    for (let i = 0; i < 400; i++) {
+      await page.keyboard.press("Tab");
+      const stop = await page.evaluate(() => {
+        const el = document.activeElement;
+        const seen = (window.tabStops ??= new WeakSet());
+        if (!el || el === document.body || seen.has(el)) return null; // past the last stop, or round again
+        seen.add(el);
+        return `${el.closest("section")?.id ?? "page"}: ${el.tagName.toLowerCase()} "${el.getAttribute("aria-label") || el.textContent.trim().slice(0, 40)}"`;
+      });
+      if (!stop) break;
+      stops.push(stop);
+      // A moment for entrance fades (the hero's pause button, headings rising in) to finish.
+      await expect.poll(() => effectiveOpacity(page.locator(":focus")), { message: `${stop} has focus but cannot be seen`, timeout: 4_000 }).toBeGreaterThan(0.5);
+    }
+    expect(stops.length, "Tab reaches the story's controls").toBeGreaterThan(2);
   });
 
   test("chapter index: opens, lists the chapters, and jumps to one", async ({ page }) => {

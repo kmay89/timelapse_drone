@@ -52,6 +52,7 @@
 .v-x__input::-moz-range-thumb { width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--v-paper); }
 .v-x__input:focus-visible { outline: 0; }
 .v-x__input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--v-accent); }
+.v-x__input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px var(--v-accent); } /* apart: an unknown pseudo drops a whole list */
 
 .v-x__pick { display: none; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: .75rem; }
 .v-x:not([data-mode="single"]) .v-x__pick { display: grid; }
