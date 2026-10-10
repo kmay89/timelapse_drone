@@ -1,6 +1,7 @@
 /* Stats, timeline, gallery and arrival reveals. */
 
-.v-count { display: inline-block; font-variant-numeric: tabular-nums lining-nums; }
+/* The visible count (aria-hidden); copying takes the figure from its .v-sr twin. */
+.v-count { display: inline-block; font-variant-numeric: tabular-nums lining-nums; -webkit-user-select: none; user-select: none; }
 
 .v-tl__fig .v-media { border-radius: 4px; }
 .v-tl__fig img { transition: transform .5s var(--v-ease); }

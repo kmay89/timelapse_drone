@@ -17,6 +17,7 @@ function onceVisible(/** @type {Element[]} */ els, /** @type {(el: any) => void}
 }
 
 /** STATS: "$5.3M", "1,700", "47" count up from zero in 900 ms, keeping their prefix, suffix and format.
+ * The count is aria-hidden; a visually hidden copy keeps the real figure for screen readers and copying.
  * Each figure's length (separators count less) lets CSS shrink a long one to its column (--n) instead of
  * breaking it. */
 function stats(/** @type {HTMLElement} */ sec) {
@@ -32,8 +33,8 @@ function stats(/** @type {HTMLElement} */ sec) {
     const dec = (m[2].split(".")[1] || "").length;
     const fmt = (/** @type {number} */ x) =>
       m[1] + x.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec, useGrouping: m[2].includes(",") }) + m[3];
-    const span = h("span", { class: "v-count", text: node.data });
-    node.replaceWith(span);
+    const span = h("span", { class: "v-count", "aria-hidden": "true", text: node.data });
+    node.replaceWith(h("span", { class: "v-sr", text: node.data }), span);
     return [{ el, span, fmt, to: parseFloat(m[2].replace(/,/g, "")) }];
   });
   const below = items.filter((it) => it.el.getBoundingClientRect().top > innerHeight);

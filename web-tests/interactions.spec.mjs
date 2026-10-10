@@ -206,6 +206,25 @@ function controlTests() {
     await page.getByRole("link", { name: target.title }).first().click();
     await expect(section(page, target)).toBeInViewport();
   });
+
+  test("stats: assistive tech reads every figure's real value, before and after it counts up", async ({ page }) => {
+    const { ch } = await open(page, "stats");
+    const items = section(page, ch).getByRole("list").last().getByRole("listitem"); // after any list in the lede
+    await expect(items).toHaveCount(ch.items.length);
+    const check = async (when) => {
+      for (const [k, it] of ch.items.entries()) {
+        const snap = await items.nth(k).ariaSnapshot();
+        // The item's text starts with the figure, once: not a placeholder 0 or a count in flight.
+        const v = escapeRe(it.value);
+        const re = new RegExp(`^- listitem:(?:\\s+- text:)? "?${v}(?![\\d.,]| ${v})`);
+        expect(snap, `${ch.id} item ${k} ${when}`).toMatch(re);
+      }
+    };
+    await check("before it is scrolled to"); // figures below the fold wait to count up from zero
+    await items.last().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(1800); // every figure has counted up (900 ms each, 110 ms apart)
+    await check("after it counts up");
+  });
 }
 
 test.describe("interactions", () => {
