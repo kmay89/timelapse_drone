@@ -1,7 +1,8 @@
 // @ts-check
 /* Chrome: a thin reading-progress bar, floating Share and Contents buttons, the draft badge, and
  * "Save for offline" (hosted edition over https only: registers the service worker named by
- * <html data-sw>, asks it to cache every file with progress, then requests persistent storage). */
+ * <html data-sw>, asks it to cache every file with progress, then requests persistent storage; after
+ * an update to a saved copy, the worker fetches what changed). */
 
 const shareURL = story.meta.url || (/^https?:$/.test(location.protocol) ? location.href.split("#")[0] : "");
 const canSave = !!root.dataset.sw && "serviceWorker" in navigator && isSecureContext && /^https?:$/.test(location.protocol);
@@ -34,10 +35,14 @@ const saveWatch = (/** @type {number} */ ms) => {
   saveTimer = window.setTimeout(() => saveFail(`Saving ${saveMeter.hidden ? "didn’t start" : "stalled"}. Check the connection and try again.`), ms);
 };
 
+/** Ask the worker how much is saved (after an update to a saved copy, it saves what changed). */
+const saveAsk = () => navigator.serviceWorker.ready.then((reg) => reg.active?.postMessage({ type: "vantage:status" }));
+
 function saveFail(/** @type {string} */ text) {
   clearTimeout(saveTimer);
   saveMeter.hidden = true;
   saveBtn.disabled = false;
+  saveBtn.classList.remove("v-done");
   saveBtn.replaceChildren(icon("reset"), "Try again");
   saveSet(text);
 }
@@ -61,12 +66,14 @@ if (canSave) {
       registering = null; // a later tap tries again
       throw err;
     }));
-  addEventListener("load", () => register().catch(() => {}));
+  addEventListener("load", () => register().then(saveAsk).catch(() => {}));
+  navigator.serviceWorker.addEventListener("controllerchange", saveAsk); // an update took over
   navigator.serviceWorker.addEventListener("message", (e) => {
     const m = e.data || {};
     if (m.type === "vantage:progress") {
       saveWatch(45e3);
       saveBtn.disabled = true;
+      saveBtn.classList.remove("v-done");
       if (saveMeter.hidden) saveBtn.replaceChildren(icon("save"), "Save for offline"); // a late start after a retry state
       saveMeter.hidden = false;
       saveMeter.value = m.totalBytes ? m.bytes / m.totalBytes : m.done / m.total;
@@ -106,12 +113,12 @@ function contents(/** @type {HTMLElement} */ from) {
     ]);
     a.addEventListener("click", (/** @type {Event} */ e) => {
       e.preventDefault();
-      closeSheet();
+      closeTo(sec);
       sec.scrollIntoView({ behavior: reduced ? "auto" : "smooth" });
     });
     return h("li", {}, [a]);
   }));
-  if (canSave) navigator.serviceWorker.ready.then((reg) => reg.active?.postMessage({ type: "vantage:status" }));
+  if (canSave) saveAsk();
   openSheet({
     kicker: story.brand.name,
     title: story.meta.title,
@@ -134,7 +141,9 @@ function chrome() {
     shareURL && h("button", { class: "v-btn v-btn--glass", type: "button", "aria-label": "Share this story", onclick: share }, [icon("share")]),
     menu,
   ]);
-  doc.body.append(h("div", { class: "v-progress", "aria-hidden": "true" }, [fillEl]), nav, sheetWrap, toastEl);
+  // Before <main>: the tab order follows the screen (skip link, Share, Contents, story).
+  $("main").before(h("div", { class: "v-progress", "aria-hidden": "true" }, [fillEl]), nav);
+  doc.body.append(sheetWrap, toastEl);
   // The buttons take the colour of whichever surface passes under them (a band at the top 6%).
   const band = new IntersectionObserver(
     (entries) => entries.forEach((e) => e.isIntersecting && nav.classList.toggle("v-on-paper", e.target.classList.contains("v-surface-paper"))),

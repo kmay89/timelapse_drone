@@ -6,7 +6,9 @@ Notes are numbered in first-use (reading) order and facts that are never used ar
 Markdown is rendered with raw HTML disabled, so facts are marked with private-use sentinels
 before rendering (`FactNotes.mark`) and wrapped in their HTML afterwards (`FactNotes.finish`).
 Tokens work in project.yaml and story.yaml text and in brand.yaml's `BRAND_TEXT` fields; `check_facts`
-and `check_release` scan all three files.
+and `check_release` scan all three files. A `do-not-print` fact is withheld from every build, draft or
+release: it prints `WITHHELD` (still marked and numbered) and its note carries neither text nor sources,
+so a figure the client ruled out cannot leave in a review copy.
 """
 
 from __future__ import annotations
@@ -23,6 +25,16 @@ _OPEN, _MID, _CLOSE = "", "", ""
 _SENTINELS = re.compile("[-]")
 _MARKED = re.compile(f"{_OPEN}(\\d+){_MID}(.*?){_CLOSE}", re.S)
 BRAND_TEXT = ("credit_line", "disclaimer", "copyright")  # brand.yaml fields whose {fact:…} tokens resolve
+WITHHELD = "[withheld: do-not-print]"  # printed in place of a do-not-print fact, in every build
+
+
+def _withheld(fact: Fact) -> bool:
+    return fact.status == "do-not-print"
+
+
+def printed_text(fact: Fact) -> str:
+    """What a build may print for this fact: its text, or `WITHHELD` for a do-not-print fact."""
+    return WITHHELD if _withheld(fact) else fact.text
 
 
 class FactError(ValueError):
@@ -47,14 +59,16 @@ class FactNotes:
         """Tokens → the fact's text, without a marker (titles, labels, meta). The fact is still noted."""
         if text is None:
             return None
-        return FACT_TOKEN_RE.sub(lambda m: self.facts[self._id(m)].text, text)
+        return FACT_TOKEN_RE.sub(lambda m: printed_text(self.facts[self._id(m)]), text)
 
     def mark(self, text: str) -> str:
         """Tokens → sentinel-wrapped fact text, ready for markdown; pass the rendered HTML to `finish`."""
 
         def sub(m: re.Match[str]) -> str:
             n = self.number(m.group(1))
-            return f"{_OPEN}{n}{_MID}{self.facts[m.group(1)].text}{_CLOSE}"
+            fact = self.facts[m.group(1)]
+            body = "" if _withheld(fact) else fact.text  # `finish` prints WITHHELD in its place
+            return f"{_OPEN}{n}{_MID}{body}{_CLOSE}"
 
         return FACT_TOKEN_RE.sub(sub, _SENTINELS.sub("", text))
 
@@ -67,26 +81,29 @@ class FactNotes:
             fact = self.facts[fact_id]
             ok = fact.releasable
             title = "" if ok else f' title="Unverified: {html.escape(fact.status)}"'
+            body = html.escape(WITHHELD) if _withheld(fact) else m.group(2)
             return (
                 f'<span class="v-fact" data-fact="{fact_id}" data-status="{fact.status}"'
-                f' data-releasable="{str(ok).lower()}"{title}>{m.group(2)}</span>'
+                f' data-releasable="{str(ok).lower()}"{title}>{body}</span>'
                 f'<sup class="v-note-ref"><a href="#v-note-{n}" aria-label="Note {n}">{n}</a></sup>'
             )
 
         return _MARKED.sub(sub, rendered)
 
     def notes(self) -> list[dict[str, Any]]:
-        """StoryJSON `notes`: one entry per fact used, numbered in first-use order."""
+        """StoryJSON `notes`: one entry per fact used, numbered in first-use order (withheld facts
+        keep their number and status but carry `WITHHELD` and no sources)."""
         return [
             {
                 "n": i,
                 "factId": fact_id,
-                "text": self.facts[fact_id].text,
-                "sources": list(self.facts[fact_id].sources),
-                "status": self.facts[fact_id].status,
-                "releasable": self.facts[fact_id].releasable,
+                "text": printed_text(fact),
+                "sources": [] if _withheld(fact) else list(fact.sources),
+                "status": fact.status,
+                "releasable": fact.releasable,
             }
             for i, fact_id in enumerate(self.order, 1)
+            for fact in [self.facts[fact_id]]
         ]
 
     def unverified(self) -> int:

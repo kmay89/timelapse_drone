@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import cv2
 import numpy as np
+import pytest
 from PIL import Image
+from pydantic import ValidationError
 
 from test_align import WORLD, make_world, random_homography, reference_view, render_view
 from test_select import SITE, Shot, build_project
-from vantage.models import FramePick, MastersIndex
+from vantage.config import CaptureNote, Vantage
+from vantage.models import Catalog, FramePick, MastersIndex, Selection, VantageSelection
 from vantage.process.masters import make_masters
 from vantage.process.select import select_frames
 
@@ -38,7 +42,8 @@ def test_make_masters_end_to_end(tmp_path):
     # A manual pick that cannot register is kept (flagged); an automatic one is dropped.
     picks["2025-08-10"] = FramePick(source=shots["lost"].source.id, date="2025-08-10", manual=True)
     picks["2025-05-01"] = FramePick(source=shots["decoy"].source.id, date="2025-05-01")
-    stale = project.masters_dir / "overview" / "2020-01-01.jpg"
+    # A master from an earlier run whose visit was processed again and is no longer kept is removed.
+    stale = project.masters_dir / "overview" / "2025-05-01.jpg"
     stale.parent.mkdir(parents=True)
     stale.write_bytes(b"old")
 
@@ -118,3 +123,104 @@ def test_visit_unlike_the_reference_is_chained_through_its_neighbour(tmp_path):
         master = cv2.imread(str(project.masters_dir / by_date[date].file))
         shifts = _tile_shifts(truth, master)
         assert shifts.max() < tolerance, (date, shifts)
+
+
+def test_processing_only_some_visits_keeps_the_committed_masters(tmp_path):
+    """A session that pulled only the newest flight into footage/ must not delete the other masters."""
+    world = make_world(seed=3)
+    rng = np.random.default_rng(11)
+    h_june = random_homography(rng)
+    shots = {
+        "ref": Shot("2025-09-01/DJI_0100.JPG", reference_view(world), 900.0, np.eye(3)),
+        "june": Shot("2025-06-14/DJI_0007.JPG", render_view(world, h_june, rng), 400.0, h_june),
+    }
+    project, catalog, _ = build_project(tmp_path, shots=shots, config={"align": {"ecc_refine": False}})
+    full = make_masters(project, select_frames(project, catalog))
+    assert [c.date for c in full.vantages["overview"].captures] == ["2025-06-14", "2025-09-01"]
+    committed = {p: p.read_bytes() for p in sorted(project.masters_dir.rglob("*")) if p.is_file()}
+    review = project.work_dir / "review" / "overview"
+    sheets = sorted(p.name for p in review.iterdir())
+
+    # Only the newest visit is pulled: ingest catalogs it alone and select picks it alone.
+    newest = {s.id for s in catalog.sources if s.date == "2025-09-01"}
+    partial = Catalog(
+        sources=[s for s in catalog.sources if s.id in newest],
+        candidates=[c for c in catalog.candidates if c.source in newest],
+    )
+    partial.save(project.work_dir / "catalog.json")
+    selection = select_frames(project, partial)
+    assert list(selection.vantages["overview"].picks) == ["2025-09-01"]
+    with pytest.raises(ValueError, match=r"no footage .*overview 2025-06-14\b"):
+        make_masters(project, selection)
+    assert {p: p.read_bytes() for p in sorted(project.masters_dir.rglob("*")) if p.is_file()} == committed
+    assert sorted(p.name for p in review.iterdir()) == sheets
+
+    # Excluding the visit in story.yaml is how it is dropped on purpose.
+    project.story.captures = [CaptureNote(date=dt.date(2025, 6, 14), exclude=True)]
+    index = make_masters(project, select_frames(project, partial))
+    assert [c.date for c in index.vantages["overview"].captures] == ["2025-09-01"]
+    assert sorted(p.name for p in (project.masters_dir / "overview").iterdir()) == ["2025-09-01.jpg"]
+
+
+@pytest.mark.parametrize(
+    "vid", ["/tmp/elsewhere", "../../footage/2025-06-14", "a/b", "..", "Overview", "", "-x"]
+)
+def test_vantage_ids_are_plain_folder_names(vid):
+    with pytest.raises(ValidationError, match="vantage id"):
+        Vantage.model_validate({"id": vid, "name": "V"})
+    assert Vantage.model_validate({"id": "north_2-b", "name": "V"}).id == "north_2-b"
+
+
+def test_pick_keys_are_flight_dates():
+    ref = {"source": "2025-06-14/DJI_0007.JPG"}
+    for key in ("../../victim/x", "/tmp/x", "2025-6-14", "2025-02-30", "latest"):
+        with pytest.raises(ValidationError, match="pick key"):
+            Vantage.model_validate({"id": "v", "name": "V", "picks": {key: ref}})
+    # Quoted or not in the YAML (an unquoted key loads as a date), the key is 'YYYY-MM-DD'.
+    v = Vantage.model_validate(
+        {"id": "v", "name": "V", "picks": {dt.date(2025, 6, 14): ref, "2025-07-02": ref}}
+    )
+    assert list(v.picks) == ["2025-06-14", "2025-07-02"]
+
+
+def test_process_never_writes_or_clears_files_outside_the_project(tmp_path):
+    """story.yaml and work/selection.json cannot steer masters/ or work/review/ writes and deletes elsewhere."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    for name in ("holiday-1.jpg", "holiday-2.jpg"):
+        (victim / name).write_bytes(b"keep me")
+    shots = {"ref": Shot("2025-09-01/DJI_0100.JPG", reference_view(make_world(seed=3)), 900.0, np.eye(3))}
+
+    with pytest.raises(ValidationError, match="vantage id"):
+        build_project(tmp_path / "abs", shots=shots, vantage={"id": str(victim)})
+    with pytest.raises(ValidationError, match="pick key"):
+        build_project(
+            tmp_path / "rel", shots=shots, vantage={"picks": {"../../../victim/x": {"source": "a.jpg"}}}
+        )
+
+    # A hand-edited selection.json, or a story changed in memory, is refused before anything is touched.
+    project, _, shots = build_project(tmp_path / "ok", shots=shots)
+    pick = FramePick(source=shots["ref"].source.id, date="2025-09-01")
+    tampered = Selection(
+        vantages={"overview": VantageSelection(reference=pick, picks={"../../../victim/x": pick})}
+    )
+    with pytest.raises(ValueError, match="not YYYY-MM-DD dates"):
+        make_masters(project, tampered)
+    project.story.vantages[0].id = str(victim)
+    with pytest.raises(ValueError, match="not a plain folder name"):
+        make_masters(project, Selection(vantages={str(victim): VantageSelection(reference=pick, picks={})}))
+    assert sorted(p.name for p in victim.iterdir()) == ["holiday-1.jpg", "holiday-2.jpg"]
+    assert not project.masters_dir.exists() and not (project.work_dir / "review").exists()
+
+
+@pytest.mark.parametrize(
+    "file", ["../../secret.jpg", "/etc/secret.jpg", "overview/../../x.jpg", "a\\..\\b.jpg", ""]
+)
+def test_index_json_files_stay_inside_masters(file):
+    """build, film and caption open masters/<file> and publish it."""
+    capture = {"date": "2025-06-14", "file": file, "source": "s", "align": {"method": "reference"}}
+    index = {"vantages": {"overview": {"name": "O", "width": 4, "height": 3, "captures": [capture]}}}
+    with pytest.raises(ValidationError, match="inside masters/"):
+        MastersIndex.model_validate(index)
+    capture["file"] = "overview/2025-06-14.jpg"
+    assert MastersIndex.model_validate(index).vantages["overview"].captures[0].file == capture["file"]

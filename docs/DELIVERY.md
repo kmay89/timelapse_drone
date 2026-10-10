@@ -36,6 +36,10 @@ runtime turns into blob URLs on demand; videos are never `data:` sources.
   `navigator.storage.persist()`.
 - iOS `<video>` makes HTTP Range requests: the service worker answers from cache with `206` slices
   (`runtime/sw.js`), and `vantage preview` serves byte ranges.
+- Updates: a new flight or a copy edit keeps a reader's saved copy. Unchanged files stay on the
+  device, and the next time they open the story online it downloads only what changed (the Contents
+  sheet shows the progress). Visitors who never tap Save store only the page, fonts, logos, icons, the
+  opening picture and what they actually looked at.
 - The text that goes with a link: *"Open the link in Safari, tap Share, then Add to Home Screen. Open
   it from the new icon and tap Save for offline. It now works in airplane mode."* (`HOW-TO-VIEW.txt`
   has the full version.)
@@ -73,8 +77,9 @@ Cloudflare Access or a Netlify password for review.
 - Keep a second copy on a local drive. After a project ends, move the bucket to infrequent access.
 - Masters (aligned JPEGs) **are** committed in the private projects repo: they are small and let CI
   rebuild the story without footage.
-- Cloud Claude Code sessions have limited disk (about 30 GB): pull only the visits being processed,
-  or run heavy ingests locally.
+- Cloud Claude Code sessions have limited disk (about 30 GB). `vantage process` crops and grades
+  every visit together, so it needs the footage of all of them; with only some visits pulled it stops
+  before touching `masters/`. Run heavy processing locally, or build from the committed masters.
 
 ## Release process
 

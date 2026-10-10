@@ -19,10 +19,42 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}){1,2}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# Matched in full. A vantage id names folders (masters/<id>/, work/review/<id>/) and a pick date
+# names a file (<date>.jpg) that `vantage process` writes and clears.
+VANTAGE_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+# CSS values a FontSpec may carry (matched in full): font names are identifiers or quoted strings
+# without quotes, backslashes, ; { } ( ) < > or control characters; weights and feature tags are
+# the plain forms of font-weight and font-feature-settings.
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_IDENT = r"-?[^\W\d][\w-]*"
+_NAME = rf"""(?:'[^'"\\;{{}}()<>\x00-\x1f\x7f]*'|"[^'"\\;{{}}()<>\x00-\x1f\x7f]*"|{_IDENT}(?: +{_IDENT})*)"""
+_WEIGHT = r"(?:normal|bold|\d{1,4})"
+_FEATURE = r"""(?:'[A-Za-z0-9]{4}'|"[A-Za-z0-9]{4}")(?: +(?:\d{1,3}|on|off))?"""
+_FONT_CSS = {
+    "fallback": (
+        re.compile(rf"{_NAME}(?: *, *{_NAME})*"),
+        "a comma-separated list of font names, e.g. \"Georgia, 'Times New Roman', serif\"",
+    ),
+    "weight": (re.compile(rf"{_WEIGHT}(?: +{_WEIGHT})?"), 'a font weight or range, e.g. "400" or "100 900"'),
+    "features": (
+        re.compile(rf"normal|{_FEATURE}(?: *, *{_FEATURE})*"),
+        "CSS font-feature-settings, e.g. \"'tnum' 1, 'lnum' 1\"",
+    ),
+}
 
 
 class Model(BaseModel):
@@ -79,6 +111,26 @@ class FontSpec(Model):
     style: Literal["normal", "italic"] = "normal"
     fallback: str = "system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif"
     features: str | None = Field(None, description="CSS font-feature-settings, e.g. \"'ss01' 1\".")
+
+    # These fields are written into the theme CSS of every edition, so each must be a value of its
+    # own kind: never a way to close the declaration and add rules, url()s or other properties.
+    @field_validator("family")
+    @classmethod
+    def _plain_family(cls, value: str) -> str:
+        if _CONTROL_RE.search(value):
+            raise ValueError(f"family must be plain text, without newlines or control characters: {value!r}")
+        return value
+
+    @field_validator("fallback", "weight", "features")
+    @classmethod
+    def _css_value(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if value is None:
+            return None
+        pattern, hint = _FONT_CSS[info.field_name or ""]
+        value = value.strip(" ")
+        if not pattern.fullmatch(value):
+            raise ValueError(f"{info.field_name} must be {hint} (it goes into the page's CSS), got {value!r}")
+        return value
 
 
 class BrandTypography(Model):
@@ -139,6 +191,8 @@ class BrandKit(Model):
 
 
 class Location(Model):
+    """Where the site is. Stories publish name and region only; lat/lon never leave project.yaml."""
+
     name: str
     region: str | None = None
     lat: float | None = None
@@ -199,9 +253,7 @@ class ProjectConfig(Model):
     slug: str
     title: str
     subtitle: str | None = None
-    kicker: str | None = Field(
-        None, description="Small line above the title, e.g. 'Riverside, Ohio · 2025–2026'."
-    )
+    kicker: str | None = Field(None, description="Small line above the title, e.g. 'Riverside · 2025–2026'.")
     dek: str | None = Field(None, description="One-paragraph standfirst under the title.")
     byline: str | None = None
     lang: str = "en"
@@ -228,9 +280,19 @@ class ProjectConfig(Model):
 # Story (editorial)
 # --------------------------------------------------------------------------- #
 
-# A capture reference: an ISO date ("2026-09-12"), or "earliest" / "latest",
+
+def _as_text(value: Any) -> Any:
+    """YAML reads an unquoted 2025-06-14 as a date and 1970 as an int; keep the text the writer typed."""
+    if isinstance(value, dt.date) or (isinstance(value, int) and not isinstance(value, bool)):
+        return str(value)
+    return value
+
+
+# Display text that is often a bare year or date ('1970', 2025-10-23), quoted or not in the YAML.
+DisplayDate = Annotated[str, BeforeValidator(_as_text)]
+# A capture reference: an ISO date ("2026-09-12", quoted or not), or "earliest" / "latest",
 # or an index like "#3" into the date-sorted captures of a vantage.
-CaptureRef = str
+CaptureRef = Annotated[str, BeforeValidator(_as_text)]
 
 
 class FrameRef(Model):
@@ -265,6 +327,39 @@ class Vantage(Model):
     picks: dict[str, FrameRef] = Field(
         default_factory=dict, description="Manual per-date overrides: {'2025-06-14': {source, t}}."
     )
+
+    # Both end up in paths `vantage process` writes and deletes, so neither may lead out of the project.
+    @field_validator("id")
+    @classmethod
+    def _plain_id(cls, value: str) -> str:
+        if not VANTAGE_ID_RE.fullmatch(value):
+            raise ValueError(
+                "vantage id must be lowercase letters, digits, '-' and '_', starting with a letter or "
+                f"digit (it names folders under masters/ and work/review/), got {value!r}"
+            )
+        return value
+
+    @field_validator("picks", mode="before")
+    @classmethod
+    def _date_keys(cls, value: Any) -> Any:
+        """Keys are flight dates, normalized to 'YYYY-MM-DD' (quoted or not in the YAML)."""
+        if not isinstance(value, dict):
+            return value
+        out: dict[str, Any] = {}
+        for key, ref in value.items():
+            if isinstance(key, dt.date) and not isinstance(key, dt.datetime):
+                date = key.isoformat()
+            elif isinstance(key, str) and ISO_DATE_RE.fullmatch(key):
+                try:
+                    date = dt.date.fromisoformat(key).isoformat()
+                except ValueError:
+                    raise ValueError(f"pick key {key!r} is not a real date") from None
+            else:
+                raise ValueError(f"pick key {key!r} must be a flight date, YYYY-MM-DD")
+            if date in out:
+                raise ValueError(f"two picks for {date}")
+            out[date] = ref
+        return out
 
 
 class CaptureNote(Model):
@@ -381,7 +476,7 @@ class StatsChapter(_Chapter):
 
 
 class TimelineItem(Model):
-    date: str = Field(..., description="Free-form display date, e.g. '1970' or 'Oct 23, 2025'.")
+    date: DisplayDate = Field(..., description="Free-form display date, e.g. '1970' or 'Oct 23, 2025'.")
     title: str
     status: Literal["done", "in-progress", "planned"] | None = None
     body: str | None = None
@@ -400,7 +495,7 @@ class GalleryImage(Model):
         ..., description="Image path relative to the project folder (archival photos, postcards)."
     )
     caption: str | None = None
-    date: str | None = Field(None, description="Display date, e.g. 'c. 1930–45'.")
+    date: DisplayDate | None = Field(None, description="Display date, e.g. 'c. 1930–45'.")
     credit: str | None = None
     alt: str | None = None
 

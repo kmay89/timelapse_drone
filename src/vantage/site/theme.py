@@ -9,8 +9,10 @@ sRGB gamut), e.g. `--v-accent-on-night` / `--v-accent-on-paper`. Chapters switch
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -191,6 +193,8 @@ def _faces(spec: FontSpec, styles: set[str], brand: BrandKit) -> list[_Face]:
             raise ValueError(f"brand.yaml: font {rel!r} is outside the brand folder {brand.root}")
         if path.suffix.lower() != ".woff2":
             raise ValueError(f"brand.yaml: font {rel!r} is not a .woff2 file")
+        if re.search(r'["\\\x00-\x1f\x7f]', path.name):  # it goes into url("…") in the CSS
+            raise ValueError(f"brand.yaml: font {rel!r} has a quote or control character; rename the file")
         style = "italic" if "italic" in path.stem.lower() else spec.style
         if style in styles:
             faces.append(_Face(spec.family, path, style, spec.weight, None))
@@ -209,8 +213,9 @@ def font_file(brand: BrandKit, role: str) -> Path:
 
 
 def _family(name: str) -> str:
-    """A family name as a CSS string."""
-    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """A family name as a CSS string: quotes, backslashes and control characters (\\n → \\a) escaped."""
+    text = name.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + re.sub(r"[\x00-\x1f\x7f]", lambda m: f"\\{ord(m[0]):x} ", text) + '"'
 
 
 def _stack(spec: FontSpec) -> str:
@@ -219,6 +224,14 @@ def _stack(spec: FontSpec) -> str:
     if fallback == _DEFAULT_FALLBACK and info.get("category") == "serif":
         fallback = _SERIF_FALLBACK
     return f"{_family(spec.family)}, {fallback}"
+
+
+def _font_dest(src: Path, prefix: str) -> str:
+    """A face file's site path. Bundled names are unique; a client file's name gets a content hash,
+    so `serif/Regular.woff2` and `sans/Regular.woff2` don't overwrite each other in one folder."""
+    if src.is_relative_to(_FONTS_DIR):
+        return prefix + src.name
+    return f"{prefix}{src.stem}-{hashlib.sha256(src.read_bytes()).hexdigest()[:8]}{src.suffix}"
 
 
 def _font_face(face: _Face, url: str) -> str:
@@ -293,7 +306,8 @@ def theme_css(brand: BrandKit, *, font_prefix: str = "assets/fonts/", italic: bo
     for spec, styles in roles:
         for face in _faces(spec, styles, brand):
             faces.setdefault((face.family, face.src), face)
-    fonts = list({f.src: FontAsset(f.src, font_prefix + f.src.name) for f in faces.values()}.values())
+    dests = {f.src: _font_dest(f.src, font_prefix) for f in faces.values()}
+    fonts = [FontAsset(src, dest) for src, dest in dests.items()]
     decls = {f"--v-{name}": value for name, value in colors.items()}
     decls |= {
         "--v-night-rgb": _rgb_triplet(colors["night"]),
@@ -308,5 +322,5 @@ def theme_css(brand: BrandKit, *, font_prefix: str = "assets/fonts/", italic: bo
         "color-scheme": "light" if brand.theme == "light" else "dark",
     }
     root = ":root{" + ";".join(f"{k}:{v}" for k, v in decls.items()) + "}"
-    css = "\n".join([root, *(_font_face(face, font_prefix + face.src.name) for face in faces.values())])
+    css = "\n".join([root, *(_font_face(face, dests[face.src]) for face in faces.values())])
     return Theme(css=css + "\n", fonts=fonts, colors=colors)

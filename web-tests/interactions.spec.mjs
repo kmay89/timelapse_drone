@@ -6,6 +6,7 @@ import { expect, test } from "@playwright/test";
 import {
   chapterCheckpoints,
   currentDate,
+  effectiveOpacity,
   escapeRe,
   geometry,
   readStory,
@@ -38,6 +39,29 @@ async function settled(slider) {
   return valueOf(slider);
 }
 
+/**
+ * One tap (a touch on phones, a mouse click elsewhere) on `area`, at a spot on the far side of the
+ * curtain where nothing (a pin, a card, a button) lies on top of the picture: WCAG 2.2 SC 2.5.7 asks
+ * that what a drag does also works without one. Returns the slider value the tap points at.
+ */
+async function tapAcross(page, area, slider) {
+  const box = await area.boundingBox();
+  const grip = await slider.boundingBox();
+  const y = grip.y + grip.height / 2;
+  for (const f of (await settled(slider)) > 50 ? [0.2, 0.3, 0.12, 0.4] : [0.8, 0.7, 0.88, 0.6]) {
+    const x = box.x + f * box.width;
+    const clear = await slider.evaluate((el, [x, y]) => {
+      const hit = document.elementFromPoint(x, y);
+      return !!hit && (hit.contains(el) || hit.getAttribute("role") === "img");
+    }, [x, y]);
+    if (!clear) continue;
+    if (test.info().project.use.hasTouch) await page.touchscreen.tap(x, y);
+    else await page.mouse.click(x, y);
+    return f * 100;
+  }
+  throw new Error("no clear spot on the picture to tap");
+}
+
 function controlTests() {
   test("scrub: the date label follows the scroll from the first to the last capture", async ({ page }) => {
     const { story, ch } = await open(page, "scrub");
@@ -48,6 +72,33 @@ function controlTests() {
     await expect.poll(() => currentDate(sec, labels)).toBe(labels[ch.from]);
     await scrollToY(page, top + height - vh - 1);
     await expect.poll(() => currentDate(sec, labels)).toBe(labels[ch.to]);
+  });
+
+  test("scrub: a step card's links are in the tab order exactly while the card shows", async ({ page }) => {
+    const { ch } = await open(page, "scrub", (c) => c.steps.some((s) => /<a\s/.test(s.html || "")));
+    const sec = section(page, ch);
+    const { top, height, vh } = await geometry(sec);
+    let showing = 0;
+    for (let k = 0; k <= 48; k++) {
+      await scrollToY(page, top + (k / 48) * (height - vh));
+      // The stage applies a scroll on its next frame, and under reduced motion every style change is a
+      // 0.01 ms transition, so a single read can land between the two: read until the stage has settled.
+      let links = [];
+      await expect
+        .poll(async () => {
+          links = await sec.getByRole("link").evaluateAll((els) =>
+            els.filter((a) => onScreen(a)).map((a) => {
+              let o = 1;
+              for (let n = a; n instanceof Element; n = n.parentElement) o *= Number(getComputedStyle(n).opacity);
+              return { name: a.getAttribute("aria-label") || a.textContent, o, tabbable: a.tabIndex >= 0 };
+            }),
+          );
+          return links.filter((l) => l.tabbable !== l.o > 0.5).map((l) => `"${l.name}" at opacity ${l.o.toFixed(2)}`);
+        }, { message: "links that are tabbable while their card is hidden, or the reverse", timeout: 5_000 })
+        .toEqual([]);
+      showing += links.filter((l) => l.o > 0.5).length;
+    }
+    expect(showing, "a step card with a link came into view").toBeGreaterThan(0);
   });
 
   test("compare: the curtain is a keyboard slider with date text", async ({ page }) => {
@@ -92,6 +143,17 @@ function controlTests() {
     await expect.poll(async () => Math.sign((await settled(slider)) - before)).toBe(Math.sign(dx));
   });
 
+  test("compare: a tap on the picture moves the curtain there", async ({ page }) => {
+    const { ch } = await open(page, "compare", curtain);
+    const sec = section(page, ch);
+    const slider = sec.getByRole("slider").first();
+    await expect(slider).toBeVisible();
+    await slider.scrollIntoViewIfNeeded();
+    await expect(slider).toHaveAttribute("aria-valuenow", /\d/);
+    const want = await tapAcross(page, sec, slider); // the curtain spans the section's width
+    await expect.poll(async () => Math.abs((await settled(slider)) - want)).toBeLessThanOrEqual(3);
+  });
+
   test("compare: scrolling through the steps sweeps the curtain", async ({ page }) => {
     const { ch } = await open(page, "compare", (c) => curtain(c) && c.steps.filter((s) => s.split != null).length > 1);
     const splits = ch.steps.filter((s) => s.split != null).map((s) => s.split * 100);
@@ -100,6 +162,7 @@ function controlTests() {
     await expect(slider).toBeVisible();
     const { top, height, vh } = await geometry(sec);
     await scrollToY(page, top + 1);
+    await expect(slider).toHaveAttribute("aria-valuenow", /\d/); // a missing value would read as 0
     const start = await settled(slider);
     await scrollToY(page, top + height - vh - 1);
     const travel = Math.abs(splits.at(-1) - splits[0]);
@@ -142,6 +205,42 @@ function controlTests() {
     await expect(toggle).toBeHidden();
   });
 
+  test("explore: in Curtain mode a tap on the picture moves the divider there", async ({ page }) => {
+    const { story, ch } = await open(page, "explore");
+    const sec = section(page, ch);
+    const mode = sec.getByRole("button", { name: "Curtain", exact: true });
+    test.skip(!(await mode.count()), "this explore chapter has no two-flight modes");
+    await mode.scrollIntoViewIfNeeded();
+    await mode.click();
+    const v = story.vantages.find((x) => x.id === ch.vantages[0]);
+    const stage = sec.getByRole("img", { name: new RegExp(`^${escapeRe(v.name)}, `) });
+    const slider = sec.getByRole("slider", { name: /divider/i });
+    await expect(slider).toBeVisible();
+    await stage.scrollIntoViewIfNeeded();
+    const want = await tapAcross(page, stage, slider);
+    await expect.poll(async () => Math.abs((await settled(slider)) - want)).toBeLessThanOrEqual(3);
+  });
+
+  test("keyboard: every Tab stop can be seen (none in a faded step card or pin)", async ({ page }) => {
+    await page.goto("./");
+    const stops = [];
+    for (let i = 0; i < 400; i++) {
+      await page.keyboard.press("Tab");
+      const stop = await page.evaluate(() => {
+        const el = document.activeElement;
+        const seen = (window.tabStops ??= new WeakSet());
+        if (!el || el === document.body || seen.has(el)) return null; // past the last stop, or round again
+        seen.add(el);
+        return `${el.closest("section")?.id ?? "page"}: ${el.tagName.toLowerCase()} "${el.getAttribute("aria-label") || el.textContent.trim().slice(0, 40)}"`;
+      });
+      if (!stop) break;
+      stops.push(stop);
+      // A moment for entrance fades (the hero's pause button, headings rising in) to finish.
+      await expect.poll(() => effectiveOpacity(page.locator(":focus")), { message: `${stop} has focus but cannot be seen`, timeout: 4_000 }).toBeGreaterThan(0.5);
+    }
+    expect(stops.length, "Tab reaches the story's controls").toBeGreaterThan(2);
+  });
+
   test("chapter index: opens, lists the chapters, and jumps to one", async ({ page }) => {
     await page.goto("./");
     const story = await readStory(page);
@@ -153,6 +252,45 @@ function controlTests() {
     const target = titled.at(-1);
     await page.getByRole("link", { name: target.title }).first().click();
     await expect(section(page, target)).toBeInViewport();
+    // Focus follows the jump, so the next Tab carries on from the chapter, not from the Contents button.
+    await expect(section(page, target).getByRole("heading", { name: target.title, exact: true })).toBeFocused();
+  });
+
+  test("timeline: Explore from this flight moves focus to the explore chapter", async ({ page }) => {
+    await page.goto("./");
+    const story = await readStory(page);
+    const ex = story.chapters.find((c) => c.type === "explore");
+    const tl = story.chapters.find((c) => c.type === "timeline");
+    const it = ex && tl?.items.find((x) => x.vantage && x.capture != null && ex.vantages.includes(x.vantage));
+    test.skip(!it, "no timeline flight from a vantage the explore chapter covers");
+    const label = story.vantages.find((v) => v.id === it.vantage).captures[it.capture].label;
+    const thumb = section(page, tl).getByRole("button", { name: `View the ${label} flight` }).first();
+    await thumb.scrollIntoViewIfNeeded();
+    await thumb.click();
+    const go = page.getByRole("dialog").getByRole("button", { name: "Explore from this flight" });
+    test.skip(!(await go.count()), "the explore chapter leaves this vantage out");
+    await go.click();
+    const sec = section(page, ex);
+    await expect(ex.title ? sec.getByRole("heading", { name: ex.title, exact: true }) : sec).toBeFocused();
+  });
+
+  test("stats: assistive tech reads every figure's real value, before and after it counts up", async ({ page }) => {
+    const { ch } = await open(page, "stats");
+    const items = section(page, ch).getByRole("list").last().getByRole("listitem"); // after any list in the lede
+    await expect(items).toHaveCount(ch.items.length);
+    const check = async (when) => {
+      for (const [k, it] of ch.items.entries()) {
+        const snap = await items.nth(k).ariaSnapshot();
+        // The item's text starts with the figure, once: not a placeholder 0 or a count in flight.
+        const v = escapeRe(it.value);
+        const re = new RegExp(`^- listitem:(?:\\s+- text:)? "?${v}(?![\\d.,]| ${v})`);
+        expect(snap, `${ch.id} item ${k} ${when}`).toMatch(re);
+      }
+    };
+    await check("before it is scrolled to"); // figures below the fold wait to count up from zero
+    await items.last().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(1800); // every figure has counted up (900 ms each, 110 ms apart)
+    await check("after it counts up");
   });
 }
 
@@ -168,6 +306,42 @@ test.describe("interactions", () => {
       tops.push(await canvas.evaluate((c) => c.getBoundingClientRect().top));
     }
     expect(Math.abs(tops[0] - tops[1]), "the stage moved: it is not pinned").toBeLessThan(2);
+  });
+
+  test("compare: a first step with no text still lets the next step's card show", async ({ page }) => {
+    // A step may only move the curtain ({text: "", split}). The StoryJSON is edited in flight to make one.
+    const marker = "The card of the step after a step with no text";
+    await page.route(/\/(index\.html)?$/, async (route) => {
+      const res = await route.fetch();
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      const body = (await res.text()).replace(/(<script id="vantage-story" type="application\/json">)(.*?)(<\/script>)/s, (_, a, json, c) => {
+        const story = JSON.parse(json);
+        const ch = story.chapters.find((x) => x.type === "compare" && x.steps.length > 1);
+        if (ch) [ch.steps[0].html, ch.steps[1].html] = ["", `<p>${marker}</p>`];
+        return a + JSON.stringify(story).replace(/</g, "\\u003c") + c;
+      });
+      await route.fulfill({ response: res, headers, body });
+    });
+    const { ch } = await open(page, "compare", (c) => c.steps.length > 1 && c.steps[0].html === "");
+    const sec = section(page, ch);
+    const card = sec.getByText(marker);
+    const { top, height, vh } = await geometry(sec);
+    let most = 0;
+    for (let k = 0; k <= 16 && most < 0.9; k++) {
+      await scrollToY(page, top + (k / 16) * (height - vh));
+      most = Math.max(most, await effectiveOpacity(card));
+    }
+    expect(most, "scrolling through the chapter never showed the second step's card").toBeGreaterThan(0.9);
+  });
+
+  test("chrome: Share and Contents come before the story in the tab order, as they do on screen", async ({ page }) => {
+    await page.goto("./");
+    const menu = page.getByRole("navigation", { name: "Story" }).getByRole("button", { name: "Contents" });
+    await expect(menu).toBeVisible();
+    const main = await page.getByRole("main").elementHandle();
+    expect(await menu.evaluate((el, main) => !!(el.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING), main)).toBe(true);
   });
 
   test("hero: the ambient motion has a pause button, remembered for the session", async ({ page }) => {
@@ -189,6 +363,77 @@ test.describe("interactions", () => {
     await expect(pause).toBeVisible();
   });
 
+  test("explore: the flight pickers are 16 px or larger, so iOS Safari does not zoom in on focus", async ({ page }) => {
+    const { ch } = await open(page, "explore");
+    const sec = section(page, ch);
+    const mode = sec.getByRole("button", { name: "Curtain", exact: true });
+    test.skip(!(await mode.count()), "this explore chapter has no two-flight modes");
+    await mode.scrollIntoViewIfNeeded();
+    await mode.click();
+    for (const name of ["Before flight", "After flight"]) {
+      const pick = sec.getByRole("combobox", { name });
+      await expect(pick).toBeVisible();
+      expect(await pick.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), name).toBeGreaterThanOrEqual(16);
+    }
+  });
+
+  test("explore: flights are decoded at the size they are drawn, sharper only while zoomed in", async ({ page }) => {
+    // Every decoded flight (an ImageBitmap) drawn on a canvas: its width, and source px per canvas px.
+    await page.addInitScript(() => {
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      CanvasRenderingContext2D.prototype.drawImage = function (src, ...a) {
+        if (src instanceof ImageBitmap && a.length === 8) (this.canvas.draws ||= []).push({ w: src.width, k: a[2] / a[6] });
+        return drawImage.call(this, src, ...a);
+      };
+    });
+    const { story, ch } = await open(page, "explore");
+    const sec = section(page, ch);
+    const v = story.vantages.find((x) => x.id === ch.vantages[0]);
+    const widest = Math.max(...v.captures.flatMap((c) => [c.img.w, ...c.img.sources.flatMap((s) => s.srcset.map((e) => e[1]))]));
+    const stage = sec.getByRole("img", { name: new RegExp(`^${escapeRe(v.name)}`) });
+    await stage.scrollIntoViewIfNeeded();
+    const last = async () => (await stage.evaluate((c) => c.draws ?? [])).at(-1);
+    await expect.poll(last, { message: "a decoded flight is drawn" }).toBeTruthy();
+    await page.waitForTimeout(300);
+    const flat = await last();
+    expect(flat.k, `a ${flat.w} px decode is oversampled ${flat.k.toFixed(2)}× at rest`).toBeLessThanOrEqual(1.05);
+
+    const box = await stage.boundingBox();
+    await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+    const reset = sec.getByRole("button", { name: "Reset zoom" });
+    await expect(reset).toBeVisible();
+    await expect.poll(async () => (await last()).w, { message: "zoomed in, the flight is re-decoded sharper" })
+      .toBeGreaterThanOrEqual(Math.min(widest, 1.5 * flat.w) - 1);
+
+    await reset.click();
+    await expect(reset).toBeHidden();
+    await page.waitForTimeout(300);
+    expect((await last()).k, "back at rest, the sharper decode is dropped").toBeLessThanOrEqual(1.05);
+  });
+
+  test("motion: once the reader moves on, nothing loops forever but an on-screen hero's pausable drift", async ({ page }) => {
+    // Endless animations keep the compositor drawing (iPhones stay at 120 Hz) and, unpaused, fail WCAG 2.2.2.
+    await page.goto("./");
+    const story = await readStory(page);
+    const heroes = story.chapters.filter((c) => c.type === "hero").map((c) => `section[id="${c.id}"]`).join(",") || "#none";
+    await page.waitForTimeout(2300); // the hero's scroll cue has come up
+    for (const ch of story.chapters.filter((c) => c.type !== "hero")) {
+      const { top, height, vh } = await geometry(section(page, ch));
+      for (const p of [0.5, 1]) {
+        await scrollToY(page, top + p * Math.max(0, height - vh));
+        const loops = await page.evaluate((heroes) => {
+          const drift = (t, pseudo) => !pseudo && t.localName === "img" && t.closest(heroes) && onScreen(t.closest(heroes));
+          return document
+            .getAnimations()
+            .filter((a) => a.playState === "running" && a.effect.getComputedTiming().endTime === Infinity)
+            .filter(({ effect: e }) => !drift(e.target, e.pseudoElement))
+            .map(({ effect: e }) => `${e.target.className || e.target.localName}${e.pseudoElement || ""}`);
+        }, heroes);
+        expect(loops, `endless animations with ${ch.id} at ${p * 100}%`).toEqual([]);
+      }
+    }
+  });
+
   /* Save for offline when the service worker misbehaves: it is stubbed in the page, so these run against
    * any hosted (http/https) copy. */
   const stubWorker = (page, mode) =>
@@ -207,9 +452,13 @@ test.describe("interactions", () => {
       Object.defineProperty(sw, "ready", { get: () => (mode === "stalled" ? new Promise(() => {}) : Promise.resolve({ active })) });
     }, mode);
 
-  const saveSheet = async (page) => {
+  const hosted = async (page) => {
     await page.goto("./");
     test.skip(!/^https?:/.test(page.url()) || !(await page.locator("html[data-sw]").count()), "not a hosted edition");
+  };
+
+  const saveSheet = async (page) => {
+    if (!/^https?:/.test(page.url())) await hosted(page);
     await page.getByRole("button", { name: /chapters|contents|index/i }).first().click();
     const save = page.getByRole("dialog").getByRole("button", { name: "Save for offline" });
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -240,6 +489,78 @@ test.describe("interactions", () => {
       await expect(sheet.getByRole("progressbar")).toBeHidden();
     });
   }
+
+  /* The real service worker. Chromium only: Playwright's handle on a worker is Chromium's, and WebKit's
+   * worker is checked on a device (docs/DELIVERY.md). */
+  const realWorker = async (page, browserName) => {
+    test.skip(browserName !== "chromium", "drives the real service worker through Chromium");
+    await hosted(page);
+    test.skip(!(await page.evaluate(() => "serviceWorker" in navigator)), "this browser has no service workers here");
+    await page.waitForFunction(() => navigator.serviceWorker.controller, null, { timeout: 30_000 }); // installed and in control
+    return page.context().serviceWorkers().at(-1);
+  };
+  /** Every URL in this origin's CacheStorage, without its query. */
+  const cached = (page) =>
+    page.evaluate(async () => {
+      const out = [];
+      for (const name of await caches.keys()) for (const r of await (await caches.open(name)).keys()) out.push(r.url.split("?")[0]);
+      return out;
+    });
+
+  test("offline cache: a first visit stores the opening picture and what the reader saw, nothing more", async ({ page, browserName }) => {
+    const seen = new Set();
+    page.on("request", (r) => seen.add(r.url().split("?")[0]));
+    await realWorker(page, browserName);
+    const story = await readStory(page);
+    const hero = story.chapters[0]?.type === "hero" ? story.chapters[0] : null;
+    const still = hero && vantageOf(story, hero)?.captures.at(hero.capture)?.img;
+    const opening = [still?.fallback, hero?.video?.poster?.fallback].filter(Boolean).map((f) => new URL(f, page.url()).href);
+    await page.waitForTimeout(500); // copies of the last responses are stored in the background
+    const images = (await cached(page)).filter((u) => u.includes("/assets/img/"));
+    expect(images.filter((u) => !seen.has(u) && !opening.includes(u)), "images stored that the page never asked for").toEqual([]);
+  });
+
+  test("save for offline: files the host won't serve are reported, not called saved", async ({ page, browserName }) => {
+    const worker = await realWorker(page, browserName);
+    // From here every download answers 404, the way a file the host refused (over its size cap) would.
+    await worker.evaluate(() => {
+      self.fetch = async () => new Response("", { status: 404 });
+    });
+    const save = await saveSheet(page);
+    await save.click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet.getByRole("button", { name: "Try again" })).toBeEnabled();
+    await expect(sheet.getByText(/Couldn’t save everything/).first()).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Saved for offline" })).toHaveCount(0);
+  });
+
+  test("save for offline: an update keeps the saved copy and fetches only what changed", async ({ page, browserName }) => {
+    await realWorker(page, browserName);
+    const save = await saveSheet(page);
+    await save.click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet.getByRole("button", { name: "Saved for offline" })).toBeDisabled({ timeout: 60_000 });
+    // What the next deploy looks like to the saved copy: one file changed (so the device has no copy of the
+    // new version) and one file is gone from the story.
+    const { changed, dropped, kept } = await page.evaluate(async () => {
+      const cache = await caches.open((await caches.keys()).find((k) => k.startsWith("vantage-")));
+      const reqs = (await cache.keys()).filter((r) => r.url.includes("/assets/"));
+      const changed = reqs.find((r) => r.url.includes("/assets/video/")) || reqs.find((r) => r.url.includes("/assets/img/"));
+      await cache.delete(changed);
+      const dropped = new URL("assets/img/dropped-from-the-story-640.jpg", location.href).href;
+      await cache.put(dropped, new Response("old"));
+      return { changed: changed.url.split("?")[0], dropped, kept: reqs.length };
+    });
+    await page.evaluate(() => navigator.serviceWorker.register(`${document.documentElement.dataset.sw}?next`)); // the update takes over
+    await expect
+      .poll(async () => {
+        const urls = await cached(page);
+        return { changed: urls.includes(changed), dropped: urls.includes(dropped), assets: urls.filter((u) => u.includes("/assets/")).length };
+      }, { timeout: 60_000 })
+      .toEqual({ changed: true, dropped: false, assets: kept });
+    await expect(sheet.getByRole("button", { name: "Saved for offline" })).toBeDisabled();
+    await expect(sheet.getByText(/^Saved for offline/).first()).toBeVisible();
+  });
 
   controlTests();
 });

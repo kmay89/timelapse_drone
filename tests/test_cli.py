@@ -75,6 +75,41 @@ def test_new_creates_a_valid_project(tmp_path: Path, project_dir: Path) -> None:
     assert bad.exit_code == 1 and "invalid slug" in bad.output
 
 
+def test_new_keeps_client_projects_out_of_the_public_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invariant 1: `vantage new` never writes a client project where `git add -A` would publish it."""
+    from vantage import paths
+
+    checkout = tmp_path / "vantage"  # stands in for the public, editable-installed checkout
+    (checkout / "src" / "vantage").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text("")
+    monkeypatch.setattr(paths, "PACKAGE_DIR", checkout / "src" / "vantage")
+    monkeypatch.delenv("VANTAGE_PROJECTS", raising=False)
+    monkeypatch.chdir(checkout)
+
+    bare = runner.invoke(app, ["new", "acme-park"])  # default projects root = <checkout>/projects
+    assert bare.exit_code == 1 and "inside the public Vantage checkout" in bare.output, bare.output
+    empty = runner.invoke(app, ["new", "acme-park", "--dir", ""])  # `--dir "$VANTAGE_PROJECTS"`, unset
+    assert empty.exit_code == 1 and "--dir is empty" in empty.output, empty.output
+    here = runner.invoke(app, ["new", "acme-park", "--dir", "."])
+    assert here.exit_code == 1 and "inside the public Vantage checkout" in here.output, here.output
+    assert sorted(p.name for p in checkout.iterdir()) == ["pyproject.toml", "src"]  # nothing written
+
+    (checkout / "private" / ".git").mkdir(parents=True)  # the private projects repo, cloned inside
+    nested = runner.invoke(app, ["new", "acme-park", "--dir", "private"])
+    assert nested.exit_code == 0, nested.output
+    assert runner.invoke(app, ["validate", "private/acme-park"]).exit_code == 0
+    assert "public Vantage checkout" not in runner.invoke(app, ["validate", "private/acme-park"]).output
+    demo = checkout / "projects" / "demo-lakeside"
+    assert not paths.exposed_in_public_checkout(demo) and paths.exposed_in_public_checkout(demo.parent)
+
+    fictional = runner.invoke(app, ["new", "second-demo", "--public"])
+    assert fictional.exit_code == 0, fictional.output
+    warned = runner.invoke(app, ["validate", "second-demo"])
+    assert warned.exit_code == 0 and "inside the public Vantage checkout" in warned.output, warned.output
+
+
 def test_new_facts_yaml_documents_one_example_per_status(project_dir: Path) -> None:
     text = (project_dir / "facts.yaml").read_text()
     header = text.split("\nfacts:")[0]

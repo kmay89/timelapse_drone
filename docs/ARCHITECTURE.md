@@ -97,13 +97,13 @@ placeholder logos), a README and an empty `footage/` from `src/vantage/templates
 
 | command | does |
 |---|---|
-| `vantage new <slug> [--title T] [--dir D]` | scaffold a project from the template |
+| `vantage new <slug> [--title T] [--dir D] [--public]` | scaffold a project from the template; refuses an empty `--dir` and a folder inside this public checkout unless `--public` (fictional demos) |
 | `vantage validate <project>` | load + cross-check YAML, brand files, capture refs |
 | `vantage ingest <project>` | catalog footage + sample candidate frames + contact sheets |
 | `vantage select <project>` | choose best frame per vantage per visit |
 | `vantage align <project>` | register, crop, grade → masters/ + review sheets |
 | `vantage process <project>` | ingest → select → align |
-| `vantage build <project> [--out DIR]` | build the interactive site from masters + YAML |
+| `vantage build <project> [--out DIR]` | build the interactive site from masters + YAML; `--out` replaces only an earlier Vantage build, and refuses any other non-empty folder or one under version control |
 | `vantage film <project>` | render MP4 films |
 | `vantage package <project>` | single-file HTML + offline zip |
 | `vantage all <project>` | process → build → film → package |
@@ -150,6 +150,10 @@ JPEGs are ≤1600 px wide. Dates are local calendar dates of the flight.
         { "date": "2025-06-14", "file": "overview/2025-06-14.jpg", "source": "…", "t": 3.0,
           "align": { "method": "homography", "inliers": 412, "rmse_px": 0.8, "ok": true } } ] } } }
 ```
+Vantage ids name folders and pick dates name files that `vantage process` writes and clears, so
+`config.py` accepts only ids matching `[a-z0-9][a-z0-9_-]*` and `picks` keys that are real
+`YYYY-MM-DD` dates (quoted or not); `make_masters` re-checks both against `selection.json`.
+A capture's `file` must be a relative path inside `masters/` (no `..`, no absolute path).
 
 ## StoryJSON (the runtime contract)
 
@@ -197,7 +201,7 @@ type Video = { poster: Img; sources: { src: string; type: string }[] };   // hev
 type StoryJSON = {
   version: 1;
   meta: { slug: string; title: string; subtitle?: string; kicker?: string; dek?: string; byline?: string;
-          lang: string; location?: { name: string; region?: string; lat?: number; lon?: number };
+          lang: string; location?: { name: string; region?: string };  // never lat/lon: they stay in project.yaml
           draft: boolean; simulated: boolean; generatedAt: string;          // ISO timestamp
           dateRange: { start: string; end: string }; url?: string; shareImage?: string };
   brand: { name: string; url?: string; alt: string; theme: "dark" | "light"; grain: boolean;
@@ -208,6 +212,13 @@ type StoryJSON = {
   chapters: Chapter[];
 };
 ```
+
+Chapter ids are the chapter's `id` (default `<type>-<n>`) with each run of
+characters outside `[A-Za-z0-9._-]` turned into `-`, so an id may start with a
+digit or hold a dot (`2025`, `phase-1.5`): find one with `getElementById` or
+`[id="…"]`, never `#id` CSS. Each id, and the `<id>-title` id of its heading, is
+unique in the page: a repeat, or an id the page uses itself (`v-main`,
+`vantage-story`, `v-note-<n>`, …), takes the next free `-2`, `-3` suffix.
 
 Capture references in YAML (`"2026-09-12"`, `"earliest"`, `"latest"`, `"#3"`)
 are resolved to indices into the vantage's date-sorted `captures` at build time.
@@ -222,8 +233,8 @@ dist/<slug>/site/
   index.html                     pre-rendered HTML + inlined CSS/JS/StoryJSON (+ theme)
   assets/img/<vantage>/<date>-<w>.<avif|webp|jpg>
   assets/video/<chapter>.<mp4>   (h264 + hevc)
-  assets/brand/…                 logos as supplied (SVGs sanitized, see below)
-  assets/fonts/…                 woff2 actually used
+  assets/brand/…                 logos (SVGs sanitized, rasters re-encoded bare, see below)
+  assets/fonts/…                 woff2 actually used (bundled: own name; client: <stem>-<sha256[:8]>.woff2)
   share.jpg (1200×630)  icon-192.png  icon-512.png  apple-touch-icon.png
   manifest.webmanifest  sw.js
 ```
@@ -240,9 +251,32 @@ a root other than an SVG `<svg>` (a plain `<!DOCTYPE svg PUBLIC …>` is fine). 
 `action` and `formaction`; comments and processing instructions (`xml-stylesheet`). The build logs
 what it removed and `vantage validate` lists it as a warning.
 
+No published image carries metadata. A raster logo is re-encoded from its pixels in its own format
+(`site/images.py` `strip_raster`): EXIF (camera, GPS, author), XMP (design-tool history, names, local
+paths), IPTC, comments and PNG text chunks go; EXIF orientation is applied to the pixels; transparency
+and the colour profile stay. PNG, GIF and WebP are written losslessly, a JPEG with its own
+quantization tables, an AVIF at quality 90; an animated logo keeps its first frame. The build logs
+what it removed. Photo variants, LQIPs, the share card and single-file re-encodes start from
+`images.open_rgb`, which keeps only the colour profile (Pillow would otherwise copy a source JPEG's
+comment into every JPEG made from it), and video posters come from a bitexact `ffmpeg.extract_frame`
+with no metadata.
+
 The page must work from `file://` (no fetch of JSON, no ES-module imports, no
-service worker there) and from `https://` (service worker registers and
-precaches every asset so "Add to Home Screen" works offline).
+service worker there) and from `https://`, where `sw.js` registers. Its CONFIG
+(`site/build.py` `_service_worker`) is `{cache: "vantage-<slug>", core: [...],
+assets: [[path, bytes, sha256[:16]], ...]}`:
+
+* Install stores only `core`: `./`, the manifest and icons, fonts, brand files
+  and the opening hero's fallback JPEGs (shown before the worker is in
+  control). Every other file is cached the first time the page asks for it, and
+  "Save for offline" fetches all of `assets` (any 404 or network error is
+  reported as a failure, never as saved).
+* The cache name stays the same from build to build and every file is stored
+  under `<path>?v=<sha>`, so a redeploy keeps each saved file that did not
+  change; activate deletes keys this build no longer lists. Once a save
+  completes, the cache holds a `.vantage-saved` marker, and after an update the
+  worker fetches the changed files when the page next asks for its status (on
+  load and when the new worker takes over).
 
 ## Runtime principles
 
@@ -287,13 +321,16 @@ vantage.ingest.catalog.build_catalog(project: Project, *, force: bool = False) -
 vantage.process.select.select_frames(project: Project, catalog: Catalog | None = None) -> Selection
     # writes work/selection.json (loads catalog.json when not given)
 vantage.process.masters.make_masters(project: Project, selection: Selection | None = None) -> MastersIndex
-    # writes masters/<vantage>/<date>.jpg + masters/index.json + work/review/**
+    # writes masters/<vantage>/<date>.jpg + masters/index.json + work/review/**; raises ValueError,
+    # touching nothing, if a master's visit is neither in the catalog nor excluded in story.yaml
 vantage.site.build.build_site(project: Project, out_dir: Path) -> Path
     # out_dir = dist/<slug>/site ; returns out_dir / "index.html"
 vantage.film.render.render_film(project: Project, out_dir: Path) -> list[Path]
     # out_dir = dist/<slug>/film
-vantage.site.package.package_project(project: Project, dist_dir: Path) -> dict[str, Path]
-    # dist_dir = dist/<slug>; reads dist_dir/site; returns {"single_file": …, "zip": …}
+vantage.site.package.package_project(project: Project, dist_dir: Path, *, release: bool = False) -> dict[str, Path]
+    # dist_dir = dist/<slug>; reads dist_dir/site (builds it when missing); returns {"single_file": …, "zip": …}
+    # release=True runs check_release, then always rebuilds dist_dir/site with release=True, so an
+    # earlier draft build or a site older than the YAML never ships under a release label
 vantage.demo.synth.generate_demo_footage(footage_dir: Path, *, fast: bool = False, seed: int = 7) -> Path
     # writes footage/<date>/… and footage/_truth.json; returns the truth path
 vantage.llm.claude.draft_captions(project: Project) -> Path | None
@@ -323,6 +360,9 @@ Bundled fonts: `runtime/fonts/fonts.json` maps a key (`fraunces`, `inter`,
 `{family, category, axes, weight, license, unicode_range, faces: [{file, style, weight}]}`
 with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
 `bundled: <key>` or its own `files` (client-licensed woff2).
+Its `fallback`, `weight` and `features` go into the theme CSS, so `config.py` accepts only
+values of that kind (a list of font names, a weight or range, `font-feature-settings` tags) and
+a `family` without control characters: a brand kit cannot add CSS rules or `url()`s.
 
 ### StoryJSON v1 additions (blueprint round 1)
 
@@ -343,7 +383,10 @@ with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
   and `meta.unverifiedFacts: number`. Draft builds style non-releasable facts visibly
   (`.v-fact[data-releasable="false"]`, titled "Unverified: <status>"), and the notes list labels
   them "Unverified: needs client", "Unverified: needs attribution" (`reported` without an
-  `attribution`) or "Unverified: do not print" (`templates/refs.html`). `vantage build --release`
+  `attribution`) or "Unverified: do not print" (`templates/refs.html`). A `do-not-print` fact is
+  withheld from every build, draft or release: wherever it is used the build prints
+  `facts.WITHHELD` ("[withheld: do-not-print]") inside the usual marker, and its note carries that
+  placeholder as `text` with empty `sources`. `vantage build --release`
   fails if any fact used in the story is not releasable (`Fact.releasable`), if a token references
   an unknown fact, or if the project is `draft: true`.
 * Brand text: `brand.yaml`'s `credit_line`, `disclaimer` and `copyright` (`facts.BRAND_TEXT`)
@@ -382,4 +425,4 @@ and `<slug>-lite.html` (email). `<html data-edition>` is `site` (hosted), `offli
   `output.single_file_max_mb`; otherwise hero `video` is removed and video chapters keep
   `sources: []`. Lite never carries video.
 * Fonts are inlined as `data:font/woff2` in the theme CSS; `meta.shareImage` is dropped unless
-  it is an absolute URL.
+  it is an absolute URL. Packaging reads only files inside `site/`; a path that leads outside it is an error.

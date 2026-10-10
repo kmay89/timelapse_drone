@@ -1,7 +1,7 @@
 // @ts-check
 /* One modal bottom sheet (hotspot details, the contents, photo views) and a toast. The sheet traps
  * focus by making the rest of the page inert, closes on Esc, the close button, the backdrop or a swipe
- * down, and hands focus back to whatever opened it. */
+ * down, and hands focus back to whatever opened it, or to the chapter a jump leads to. */
 
 const sheetTitle = h("h2", { class: "v-dlg__title", id: "v-dlg-title" });
 const sheetKicker = h("p", { class: "v-dlg__kicker v-label" });
@@ -45,6 +45,13 @@ function closeSheet() {
   sheet.style.transform = "";
   sheetFrom?.focus({ preventScroll: true });
   sheetTimer = window.setTimeout(() => (sheetWrap.hidden = true), reduced ? 0 : 320);
+}
+
+/** Close the sheet, handing focus to chapter `sec`'s heading (or `sec`) so Tab carries on from there. */
+function closeTo(/** @type {HTMLElement} */ sec) {
+  sheetFrom = doc.getElementById(`${sec.id}-title`) || sec;
+  sheetFrom.tabIndex = -1;
+  closeSheet();
 }
 
 sheetClose.addEventListener("click", closeSheet);

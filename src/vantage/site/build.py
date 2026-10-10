@@ -50,7 +50,16 @@ from vantage.media import ffmpeg
 from vantage.models import MastersIndex
 from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import BRAND_TEXT, FactNotes, check_release
-from vantage.site.images import CardText, ImageSpec, app_icon, encode_images, fast_mode, initials, share_card
+from vantage.site.images import (
+    CardText,
+    ImageSpec,
+    app_icon,
+    encode_images,
+    fast_mode,
+    initials,
+    share_card,
+    strip_raster,
+)
 from vantage.site.render import MONTHS, capture_label, render_page
 from vantage.site.theme import font_file, theme_css
 
@@ -60,6 +69,11 @@ _CLIP_VERSION = 1
 _SW_CONFIG = re.compile(r"/\*@config\*/.*?/\*@end\*/", re.S)
 _LINK_SCHEMES = {"", "http", "https", "mailto", "tel"}
 _LOGO_TYPES = {".svg", ".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"}
+# DOM ids the page itself uses (template, intro, notes, the runtime's sheet), and the ids whose
+# "<id>-title" heading id would be one of them: no chapter may take these.
+_PAGE_ID = re.compile(
+    r"(?:v-main|v-story|v-notes|v-dlg|v-note-\d+|vantage-(?:theme|css|story|runtime))(?:-title)?"
+)
 # SVG elements that run code or embed HTML, and the URL attributes whose scheme is checked.
 _SVG_DROP = {"script", "foreignobject", "handler", "iframe", "embed", "object"}
 _SVG_ANIMATE = {"set", "animate"}
@@ -505,7 +519,8 @@ class StoryBuilder:
 
     def capture_img(self, v: _Vantage, i: int) -> dict[str, Any]:
         c = v.captures[i]
-        alt = f"{v.name}, {c.label}" + (f": {c.note}" if c.note else "")
+        note = self.plain(c.note)
+        alt = f"{self.plain(v.name)}, {self.plain(c.label)}" + (f": {note}" if note else "")
         return self.img(c.path, _dest("assets", "img", v.id, c.date), alt)
 
     def brand_file(self, rel: str | None) -> str | None:
@@ -533,7 +548,13 @@ class StoryBuilder:
                 log.warn(f"brand.yaml: logo {rel!r}: removed {', '.join(sorted(set(removed)))}")
             target.write_bytes(data)
         else:
-            shutil.copyfile(path, target)
+            try:
+                data, removed = strip_raster(path)
+            except (OSError, ValueError) as exc:  # unreadable, truncated or not the image it claims to be
+                raise ValueError(f"brand.yaml: logo {rel!r} is not a readable image: {exc}") from None
+            if removed:
+                log.warn(f"brand.yaml: logo {rel!r}: removed {', '.join(removed)}")
+            target.write_bytes(data)
         return url
 
     # -- references ---------------------------------------------------------- #
@@ -629,8 +650,8 @@ class StoryBuilder:
             log.warn(f"{where}: before and after are the same capture ({v.captures[before].date})")
         return base | {
             "vantage": v.id, "mode": ch.mode, "before": before, "after": after,
-            "beforeLabel": self.plain(ch.before_label) or v.captures[before].label,
-            "afterLabel": self.plain(ch.after_label) or v.captures[after].label,
+            "beforeLabel": self.plain(ch.before_label or v.captures[before].label),
+            "afterLabel": self.plain(ch.after_label or v.captures[after].label),
             "steps": self.steps(v, ch.steps, 0, len(v.captures) - 1, where),
             "hotspots": self.hotspots(v, ch.hotspots, where),
         }  # fmt: skip
@@ -683,7 +704,7 @@ class StoryBuilder:
             if not path.is_file():
                 log.warn(f"{where}: gallery image {gi.file} is missing; skipped")
                 continue
-            alt = gi.alt or self.plain(gi.caption) or Path(gi.file).stem.replace("-", " ")
+            alt = self.plain(gi.alt or gi.caption) or Path(gi.file).stem.replace("-", " ")
             name = Path(gi.file).with_suffix("").as_posix()  # the whole path: two folders may share a name
             out["images"].append(_compact({
                 "img": self.img(path, _dest("assets", "img", "gallery", base["id"], name), alt),
@@ -710,10 +731,12 @@ class StoryBuilder:
         cfg = self.project.config
         dates = sorted({c.date for v in self.vantages.values() for c in v.captures})
         url = safe_url(cfg.output.base_url, "project.yaml output.base_url")
+        # Name and region only: lat/lon stay in project.yaml, so no edition pins an unannounced site.
+        loc = cfg.location
         return _compact({
             "slug": cfg.slug, "title": self.plain(cfg.title), "subtitle": self.plain(cfg.subtitle),
             "kicker": self.plain(cfg.kicker), "byline": self.plain(cfg.byline), "lang": cfg.lang,
-            "location": cfg.location.model_dump(exclude_none=True) if cfg.location else None,
+            "location": _compact({"name": loc.name, "region": loc.region}) if loc else None,
             "draft": cfg.draft, "simulated": cfg.simulated, "generatedAt": _generated_at(),
             "dateRange": {"start": dates[0], "end": dates[-1]} if dates else None,
             "flights": len(dates), "url": url, "shortTitle": self._short_title(),
@@ -748,17 +771,19 @@ class StoryBuilder:
             raise ValueError(f"{self.project.slug}: no vantage has any masters to build from")
         meta = self.meta()
         chapters: list[dict[str, Any]] = []
-        ids = Counter[str]()
+        taken: set[str] = set()  # chapter ids and their "<id>-title" heading ids
         story_chapters = self.project.story.chapters
         # the dek is read right under the opening hero, so its facts are numbered there
         lead_hero = bool(story_chapters) and isinstance(story_chapters[0], HeroChapter)
         if not lead_hero:
             meta |= self._dek(cfg.dek)
         for i, ch in enumerate(story_chapters):
-            cid = _dest(ch.id or f"{ch.type}-{i + 1}")
-            ids[cid] += 1
-            if ids[cid] > 1:
-                cid = f"{cid}-{ids[cid]}"
+            cid = base = _dest(ch.id or f"{ch.type}-{i + 1}")
+            n = 1  # a repeat or one of the page's own ids takes the next free "-2", "-3", ...
+            while {cid, f"{cid}-title"} & taken or _PAGE_ID.fullmatch(cid):
+                n += 1
+                cid = f"{base}-{n}"
+            taken |= {cid, f"{cid}-title"}
             built = self.chapter(ch, cid)
             if built is not None:
                 chapters.append(built)
@@ -802,10 +827,25 @@ class StoryBuilder:
 # --------------------------------------------------------------------------- #
 
 
+_STORY_MARKER = b'<script id="vantage-story"'
+_VCS_DIRS = (".git", ".hg", ".svn")
+
+
 def _prepare(out_dir: Path) -> None:
+    """Empty out_dir for a fresh build. `--out` can name any folder, so a non-empty one is wiped only
+    when it is an earlier Vantage build (index.html carries the StoryJSON) outside version control."""
     if out_dir.exists() and any(out_dir.iterdir()):
-        if not (out_dir / "index.html").is_file():
-            raise FileExistsError(f"refusing to replace {out_dir}: it is not empty and has no index.html")
+        index = out_dir / "index.html"
+        vcs = [name for name in _VCS_DIRS if (out_dir / name).exists()]
+        reason = ""
+        if not index.is_file() or _STORY_MARKER not in index.read_bytes():
+            reason = "it is not empty and is not an earlier Vantage build"
+        elif vcs:
+            reason = f"it is under version control ({vcs[0]})"
+        if reason:
+            raise FileExistsError(
+                f"refusing to replace {out_dir}: {reason}; build into an empty folder and copy the files over"
+            )
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -826,26 +866,34 @@ def _fallbacks(node: Any) -> Iterator[str]:
             yield from _fallbacks(value)
 
 
+def _opening_images(story: dict[str, Any]) -> set[str]:
+    """Fallback JPEGs of the opening hero's picture and video poster. The page shows them before its
+    service worker is in control, so a copy opened offline would otherwise lack them."""
+    chapters = story["chapters"]
+    hero = chapters[0] if chapters and chapters[0]["type"] == "hero" else {}
+    v = next((v for v in story["vantages"] if v["id"] == hero.get("vantage")), None)
+    still = v["captures"][hero.get("capture", -1)]["img"] if v else None
+    return set(_fallbacks([still, hero.get("video")]))
+
+
 def _service_worker(site: Path, story: dict[str, Any]) -> Path:
+    """sw.js with its CONFIG: one cache per story, and every file with its size and content hash.
+
+    The cache name stays the same from build to build and the worker keys each file by its hash, so a
+    redeploy keeps every saved file that did not change. Install stores only the shell; every other
+    file is cached when the page first asks for it, or all at once by "Save for offline"."""
     files = [p for p in _site_files(site) if p.name != "sw.js"]
     rel = [p.relative_to(site).as_posix() for p in files]
-    digest = hashlib.sha256()
-    for path, name in zip(files, rel, strict=True):
-        digest.update(name.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
-    core = {
-        "./",
-        "index.html",
-        "manifest.webmanifest",
-        "icon-192.png",
-        "icon-512.png",
-        "apple-touch-icon.png",
-    }
+    core = {"./", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"}
     core |= {r for r in rel if r.startswith(("assets/fonts/", "assets/brand/"))}
-    core |= set(_fallbacks(story))  # one JPEG per image; the rest is fetched by "Save for offline"
+    core |= _opening_images(story)
     config = {
-        "cache": f"vantage-{story['meta']['slug']}-{digest.hexdigest()[:12]}",
+        "cache": f"vantage-{story['meta']['slug']}",
         "core": sorted(core & ({"./"} | set(rel))),
-        "assets": [[name, path.stat().st_size] for path, name in zip(files, rel, strict=True)],
+        "assets": [
+            [name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest()[:16]]
+            for path, name in zip(files, rel, strict=True)
+        ],
     }
     template = (RUNTIME_DIR / "sw.js").read_text(encoding="utf-8")
     js = _SW_CONFIG.sub(lambda _: json.dumps(config, separators=(",", ":")), template, count=1)

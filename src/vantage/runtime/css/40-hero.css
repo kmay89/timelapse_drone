@@ -12,13 +12,15 @@
 .js .v-hero__head > :nth-child(3) { animation-delay: .85s; }
 .js .v-hero__head > :nth-child(4) { animation-delay: 1s; }
 
-/* Scroll cue: a hairline with a falling highlight, shown after 2 s if the reader hasn't moved. */
+/* Scroll cue: a hairline with a falling highlight, shown after 2 s if the reader hasn't moved; it falls
+ * only while shown. */
 .js .v-hero__cue {
   display: block; position: absolute; left: 50%; right: auto; bottom: calc(var(--v-safe-b) + 10px); width: 1px; height: 1.75rem;
   overflow: hidden; background: rgb(var(--v-paper-rgb) / .22); opacity: 0; transition: opacity .8s var(--v-ease);
 }
 .js .v-hero__cue::after { content: ""; position: absolute; left: 0; top: 0; width: 1px; height: 45%; background: var(--v-paper); animation: v-cue 2.2s var(--v-ease) infinite; }
 .js .v-cue .v-hero__cue { opacity: 1; }
+.js .v-hero:not(.v-cue) .v-hero__cue::after { animation-play-state: paused; }
 @media (min-width: 48em) { .js .v-hero__cue { left: auto; right: var(--v-gutter); bottom: calc(var(--v-safe-b) + 1.5rem); height: 3.5rem; } }
 
 /* Pause for the ambient motion (WCAG 2.2.2): the bottom corner, in the stage's own padding; on wide

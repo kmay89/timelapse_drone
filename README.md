@@ -68,7 +68,7 @@ The full cycle, step by step: [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 | Command | Does |
 |---|---|
-| `vantage new <slug>` | scaffold a project |
+| `vantage new <slug>` | scaffold a project under `$VANTAGE_PROJECTS` or `--dir` (never inside this repo) |
 | `vantage validate <project>` | check YAML, brand files, capture references, TODOs |
 | `vantage ingest / select / align <project>` | catalog footage · pick frames · register and grade masters |
 | `vantage process <project>` | ingest → select → align |

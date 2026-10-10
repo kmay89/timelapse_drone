@@ -4,7 +4,7 @@
  * flights in order, or compare any two flights with a curtain or a blink. Pinch, double-tap and drag
  * zoom and pan inside the stage only; a vertical swipe still scrolls the page until you zoom in. */
 
-/** @type {{has(id: string): boolean, show(id: string, i: number): void}[]} */
+/** @type {{sec: HTMLElement, has(id: string): boolean, show(id: string, i: number): void}[]} */
 const explorers = [];
 
 /** @returns {Component | null} */
@@ -57,6 +57,8 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let days = [];
   /** @type {ImageStore} */
   let store;
+  /** @type {ImageStore} */
+  let sharp; // while zoomed in: the flight(s) on screen, decoded as sharp as any zoom can use
   let mode = "single";
   let u = 0; // continuous position in seq (single mode)
   let pick = [0, 0];
@@ -72,6 +74,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   let bw = 0;
   let bh = 0;
   let need = 0;
+  let sharpNeed = 0;
   let dirty = true;
   let warm = false;
   let playing = false;
@@ -94,7 +97,10 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     caps = seq.map((i) => v.captures[i]);
     days = caps.map((c) => day(c.date));
     store?.clear();
-    store = new ImageStore(caps.map((c) => c.img), redraw);
+    sharp?.clear();
+    const imgs = caps.map((c) => c.img);
+    store = new ImageStore(imgs, redraw);
+    sharp = new ImageStore(imgs, redraw, 2);
     ticks.replaceChildren();
     dateTicks(ticks, caps);
     input.max = String(days[days.length - 1] - days[0]);
@@ -121,7 +127,8 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     const home = homeCam(v, W, H);
     const r = frameRect(W, H, v.aspect, home);
     [bw, bh, cx, cy] = [r.w, r.h, home[0], home[1]];
-    need = decodeWidth(caps[0].img, bw * 2.5, s, v.aspect);
+    need = decodeWidth(caps[0].img, bw, s, v.aspect);
+    sharpNeed = decodeWidth(caps[0].img, bw * 5, s, v.aspect);
     redraw();
   }
 
@@ -231,7 +238,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     redraw();
   });
 
-  /* Gestures inside the stage: pinch / drag-pan / curtain drag / blink hold / double-tap zoom. */
+  /* Gestures inside the stage: pinch / drag-pan / curtain drag or tap / blink hold / double-tap zoom. */
   /** @type {Map<number, {x: number, y: number, x0: number, y0: number}>} */
   const pts = new Map();
   /** @type {any} */
@@ -297,7 +304,13 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
         const z0 = z;
         tween(280, (t) => zoomAt(lerp(z0, z0 > 1.2 ? 1 : 2.5, easeOut(t)), x, y));
         lastTap.t = 0;
-      } else lastTap = { t: e.timeStamp, x, y };
+      } else {
+        lastTap = { t: e.timeStamp, x, y };
+        if (mode === "curtain" && z <= 1.01) {
+          split = clamp(x / W); // a tap sets it too (WCAG 2.5.7)
+          redraw();
+        }
+      }
     }
     if (!pts.size) g = null;
   };
@@ -319,7 +332,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     ctx.globalAlpha = 1;
     ctx.fillStyle = NIGHT;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const img = (/** @type {number} */ k) => store.get(k) || lqip(caps[k].img);
+    const img = (/** @type {number} */ k) => sharp.get(k) || store.get(k) || lqip(caps[k].img);
     if (mode === "single") {
       const lo = Math.floor(u);
       const hi = Math.ceil(u);
@@ -348,6 +361,7 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
   }
 
   const api = {
+    sec,
     has: (/** @type {string} */ id) => ids.includes(id),
     show(/** @type {string} */ id, /** @type {number} */ i) {
       if (v.id !== id) setVantage(id);
@@ -364,7 +378,10 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
     resize: sizes,
     warm(on) {
       warm = on;
-      if (!on) store.clear();
+      if (!on) {
+        store.clear();
+        sharp.clear();
+      }
       redraw();
     },
     update(_, now) {
@@ -382,6 +399,8 @@ function explore(/** @type {HTMLElement} */ sec, /** @type {any} */ ch) {
       }
       const k = Math.round(u);
       if (warm) store.want(mode === "single" ? [Math.floor(u), Math.ceil(u), k + 1, k - 1, k + 2] : pick, need);
+      if (warm && z > 1.25 && sharpNeed > need) sharp.want(mode === "single" ? [k] : pick, sharpNeed);
+      else sharp.clear();
       const shownK = mode === "single" ? k : pick[mode === "blink" && !showA ? 1 : 0];
       if (shownK !== cur) {
         const dir = shownK < cur ? -1 : 1;

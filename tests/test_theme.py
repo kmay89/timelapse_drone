@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
 import pytest
 
 from vantage.config import BrandKit
-from vantage.site.theme import contrast, ensure_contrast, mix, oklch, palette, theme_css
+from vantage.site.theme import _family, contrast, ensure_contrast, mix, oklch, palette, theme_css
 
 TEXT_TOKENS = {
     "text-on-night": ("night", "night-2"),
@@ -124,15 +125,39 @@ def test_client_fonts_numeric_face_and_light_theme(tmp_path: Path):
     assert '--v-font-display:"Brand Serif", Georgia, serif' in theme.css
     assert "--v-display-features:'ss01' 1" in theme.css
     assert '--v-font-numeric:"Public Sans"' in theme.css
+    regular = f"Brand-Regular-{hashlib.sha256(b'wOF2').hexdigest()[:8]}.woff2"  # client files: content hash
     assert (
-        'font-family:"Brand Serif";src:url("assets/fonts/Brand-Regular.woff2") format("woff2");font-weight:300 700'
+        f'font-family:"Brand Serif";src:url("assets/fonts/{regular}") format("woff2");font-weight:300 700'
         in theme.css
     )
     assert "Brand-Italic" not in theme.css  # the display face is only used upright
     assert [f.dest.rsplit("/", 1)[1] for f in theme.fonts] == [
-        "Brand-Regular.woff2", "inter-latin-opsz-normal.woff2", "inter-latin-opsz-italic.woff2",
+        regular, "inter-latin-opsz-normal.woff2", "inter-latin-opsz-italic.woff2",
         "public-sans-latin-wght-normal.woff2",
     ]  # fmt: skip
+
+
+def test_client_fonts_with_one_file_name_keep_their_own_url(tmp_path: Path):
+    # display and text from two folders, both "Regular.woff2": one shared dest would mean the last copy
+    # wins in assets/fonts/ and the display face renders in the text font
+    for folder in ("serif", "sans"):
+        (tmp_path / "fonts" / folder).mkdir(parents=True)
+        (tmp_path / "fonts" / folder / "Regular.woff2").write_bytes(f"wOF2 {folder}".encode())
+    brand = BrandKit.model_validate({
+        "name": "Client",
+        "typography": {
+            "display": {"family": "Brand Serif", "files": ["fonts/serif/Regular.woff2"]},
+            "text": {"family": "Brand Sans", "files": ["fonts/sans/Regular.woff2"]},
+        },
+    })  # fmt: skip
+    brand.root = tmp_path
+    theme = theme_css(brand)
+    dests = {f.src.parent.name: f.dest for f in theme.fonts}
+    assert set(dests) == {"serif", "sans"} and dests["serif"] != dests["sans"]
+    assert all(re.fullmatch(r"assets/fonts/Regular-[0-9a-f]{8}\.woff2", d) for d in dests.values())
+    urls = dict(re.findall(r'font-family:"([^"]+)";src:url\("([^"]+)"\)', theme.css))
+    assert urls == {"Brand Serif": dests["serif"], "Brand Sans": dests["sans"]}
+    assert theme_css(brand).css == theme.css  # deterministic: the name follows the bytes
 
 
 def test_unknown_bundled_font_is_an_error():
@@ -168,3 +193,64 @@ def test_hostile_client_fonts_and_shared_files(tmp_path: Path):
     assert 'font-family:"Inter";' in theme.css and 'font-family:"Inter \\"Tab\\"";' in theme.css
     assert '--v-font-numeric:"Inter \\"Tab\\"", ' in theme.css
     assert [f.dest for f in theme.fonts].count("assets/fonts/inter-latin-opsz-normal.woff2") == 1
+    # a file name that would close the url("…") string
+    (tmp_path / "brand" / 'x"),url(y.woff2').write_bytes(b"wOF2")
+    with pytest.raises(ValueError, match="rename the file"):
+        theme_css(brand(display={"family": "Q", "files": ['x"),url(y.woff2']}))
+
+
+HOSTILE_FONT_FIELDS = [
+    # a brand kit from a third party must not be able to add CSS rules to every edition
+    ("fallback", 'serif;--x:url("assets/../../secret.txt")} body{background:url(https://tracker.example/p.gif)} :root{--y:0'),
+    ("fallback", "serif}.v-disclosure{display:none"),
+    ("fallback", "'Brand\nSans', serif"),
+    ("fallback", "'url(\"assets/../x\")', serif"),
+    ("fallback", "serif\\;x"),
+    ("weight", "400;src:url(https://tracker.example/f.woff2)"),
+    ("weight", "400}body{color:red"),
+    ("weight", "400\n"),
+    ("features", "normal}body{color:red"),
+    ("features", "'ss01' 1;--x:url(https://tracker.example/p.gif)"),
+    ("features", "'ss01' 1\n"),
+    ("family", "Brand\n}body{color:red}"),
+    ("family", "Brand\x00"),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("field", "value"), HOSTILE_FONT_FIELDS)
+def test_brand_font_fields_cannot_inject_css(field, value):
+    spec = {"family": "Brand", "bundled": "inter", field: value}
+    with pytest.raises(ValueError, match=f"typography.*{field}"):
+        BrandKit.model_validate({"name": "X", "typography": {"text": spec}})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fallback", "system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif"),
+        ("fallback", 'Georgia, "Times New Roman", serif'),
+        ("fallback", "Helvetica Neue,ui-sans-serif"),
+        ("fallback", "'Noto Sans JP', Söhne, sans-serif"),
+        ("weight", "400"),
+        ("weight", "100 1000"),
+        ("weight", "normal bold"),
+        ("features", "normal"),
+        ("features", "'tnum' 1, 'lnum' 1"),
+        ("features", '"ss01"'),
+        ("features", "'liga' off,'kern'"),
+        ("family", 'Inter "Tab"'),
+        ("family", "Söhne Breit"),
+    ],
+)
+def test_brand_font_fields_accept_css_values(field, value):
+    spec = {"family": "Brand", "bundled": "inter", field: value}
+    css = theme_css(BrandKit.model_validate({"name": "X", "typography": {"text": spec}})).css
+    root, *faces = css.strip().split("\n")
+    assert re.fullmatch(r":root\{[^{}]*\}", root) and all(
+        re.fullmatch(r"@font-face\{[^{}]*\}", f) for f in faces
+    )
+
+
+def test_family_names_are_escaped_as_css_strings():
+    assert _family('A "B" \\ C') == '"A \\"B\\" \\\\ C"'
+    assert _family("A\nB\x7f") == '"A\\a B\\7f "'  # a newline can't end the string (or the rule)

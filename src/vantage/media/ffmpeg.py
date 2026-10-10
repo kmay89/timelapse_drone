@@ -6,13 +6,16 @@ builds ffmpeg command lines by hand.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import subprocess
+import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
+from typing import IO
 
 import numpy as np
 
@@ -21,6 +24,30 @@ from vantage import log
 
 class FFmpegError(RuntimeError):
     pass
+
+
+class _StderrTail:
+    """Drain a child's stderr on a thread, keeping only its last `limit` bytes for error messages.
+
+    A damaged clip makes ffmpeg log every bad macroblock, even at `-loglevel error`. A pipe nobody
+    reads fills at about 64 KB, ffmpeg then blocks mid-run, and whoever waits on its stdout (or
+    writes its stdin) waits forever.
+    """
+
+    def __init__(self, pipe: IO[bytes], limit: int = 4000) -> None:
+        self._pipe, self._limit, self._tail = pipe, limit, b""
+        self._thread = threading.Thread(target=self._drain, name="ffmpeg-stderr", daemon=True)
+        self._thread.start()
+
+    def _drain(self) -> None:
+        with self._pipe:
+            while chunk := self._pipe.read(1 << 16):
+                self._tail = (self._tail + chunk)[-self._limit :]
+
+    def text(self) -> str:
+        """The kept tail; waits for the pipe to close, so call it once the process has exited."""
+        self._thread.join()
+        return self._tail.decode(errors="replace").strip()
 
 
 @cache
@@ -132,10 +159,15 @@ def probe(path: Path) -> Probe:
 
 
 def extract_frame(video: Path, t: float, out: Path, *, width: int | None = None, quality: int = 2) -> Path:
-    """Write one frame at time t (seconds) to `out` (format from extension)."""
+    """Write one frame at time t (seconds) to `out` (format from extension).
+
+    Bitexact and without metadata: no encoder version (a JPEG `Lavc…` comment) or source tags in
+    the bytes, so the same frame gives the same file on any ffmpeg.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
     vf = [f"scale={width}:-2:flags=lanczos"] if width else []
     args: list[str | Path] = ["-ss", f"{max(t, 0):.3f}", "-i", video, "-frames:v", "1"]
+    args += ["-map_metadata", "-1", "-fflags", "+bitexact", "-flags:v", "+bitexact"]
     if vf:
         args += ["-vf", ",".join(vf)]
     if out.suffix.lower() in {".jpg", ".jpeg"}:
@@ -165,7 +197,8 @@ def iter_frames(
     cmd += ["-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
     log.debug(" ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert proc.stdout is not None
+    assert proc.stdout is not None and proc.stderr is not None
+    stderr = _StderrTail(proc.stderr)
     frame_bytes = w * h * 3
     step = every_s if every_s else (1.0 / info.fps if info.fps else 0.0)
     i = 0
@@ -178,10 +211,14 @@ def iter_frames(
             t = (i + 0.5) * step if every_s else i * step
             yield t, np.frombuffer(buf, np.uint8).reshape(h, w, 3)
             i += 1
+        # Read to the end (a consumer that stops early kills ffmpeg below, which is no failure).
+        if (code := proc.wait()) != 0:
+            raise FFmpegError(f"ffmpeg decode failed ({code}) for {video}:\n{stderr.text()}")
     finally:
         proc.stdout.close()
         proc.kill()
         proc.wait()
+        stderr.text()
 
 
 class FrameWriter:
@@ -238,22 +275,33 @@ class FrameWriter:
             str(out),
         ]
         self.proc: subprocess.Popen | None = None
+        self._stderr: _StderrTail | None = None
 
     def __enter__(self) -> FrameWriter:
         log.debug(" ".join(self.cmd))
         self.proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert self.proc.stderr is not None
+        self._stderr = _StderrTail(self.proc.stderr)
         return self
 
     def write(self, frame: np.ndarray) -> None:
         if frame.shape[:2] != (self.height, self.width):
             raise ValueError(f"frame {frame.shape[:2]} != {(self.height, self.width)}")
         assert self.proc and self.proc.stdin
-        self.proc.stdin.write(np.ascontiguousarray(frame, dtype=np.uint8).tobytes())
+        try:
+            self.proc.stdin.write(np.ascontiguousarray(frame, dtype=np.uint8).tobytes())
+        except BrokenPipeError:  # ffmpeg quit early: say why, not "[Errno 32] Broken pipe"
+            raise self._finish() or FFmpegError(f"ffmpeg stopped reading frames for {self.out}") from None
+
+    def _finish(self) -> FFmpegError | None:
+        """Close stdin (flushing buffered frames) and wait for ffmpeg; the error to raise if it failed."""
+        assert self.proc and self.proc.stdin and self._stderr
+        with contextlib.suppress(BrokenPipeError):  # the flush hit an ffmpeg that already quit
+            self.proc.stdin.close()
+        code, err = self.proc.wait(), self._stderr.text()
+        return FFmpegError(f"ffmpeg encode failed ({code}) for {self.out}:\n{err}") if code else None
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        assert self.proc and self.proc.stdin
-        self.proc.stdin.close()
-        err = self.proc.stderr.read().decode() if self.proc.stderr else ""
-        code = self.proc.wait()
-        if exc_type is None and code != 0:
-            raise FFmpegError(f"ffmpeg encode failed ({code}) for {self.out}:\n{err[-4000:]}")
+        error = self._finish()
+        if exc_type is None and error:
+            raise error

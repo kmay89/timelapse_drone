@@ -10,12 +10,34 @@ RUNTIME_DIR = PACKAGE_DIR / "runtime"
 TEMPLATE_PROJECT_DIR = PACKAGE_DIR / "templates" / "project"
 
 
+PUBLIC_PROJECTS = ("demo-lakeside",)  # the only projects this public repo holds (fictional)
+
+
+def public_checkout() -> Path | None:
+    """The public Vantage source checkout this package runs from (editable install), else None."""
+    candidate = PACKAGE_DIR.parent.parent
+    return candidate if (candidate / "pyproject.toml").exists() else None
+
+
 def repo_root() -> Path:
     """The checkout this package was installed from (editable install), else CWD."""
-    candidate = PACKAGE_DIR.parent.parent
-    if (candidate / "pyproject.toml").exists():
-        return candidate
-    return Path.cwd()
+    return public_checkout() or Path.cwd()
+
+
+def exposed_in_public_checkout(path: Path) -> bool:
+    """True if `path` lies in the public checkout's own git work tree, where one `git add -A` would
+    publish it (CLAUDE.md invariant 1). The fictional demo projects are exempt, and so is a separate
+    repository cloned inside the checkout (such as the private projects repo): it has its own `.git`."""
+    root = public_checkout()
+    if root is None:
+        return False
+    root, path = root.resolve(), path.expanduser().resolve()
+    if not path.is_relative_to(root):
+        return False
+    parts = path.relative_to(root).parts
+    if parts[:1] == ("projects",) and parts[1:2] and parts[1] in PUBLIC_PROJECTS:
+        return False
+    return not any((root.joinpath(*parts[:i]) / ".git").exists() for i in range(1, len(parts) + 1))
 
 
 def projects_root(override: Path | None = None) -> Path:

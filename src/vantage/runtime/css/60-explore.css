@@ -52,8 +52,10 @@
 .v-x__input::-moz-range-thumb { width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--v-paper); }
 .v-x__input:focus-visible { outline: 0; }
 .v-x__input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--v-accent); }
+.v-x__input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 4px var(--v-accent); } /* apart: an unknown pseudo drops a whole list */
 
-.v-x__pick { display: none; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: .75rem; }
+/* Two pickers side by side only where a long date fits at 16 px (smaller text makes iOS zoom on focus). */
+.v-x__pick { display: none; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr)); gap: .75rem; }
 .v-x:not([data-mode="single"]) .v-x__pick { display: grid; }
 .v-x:not([data-mode="single"]) .v-x__time { display: none; }
 .v-x__pick label { position: relative; display: grid; gap: .45rem; }
@@ -62,10 +64,9 @@
   border: solid var(--v-fg-2); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
 }
 .v-x__pick .v-label { color: var(--v-fg-2); }
-@media (max-width: 24.9em) { .v-x__pick .v-x__select { font-size: .875rem; } }
 .v-x__select {
-  -webkit-appearance: none; appearance: none; width: 100%; min-height: 44px; padding: 0 1.75rem 0 .75rem; border-radius: 10px;
-  border: 1px solid var(--v-rule); background: var(--v-bg-2); color: var(--v-fg); font: 500 .9375rem/1.2 var(--v-font-text);
+  -webkit-appearance: none; appearance: none; width: 100%; min-height: 44px; padding: 0 1.5rem 0 .75rem; border-radius: 10px;
+  border: 1px solid var(--v-rule); background: var(--v-bg-2); color: var(--v-fg); font: 500 max(16px, 1rem)/1.2 var(--v-font-text);
 }
 .v-seg { display: inline-flex; justify-self: start; padding: 3px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--v-rule); }
 .v-seg__btn {

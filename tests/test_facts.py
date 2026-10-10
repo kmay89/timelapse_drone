@@ -9,7 +9,8 @@ import yaml
 
 from vantage.config import Facts, load_project
 from vantage.site.build import markdown
-from vantage.site.facts import FactError, FactNotes, check_facts, check_release
+from vantage.site.facts import WITHHELD, FactError, FactNotes, check_facts, check_release
+from vantage.site.render import _env
 
 FACTS = Facts.model_validate({
     "facts": {
@@ -18,6 +19,7 @@ FACTS = Facts.model_validate({
         "acres": {"text": "48 *acres*", "status": "reported", "attribution": "City"},
         "rumor": {"text": "a rumor", "status": "reported"},
         "unused": {"text": "never printed", "status": "do-not-print"},
+        "secret": {"text": "$41.7 million", "status": "do-not-print", "sources": ["internal cost report v3"]},
     }
 })  # fmt: skip
 
@@ -49,6 +51,29 @@ def test_tokens_render_text_and_numbered_notes():
     assert notes.unverified() == 1
     notes.plain("{fact:rumor}")
     assert notes.notes()[-1]["releasable"] is False and notes.unverified() == 2  # reported, no attribution
+
+
+def test_do_not_print_is_withheld_in_every_build():
+    """A do-not-print fact never prints its text or sources, even in a draft (review) build."""
+    notes = FactNotes(FACTS.facts)
+    body = render(notes, "It cost {fact:secret}, opened {fact:date}.")
+    title = notes.plain("Cost: {fact:secret}")
+    refs = _env().get_template("refs.html").render(notes=notes.notes())
+    for out in (body, title, refs, str(notes.notes())):
+        assert "41.7" not in out and "internal cost report" not in out
+    assert (
+        '<span class="v-fact" data-fact="secret" data-status="do-not-print" data-releasable="false"'
+        f' title="Unverified: do-not-print">{WITHHELD}</span><sup class="v-note-ref"><a href="#v-note-1"'
+    ) in body  # still marked and numbered, so reviewers see the gap
+    assert title == f"Cost: {WITHHELD}"
+    assert notes.notes()[0] == {
+        "n": 1, "factId": "secret", "text": WITHHELD, "sources": [], "status": "do-not-print",
+        "releasable": False,
+    }  # fmt: skip
+    assert "Unverified: do not print" in refs and notes.unverified() == 1
+    assert notes.notes()[1]["sources"] == ["https://example.org/a"]  # other facts keep their sources
+    after = render(FactNotes(FACTS.facts), "Spent {fact:secret}(2024).")
+    assert after.endswith("</sup>(2024).</p>") and 'href="2024"' not in after  # brackets never form a link
 
 
 def test_plain_contexts_resolve_without_markup():

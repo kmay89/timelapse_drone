@@ -286,6 +286,31 @@ def test_runtime_js_is_one_strict_iife(monkeypatch, tmp_path):
     assert json.loads(json.dumps(read_story(html))) == story()
 
 
+def test_a_dropped_focus_outline_is_redrawn_in_every_engine():
+    """Runtime CSS that drops a control's focus outline draws another ring, and a range input draws it on
+    both engines' thumbs: Firefox ignores ::-webkit-slider-thumb, so without its own rule it shows none."""
+    css = re.sub(r"/\*.*?\*/", "", render.runtime_css(), flags=re.S)
+    rules = [
+        (s.strip(), body) for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css) for s in sel.split(",")
+    ]
+    dropped = [
+        s.removesuffix(":focus-visible")
+        for s, body in rules
+        if s.endswith(":focus-visible") and re.search(r"outline:\s*(0|none)\b", body)
+    ]
+    assert ".v-x__input" in dropped  # the check sees the rules it guards
+    for s in dropped:
+        rings = {
+            sel
+            for sel, body in rules
+            if sel.startswith(f"{s}:focus-visible") and re.search(r"(outline|box-shadow):\s*[^0n]", body)
+        }
+        assert rings, f"{s} drops its focus outline and draws no other ring"
+        if any(sel.startswith(f"{s}::-webkit-slider-thumb") for sel, _ in rules):
+            for thumb in ("::-webkit-slider-thumb", "::-moz-range-thumb"):
+                assert f"{s}:focus-visible{thumb}" in rings, f"{s} has no focus ring on {thumb}"
+
+
 def test_raw_style_and_script_cannot_be_closed_in_any_case(monkeypatch):
     monkeypatch.setattr(render, "runtime_js", lambda: "var s = '</SCRIPT><img src=x onerror=alert(1)>';")
     monkeypatch.setattr(render, "runtime_css", lambda: "a{}</Style><script>alert(2)</script>")

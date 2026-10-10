@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -363,18 +364,43 @@ def test_every_referenced_asset_exists(built):
     ]
 
 
+def _sw_config(site: Path) -> dict[str, Any]:
+    return json.loads(re.search(r"const CONFIG = (\{.*?\});", (site / "sw.js").read_text()).group(1))
+
+
 def test_service_worker_lists_every_file(built):
     _, site, _ = built
-    sw = (site / "sw.js").read_text()
-    config = json.loads(re.search(r"const CONFIG = (\{.*?\});", sw).group(1))
+    config = _sw_config(site)
     files = sorted(
         p.relative_to(site).as_posix() for p in site.rglob("*") if p.is_file() and p.name != "sw.js"
     )
-    assert [a for a, _ in config["assets"]] == files
-    assert re.fullmatch(r"vantage-tiny-[0-9a-f]{12}", config["cache"])
-    assert {"./", "index.html", "assets/fonts/inter-latin-opsz-normal.woff2"} <= set(config["core"])
+    assert [a for a, *_ in config["assets"]] == files
+    for name, size, sha in config["assets"]:
+        data = (site / name).read_bytes()
+        assert size == len(data) and sha == hashlib.sha256(data).hexdigest()[:16]
+    assert config["cache"] == "vantage-tiny"
+    assert {"./", "assets/fonts/inter-latin-opsz-normal.woff2"} <= set(config["core"])
     assert set(config["core"]) - {"./"} <= set(files)
     assert 'data-sw="sw.js"' in (site / "index.html").read_text()
+
+
+def test_a_redeploy_keeps_what_a_reader_saved(built, tmp_path):
+    """The next build of a changed story keeps the worker's cache name and every unchanged file's key
+    (path and content hash), so a reader's "Save for offline" copy survives the update; only the files
+    that changed are fetched again."""
+    project, site, _ = built
+    root = tmp_path / "tiny"
+    shutil.copytree(project.root, root)  # work/cache/img included: the images are not encoded again
+    story = json.loads(json.dumps(STORY))
+    story["chapters"][1]["title"] = "A bolder start"
+    (root / "story.yaml").write_text(yaml.safe_dump(story, sort_keys=False))
+    build_site(load_project(root), tmp_path / "site")
+    before, after = _sw_config(site), _sw_config(tmp_path / "site")
+    assert after["cache"] == before["cache"]
+    old = {name: sha for name, _, sha in before["assets"]}
+    new = {name: sha for name, _, sha in after["assets"]}
+    assert old.keys() == new.keys()
+    assert {name for name in new if new[name] != old[name]} == {"index.html"}
 
 
 def test_rebuild_reuses_encoded_images(built, monkeypatch, tmp_path):
@@ -402,6 +428,44 @@ def test_unknown_fact_fails_the_build(tmp_path):
         build_site(load_project(make_project(tmp_path / "p", story=story)), tmp_path / "site")
 
 
+def test_fact_tokens_never_print_raw(tmp_path):
+    """Tokens in vantage names, capture labels and notes and gallery alt text resolve everywhere they
+    print: image alt text (and so the JS-off essay), the compare chapter's default labels, StoryJSON."""
+    story = json.loads(json.dumps(STORY))
+    story["vantages"][0]["name"] = "Over the {fact:lot}"
+    story["captures"][0] |= {"label": "Before {fact:season}", "note": "Crews lay {fact:boardwalk}."}
+    story["chapters"][6]["images"][0]["alt"] = "A postcard of the {fact:lot}"
+    facts = json.loads(json.dumps(FACTS))
+    facts["facts"] |= {
+        "lot": {"text": "old parking lot", "status": "verified", "sources": ["Survey"]},
+        "season": {"text": "spring 2025", "status": "verified", "sources": ["Log"]},
+        "boardwalk": {"text": "400 ft of boardwalk", "status": "needs-client"},
+    }
+    site = tmp_path / "site"
+    html = build_site(load_project(make_project(tmp_path / "p", story=story, facts=facts)), site).read_text()
+    built = read_story(html)
+    assert "{fact:" not in html and "{fact:" not in json.dumps(built)
+    alt = "Over the old parking lot, Before spring 2025: Crews lay 400 ft of boardwalk."
+    assert built["vantages"][0]["captures"][0]["img"]["alt"] == alt and f'alt="{alt}"' in html
+    chapters = {c["id"]: c for c in built["chapters"]}
+    assert chapters["cmp"]["beforeLabel"] == "Before spring 2025"
+    assert chapters["archive"]["images"][0]["img"]["alt"] == "A postcard of the old parking lot"
+    assert {"lot", "season", "boardwalk"} <= {n["factId"] for n in built["notes"]}
+    assert built["meta"]["unverifiedFacts"] == 2  # cost and boardwalk
+
+
+def test_site_coordinates_are_never_published(tmp_path):
+    """project.yaml may record the site's lat/lon, but no edition publishes where the site is."""
+    location = {"name": "Lot Nine", "region": "Somewhere", "lat": 12.3456, "lon": -45.6789}
+    site = tmp_path / "site"
+    html = build_site(load_project(make_project(tmp_path / "p", location=location)), site).read_text()
+    assert read_story(html)["meta"]["location"] == {"name": "Lot Nine", "region": "Somewhere"}
+    for f in site.rglob("*"):
+        if f.suffix in {".html", ".js", ".json", ".webmanifest", ".txt"}:
+            text = f.read_text()
+            assert "12.3456" not in text and "45.6789" not in text, f.name
+
+
 def test_release_gate(tmp_path):
     root = make_project(tmp_path / "p")
     with pytest.raises(ReleaseError) as err:
@@ -413,12 +477,40 @@ def test_release_gate(tmp_path):
     build_site(load_project(root), tmp_path / "site2", release=True)
 
 
-def test_refuses_to_clobber_a_foreign_folder(tmp_path):
-    out = tmp_path / "docs"
-    out.mkdir()
-    (out / "notes.txt").write_text("mine")
-    with pytest.raises(FileExistsError):
+def _tree(folder: Path) -> list[str]:
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
+
+
+@pytest.mark.parametrize(
+    "index",
+    [
+        None,  # no index.html at all
+        "<!doctype html><title>My website</title>",  # someone else's site
+        '<!doctype html><script id="vantage-story" type="application/json">{}</script>',  # a build, under git
+    ],
+)
+def test_refuses_to_clobber_a_foreign_folder(tmp_path, index):
+    """--out may point at any folder: only an earlier Vantage build, outside version control, is replaced."""
+    out = tmp_path / "website"
+    (out / ".git").mkdir(parents=True)
+    (out / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (out / "blog").mkdir()
+    (out / "blog" / "post.html").write_text("<p>mine</p>")
+    if index is not None:
+        (out / "index.html").write_text(index)
+    before = _tree(out)
+    with pytest.raises(FileExistsError, match="empty folder"):
         build_site(load_project(make_project(tmp_path / "p")), out)
+    assert _tree(out) == before
+
+
+def test_rebuild_replaces_an_earlier_build(tmp_path):
+    root = make_project(tmp_path / "p")
+    site = tmp_path / "site"
+    build_site(load_project(root), site)
+    (site / "stale.jpg").write_bytes(b"old")
+    build_site(load_project(root), site)
+    assert not (site / "stale.jpg").exists() and (site / "index.html").is_file()
 
 
 # --------------------------------------------------------------------------- #
@@ -568,14 +660,39 @@ def test_script_links_are_dropped_and_gallery_names_do_not_collide(tmp_path):
     assert (site / first).read_bytes() != (site / second).read_bytes()
 
 
-def test_service_worker_installs_one_jpeg_per_image(built):
+def test_chapter_ids_are_unique_and_never_the_pages_own(tmp_path):
+    text = {"type": "text", "body": "Words."}
+    chapters = [
+        {"id": "vantage-story", "title": "Clash"},  # would precede the StoryJSON <script> in the page
+        {"id": "v story", "title": "Clash"},  # its heading id would be the intro's v-story-title
+        {"id": "a", "title": "A"},
+        {"id": "a"},
+        {"id": "a-2"},  # the repeat above already took a-2
+        {"id": "a-title"},  # the heading id of the first "a"
+        {"id": "2025", "title": "Kept"},  # a leading digit or a dot is a legal id: kept as written
+        {"id": "phase-1.5"},
+    ]
+    story = {"vantages": STORY["vantages"], "chapters": [text | c for c in chapters]}
+    root = make_project(tmp_path / "p", story=story)
+    html = build_site(load_project(root), tmp_path / "site").read_text()
+    ids = [c["id"] for c in read_story(html)["chapters"]]
+    assert ids == ["vantage-story-2", "v-story-2", "a", "a-2", "a-2-2", "a-title-2", "2025", "phase-1.5"]
+    page_ids = re.findall(r'\sid="([^"]*)"', html)
+    assert len(page_ids) == len(set(page_ids)), sorted(page_ids)
+    assert {"v-story-title", "2025-title", "a-title"} <= set(page_ids)
+    assert re.search(r'<(\w+)[^>]*\sid="vantage-story"', html).group(1) == "script"
+
+
+def test_service_worker_installs_only_the_shell(built):
+    """A first visit stores the shell and the opening picture, not a JPEG of every capture: the rest is
+    cached as the reader views it, or all at once by "Save for offline"."""
     _, site, story = built
-    config = json.loads(re.search(r"const CONFIG = (\{.*?\});", (site / "sw.js").read_text()).group(1))
-    images = [c for c in config["core"] if c.startswith("assets/img/")]
-    stems = [re.sub(r"-\d+\.jpg$", "", c) for c in images]
-    assert len(stems) == len(set(stems)) and all(c.endswith(".jpg") for c in images)
-    fallbacks = {c["img"]["fallback"] for v in story["vantages"] for c in v["captures"]}
-    assert fallbacks <= set(images)
+    config = _sw_config(site)
+    images = {c for c in config["core"] if c.startswith("assets/img/")}
+    hero = story["chapters"][0]
+    still = next(v for v in story["vantages"] if v["id"] == hero["vantage"])["captures"][hero["capture"]]
+    assert images == {still["img"]["fallback"]}
+    assert "index.html" not in config["core"]  # "./" is the same page
     js = (site / "sw.js").read_text()
     assert "const CACHE = `${CONFIG.cache} ${SCOPE}`" in js  # stories sharing an origin keep their caches
 

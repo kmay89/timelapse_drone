@@ -90,14 +90,17 @@ function cardAlphas(/** @type {{a: number, b: number}[]} */ wins, /** @type {num
   });
 }
 
-/** Step text cards: bottom sheets on phones, a side column on wide screens. Only opacity/transform move. */
+/** Step text cards: bottom sheets on phones, a side column on wide screens. Only opacity/transform move.
+ * Like hidden pins, a card's links leave the tab order until it shows (screen readers still read it). */
 class Cards {
   constructor(/** @type {string[]} */ htmls) {
     this.el = h("div", { class: "v-cards" });
     this.items = htmls.map((html) => {
       const el = h("div", { class: "v-card v-prose", html });
+      const links = $$("a", el);
+      links.forEach((a) => (a.tabIndex = -1));
       this.el.append(el);
-      return { el, o: -1, box: new DOMRect() };
+      return { el, links, o: -1, box: new DOMRect() };
     });
   }
 
@@ -119,10 +122,13 @@ class Cards {
     this.items.forEach((it, k) => {
       const o = Math.round(alphas[k] * 100) / 100;
       if (o === it.o) return;
+      if ((o > 0.5) !== (it.o > 0.5)) {
+        it.el.classList.toggle("v-on", o > 0.5);
+        for (const a of it.links) a.tabIndex = o > 0.5 ? 0 : -1;
+      }
       it.o = o;
       it.el.style.opacity = String(o);
       it.el.style.transform = o < 1 ? `translate3d(0,${((1 - o) * 14).toFixed(1)}px,0)` : "";
-      it.el.classList.toggle("v-on", o > 0.5);
     });
   }
 }

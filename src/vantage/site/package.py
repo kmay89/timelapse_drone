@@ -31,7 +31,7 @@ from PIL import Image
 
 from vantage import __version__, log
 from vantage.config import Project
-from vantage.site.build import ReleaseError, build_site
+from vantage.site.build import ReleaseError, build_site, inside
 from vantage.site.facts import check_release
 from vantage.site.images import data_uri, encode, jpeg_bytes, resize
 from vantage.site.render import Edition, render_page
@@ -57,6 +57,11 @@ _THUMBNAILS = {"explore", "timeline"}
 def mime_type(path: str | Path) -> str:
     suffix = Path(path).suffix.lower()
     return _MIME.get(suffix) or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+
+
+def _site_file(site: Path, path: str) -> Path:
+    """A file of the built site; a path that leads outside it (a tampered page or theme) is refused."""
+    return inside(site / path, site, "packaged asset")
 
 
 def read_story(html: str) -> dict[str, Any]:
@@ -107,7 +112,8 @@ class _Assets:
         self._repeat = _REPEAT if step is None else (min(_REPEAT[0], step[0]), min(_REPEAT[1], step[1]))
 
     def add_file(self, path: str) -> str:
-        self.files.setdefault(path, (self.site / path).read_bytes())
+        if path not in self.files:
+            self.files[path] = _site_file(self.site, path).read_bytes()
         return path
 
     def add_jpeg(self, img: dict[str, Any], step: tuple[int, int] | None) -> None:
@@ -123,7 +129,7 @@ class _Assets:
             width = min(width, max(w for _, w in jpeg))
             path = re.sub(r"-\d+\.jpg$", f"-{width}q{quality}.jpg", largest)
             if path not in self.files:
-                self.files[path] = jpeg_bytes(self.site / largest, width, quality)
+                self.files[path] = jpeg_bytes(_site_file(self.site, largest), width, quality)
         img["h"] = round(img["h"] * width / img["w"])
         img["w"] = width
         img["sources"] = [{"type": "image/jpeg", "srcset": [[path, width]]}]
@@ -217,7 +223,9 @@ def _edition(
         *(p[k] for p in story["brand"]["partners"] for k in ("logo", "logoOnDark") if k in p),
     ]:
         assets.add_file(path)
-    css = _CSS_URL.sub(lambda m: f'url("{data_uri((site / m[1]).read_bytes(), mime_type(m[1]))}")', theme)
+    css = _CSS_URL.sub(
+        lambda m: f'url("{data_uri(_site_file(site, m[1]).read_bytes(), mime_type(m[1]))}")', theme
+    )
     html, inlined = _inline(render_page(story, theme_css=css, edition=edition), assets)
     missing = [p for p in _referenced(story) if p not in inlined]
     return _embed(html, assets, missing)
@@ -359,15 +367,20 @@ def _sha256(path: Path) -> str:
 
 
 def package_project(project: Project, dist_dir: Path, *, release: bool = False) -> dict[str, Path]:
-    """Package dist_dir/site (built first when missing) into the offline deliverables."""
+    """Package dist_dir/site into the offline deliverables. The site is built first when missing, and
+    always rebuilt for a release: one already in dist may be an earlier draft build (Preview badge,
+    unverified facts) or predate the YAML that just passed the gates, and must not ship as a release."""
     if release:
         problems = check_release(project)
         if problems:
             raise ReleaseError("release package blocked:\n  " + "\n  ".join(problems))
     site = dist_dir / "site"
-    if not (site / "index.html").is_file():
+    if release:
+        log.info(f"release: rebuilding {site} from the current YAML")
+        build_site(project, site, release=True)
+    elif not (site / "index.html").is_file():
         log.info(f"no site in {site}; building it first")
-        build_site(project, site, release=release)
+        build_site(project, site)
     page = (site / "index.html").read_text(encoding="utf-8")
     story = read_story(page)
     theme_match = _THEME.search(page)
