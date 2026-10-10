@@ -21,7 +21,8 @@ DOCS = sorted(
         ROOT / "CLAUDE.md",
         ROOT / "web-tests" / "README.md",
         *(ROOT / "docs").rglob("*.md"),
-        *(ROOT / ".claude").rglob("*.md"),
+        # Not .claude/worktrees: Claude Code's scratch checkouts of this repo, not its docs.
+        *(p for p in (ROOT / ".claude").rglob("*.md") if "worktrees" not in p.relative_to(ROOT).parts),
     ]
 )
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))

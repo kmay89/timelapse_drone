@@ -37,3 +37,6 @@ projects/demo-lakeside/masters/
 Thumbs.db
 .idea/
 .vscode/
+
+# Claude Code workflow worktrees (scratch checkouts of this repo)
+.claude/worktrees/
