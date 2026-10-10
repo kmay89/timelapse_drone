@@ -406,6 +406,29 @@ test.describe("interactions", () => {
     expect((await last()).k, "back at rest, the sharper decode is dropped").toBeLessThanOrEqual(1.05);
   });
 
+  test("motion: once the reader moves on, nothing loops forever but an on-screen hero's pausable drift", async ({ page }) => {
+    // Endless animations keep the compositor drawing (iPhones stay at 120 Hz) and, unpaused, fail WCAG 2.2.2.
+    await page.goto("./");
+    const story = await readStory(page);
+    const heroes = story.chapters.filter((c) => c.type === "hero").map((c) => `section[id="${c.id}"]`).join(",") || "#none";
+    await page.waitForTimeout(2300); // the hero's scroll cue has come up
+    for (const ch of story.chapters.filter((c) => c.type !== "hero")) {
+      const { top, height, vh } = await geometry(section(page, ch));
+      for (const p of [0.5, 1]) {
+        await scrollToY(page, top + p * Math.max(0, height - vh));
+        const loops = await page.evaluate((heroes) => {
+          const drift = (t, pseudo) => !pseudo && t.localName === "img" && t.closest(heroes) && onScreen(t.closest(heroes));
+          return document
+            .getAnimations()
+            .filter((a) => a.playState === "running" && a.effect.getComputedTiming().endTime === Infinity)
+            .filter(({ effect: e }) => !drift(e.target, e.pseudoElement))
+            .map(({ effect: e }) => `${e.target.className || e.target.localName}${e.pseudoElement || ""}`);
+        }, heroes);
+        expect(loops, `endless animations with ${ch.id} at ${p * 100}%`).toEqual([]);
+      }
+    }
+  });
+
   /* Save for offline when the service worker misbehaves: it is stubbed in the page, so these run against
    * any hosted (http/https) copy. */
   const stubWorker = (page, mode) =>
