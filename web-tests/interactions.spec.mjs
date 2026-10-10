@@ -358,6 +358,54 @@ test.describe("interactions", () => {
     await expect(pause).toBeVisible();
   });
 
+  test("explore: the flight pickers are 16 px or larger, so iOS Safari does not zoom in on focus", async ({ page }) => {
+    const { ch } = await open(page, "explore");
+    const sec = section(page, ch);
+    const mode = sec.getByRole("button", { name: "Curtain", exact: true });
+    test.skip(!(await mode.count()), "this explore chapter has no two-flight modes");
+    await mode.scrollIntoViewIfNeeded();
+    await mode.click();
+    for (const name of ["Before flight", "After flight"]) {
+      const pick = sec.getByRole("combobox", { name });
+      await expect(pick).toBeVisible();
+      expect(await pick.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), name).toBeGreaterThanOrEqual(16);
+    }
+  });
+
+  test("explore: flights are decoded at the size they are drawn, sharper only while zoomed in", async ({ page }) => {
+    // Every decoded flight (an ImageBitmap) drawn on a canvas: its width, and source px per canvas px.
+    await page.addInitScript(() => {
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      CanvasRenderingContext2D.prototype.drawImage = function (src, ...a) {
+        if (src instanceof ImageBitmap && a.length === 8) (this.canvas.draws ||= []).push({ w: src.width, k: a[2] / a[6] });
+        return drawImage.call(this, src, ...a);
+      };
+    });
+    const { story, ch } = await open(page, "explore");
+    const sec = section(page, ch);
+    const v = story.vantages.find((x) => x.id === ch.vantages[0]);
+    const widest = Math.max(...v.captures.flatMap((c) => [c.img.w, ...c.img.sources.flatMap((s) => s.srcset.map((e) => e[1]))]));
+    const stage = sec.getByRole("img", { name: new RegExp(`^${escapeRe(v.name)}`) });
+    await stage.scrollIntoViewIfNeeded();
+    const last = async () => (await stage.evaluate((c) => c.draws ?? [])).at(-1);
+    await expect.poll(last, { message: "a decoded flight is drawn" }).toBeTruthy();
+    await page.waitForTimeout(300);
+    const flat = await last();
+    expect(flat.k, `a ${flat.w} px decode is oversampled ${flat.k.toFixed(2)}× at rest`).toBeLessThanOrEqual(1.05);
+
+    const box = await stage.boundingBox();
+    await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+    const reset = sec.getByRole("button", { name: "Reset zoom" });
+    await expect(reset).toBeVisible();
+    await expect.poll(async () => (await last()).w, { message: "zoomed in, the flight is re-decoded sharper" })
+      .toBeGreaterThanOrEqual(Math.min(widest, 1.5 * flat.w) - 1);
+
+    await reset.click();
+    await expect(reset).toBeHidden();
+    await page.waitForTimeout(300);
+    expect((await last()).k, "back at rest, the sharper decode is dropped").toBeLessThanOrEqual(1.05);
+  });
+
   /* Save for offline when the service worker misbehaves: it is stubbed in the page, so these run against
    * any hosted (http/https) copy. */
   const stubWorker = (page, mode) =>

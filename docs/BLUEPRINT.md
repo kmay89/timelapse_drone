@@ -188,7 +188,8 @@ function scrubState(p, n, hold = 0.55) {
   date, so time stays honest. Tapping a tick scrolls to that capture's hold.
 - Memory: backing store = CSS size × min(DPR, 2), capped near 2.2 MP; at most five decoded bitmaps;
   `createImageBitmap` at exactly the backing size and `close()` on eviction. iOS caps canvas area at
-  8192² device pixels.
+  8192² device pixels. Explore decodes at its resting size too; only while zoomed in does it add a
+  sharper decode (≤ 4 MP) of the one or two flights on screen, dropped on zoom-out or when cooled.
 - Portrait art direction: a 16:9 aerial full-width on a portrait phone is 220 pt tall and looks
   cheap, so stages fill `100svh` with a cover crop centred on `portrait_focus`, and steps pan with
   `focus: [x, y, zoom]`. Higher-resolution masters keep the portrait crop sharp.
