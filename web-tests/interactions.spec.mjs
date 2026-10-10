@@ -81,17 +81,22 @@ function controlTests() {
     let showing = 0;
     for (let k = 0; k <= 48; k++) {
       await scrollToY(page, top + (k / 48) * (height - vh));
-      const links = await sec.getByRole("link").evaluateAll((els) =>
-        els.filter((a) => onScreen(a)).map((a) => {
-          let o = 1;
-          for (let n = a; n instanceof Element; n = n.parentElement) o *= Number(getComputedStyle(n).opacity);
-          return { name: a.getAttribute("aria-label") || a.textContent, o, tabbable: a.tabIndex >= 0 };
-        }),
-      );
-      for (const l of links) {
-        showing += l.o > 0.5;
-        expect(l.tabbable, `"${l.name}" at opacity ${l.o.toFixed(2)}`).toBe(l.o > 0.5);
-      }
+      // The stage applies a scroll on its next frame, and under reduced motion every style change is a
+      // 0.01 ms transition, so a single read can land between the two: read until the stage has settled.
+      let links = [];
+      await expect
+        .poll(async () => {
+          links = await sec.getByRole("link").evaluateAll((els) =>
+            els.filter((a) => onScreen(a)).map((a) => {
+              let o = 1;
+              for (let n = a; n instanceof Element; n = n.parentElement) o *= Number(getComputedStyle(n).opacity);
+              return { name: a.getAttribute("aria-label") || a.textContent, o, tabbable: a.tabIndex >= 0 };
+            }),
+          );
+          return links.filter((l) => l.tabbable !== l.o > 0.5).map((l) => `"${l.name}" at opacity ${l.o.toFixed(2)}`);
+        }, { message: "links that are tabbable while their card is hidden, or the reverse", timeout: 5_000 })
+        .toEqual([]);
+      showing += links.filter((l) => l.o > 0.5).length;
     }
     expect(showing, "a step card with a link came into view").toBeGreaterThan(0);
   });
