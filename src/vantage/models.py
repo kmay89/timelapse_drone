@@ -177,8 +177,9 @@ def canonical_json(obj: Any) -> bytes:
 class FilmPlan(_M):
     """One film: `plan` decides every frame and is hashed; the rest is a record around it.
 
-    `facts` (a status snapshot), `warnings`, `encode` (bytes, not frames) and `render` (what the
-    encode produced) are not part of the hash. The hash is written into plan.json, and `load`
+    `facts` (a status snapshot), `warnings`, `checks` (the ink box of every typeset layer against the
+    safe zone), `encode` (bytes, not frames) and `render` (what the encode produced) are not part of
+    the hash. The hash is written into plan.json, and `load`
     refuses a file whose plan no longer matches it (edited by hand).
     """
 
@@ -187,6 +188,7 @@ class FilmPlan(_M):
     plan: dict[str, Any]
     facts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    checks: dict[str, Any] = Field(default_factory=dict)
     encode: dict[str, Any] = Field(default_factory=dict)
     render: dict[str, Any] | None = None
 
@@ -218,6 +220,7 @@ class FilmPlan(_M):
             "plan": self.plan,
             "facts": self.facts,
             "warnings": self.warnings,
+            "checks": self.checks,
             "encode": self.encode,
             "render": self.render,
         }

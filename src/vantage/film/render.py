@@ -1,6 +1,7 @@
 """MP4 time-lapse films rendered from their plans: every visit of a vantage as one slowly pushing move.
 
     <out>/<slug>-<id>.mp4               the film ('16x9': output.film width × height; '9x16': phones)
+    <out>/<slug>-<id>-web.mp4           the same frames under a VBV cap (≤ 25 MiB), from the same pipe
     <out>/<slug>-<id>.jpg               poster
     <out>/<slug>-<id>.plan.json         its FilmPlan (film/plan.py) and the render record
     <out>/<slug>-<id>.storyboard.jpg    one tile per key frame (film/storyboard.py)
@@ -18,8 +19,11 @@ every film goes through `encode_frames` and the luminance meter of `film/safety.
 VANTAGE_FILM_JOBS=1 renders them one after another, with the same bytes) and renames their
 *.part outputs only once every film has succeeded.
 
-`_Film` evaluates a classic plan: the timeline, card text and inputs all come from the plan, so a
-plan read back from plan.json renders the same bytes. Frames are composed with numpy/OpenCV and
+`_Film` evaluates a classic plan: the timeline, card text, layout (film/layout.py: classic-16x9 keeps
+the original numbers, classic-9x16 the story safe zone) and inputs all come from the plan, so a plan
+read back from plan.json renders the same bytes. Both renderers record the ink box of every typeset
+layer (`ink`); `check_ink` writes them to plan.json `checks` and turns any box outside the safe zone
+into a plan warning (an error with --release). Frames are composed with numpy/OpenCV and
 piped to ffmpeg (media.ffmpeg.FrameWriter). Text is typeset once per card and capture with Pillow in
 the brand fonts and alpha-composited, so a frame costs one warp, the occasional blend and a few small
 composites. VANTAGE_FAST=1 caps the long edge at 960 px and encodes with a fast preset.
@@ -32,12 +36,12 @@ import hashlib
 import math
 import multiprocessing
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import cv2
 import numpy as np
@@ -45,6 +49,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from vantage import log
 from vantage.config import Project
+from vantage.film.layout import Layout, outside
 from vantage.film.plan import (
     PLAN_SUFFIX,
     ROLES,
@@ -66,7 +71,8 @@ from vantage.site.facts import check_release
 PUSH = 0.06  # Ken-Burns zoom across a section (1.00 → 1.06)
 PAN = 0.05  # vertical cut: drift either side of the portrait focus, in image widths
 POSTER_QUALITY = 90
-__all__ = ["SIMULATED_NOTE", "capture_labels", "render_film"]
+INK_TOLERANCE = 1  # px of antialiasing an ink box may spill past the safe zone
+__all__ = ["SIMULATED_NOTE", "capture_labels", "check_ink", "render_film"]
 # BT.709 tags and matrix (players guess wrong otherwise), no timestamps → reproducible bytes,
 # and an explicit container (films are written to <name>.mp4.part, then renamed).
 _ENCODE = (
@@ -191,6 +197,12 @@ class _Type:
             x += font.getlength(c) + track
 
 
+def ink_box(x0: float, y0: float, x1: float, y1: float) -> list[int]:
+    """[x, y, w, h] of the pixels a (x0, y0, x1, y1) box touches."""
+    a, b = math.floor(x0), math.floor(y0)
+    return [a, b, math.ceil(x1) - a, math.ceil(y1) - b]
+
+
 @dataclass(frozen=True)
 class _Layer:
     """A pre-rendered RGBA patch (premultiplied BGR float32 + alpha), composited at (x, y)."""
@@ -294,15 +306,18 @@ STYLES = {
 class _Film:
     """One classic cut (16:9 or 9:16) evaluated from its plan: layout, timeline and a pure frame(t)."""
 
-    def __init__(self, project: Project, plan: FilmPlan):
+    def __init__(self, project: Project, plan: FilmPlan, layout: Layout | None = None):
         p = plan.plan
         if p["cut"] != "classic":
             raise ValueError(f"film {plan.id}: no renderer for cut {p['cut']!r}")
         width, height = p["width"], p["height"]
         self.project, self.plan, self.width, self.height = project, plan, width, height
-        self.portrait = portrait = height > width
+        self.portrait = height > width
         self.fps, self.hold, self.fade = p["fps"], p["hold_s"], p["fade_s"]
-        self.unit = u = min(width, height) / 1080
+        self.lay = lay = layout or Layout.from_record(width, height, p["layout"])
+        assert lay.scrim is not None and lay.rail_x is not None, "a classic layout"
+        self.unit = u = lay.unit
+        self.ink: list[dict] = []
         inputs = p["inputs"]
         files = {role: font_path(inputs["fonts"][role]["file"], project.brand) for role in ROLES}
         colors = inputs["colors"]
@@ -310,15 +325,16 @@ class _Film:
         night = np.array(_hex(colors["night"])[::-1], np.float32)
         paper = np.array(_hex(colors["paper"])[::-1], np.float32)
         self.accent = _hex(colors["accent"])[::-1]
-        self.margin, self.rail_y = p["layout"]["margin"], p["layout"]["rail_y"]
+        self.margin, self.rail_y, self.rail_ends = lay.margin, lay.rail_y, lay.rail_x
         # Cards: brand night with a faint central glow.
         yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
         glow = np.exp(-(((xx - width / 2) / (0.6 * width)) ** 2 + ((yy - height / 2) / (0.6 * height)) ** 2))
         self.card_bg = (night + (paper - night) * 0.05 * glow[..., None] + 0.5).astype(np.uint8)
-        # Bottom scrim behind the lower third and rail, as uint8 maps for cv2 (multiply, then add).
-        rows = round((0.36 if portrait else 0.42) * height)
-        a = np.array([0.62 * _ease(i / rows) for i in range(rows)], np.float32)[:, None, None]
-        self.scrim_top = height - rows
+        # Bottom scrim behind the lower third and rail, as uint8 maps for cv2 (multiply, then add):
+        # it rises over `ramp` rows from the layout's first scrim row, then holds to the bottom.
+        self.scrim_top, ramp = lay.scrim
+        rows = height - self.scrim_top
+        a = np.array([0.62 * _ease(i / ramp) for i in range(rows)], np.float32)[:, None, None]
         self.scrim_keep = np.ascontiguousarray(
             np.broadcast_to((1 - a) * 255 + 0.5, (rows, width, 3)), np.uint8
         )
@@ -336,9 +352,14 @@ class _Film:
         canvas = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
         return canvas, ImageDraw.Draw(canvas)
 
-    def _stack(self, blocks: Sequence[_Block]) -> _Layer:
-        """Centered blocks (wrapped to 80 % of the width), shrunk to fit 86 % of the height."""
-        t, u, max_w = self.type, self.unit, 0.8 * self.width
+    def _stack(self, blocks: Sequence[_Block], sid: str | None = None) -> _Layer:
+        """Centered blocks (wrapped to 80 % of the width), shrunk to fit 86 % of the height (classic
+        9:16: of the safe zone, centred in it)."""
+        lay = self.lay
+        legacy = lay.name == "classic-16x9"  # today's numbers, byte for byte
+        t, u = self.type, self.unit
+        max_w = 0.8 * self.width if legacy else min(0.8 * self.width, lay.text_width)
+        room = 0.86 * self.height if legacy else min(0.86 * self.height, lay.bottom - lay.top)
         scale = 1.0
         for attempt in range(3):
             lines: list[tuple[str | None, _Style, float]] = []  # text (None = rule), style, baseline
@@ -354,20 +375,29 @@ class _Film:
                     y += ascent if i == 0 else style.size * u * scale * style.leading
                     lines.append((line, style, y))
                 y += descent
-            if y <= 0.86 * self.height or attempt == 2:
+            if y <= room or attempt == 2:
                 break
-            scale *= 0.86 * self.height / y
+            scale *= room / y
         canvas, draw = self._canvas()
-        top = (self.height - y) / 2
+        top = (self.height - y) / 2 if legacy else (lay.top + lay.bottom) / 2 - y / 2
+        cx = self.width / 2 if legacy else (lay.margin + lay.right) / 2
         for text, style, base in lines:
             if text is None:
-                x0, y0 = self.width / 2 - 22 * u * scale, top + base
+                x0, y0 = cx - 22 * u * scale, top + base
                 draw.rectangle((x0, y0, x0 + 44 * u * scale, y0 + 3 * u * scale), fill=t.colors["accent"])
-            else:
+            elif legacy:
                 t.draw(
                     draw, (self.width - t.width(text, style, scale)) / 2, top + base, text, style, scale=scale
                 )
+            else:
+                t.draw(draw, cx - t.width(text, style, scale) / 2, top + base, text, style, scale=scale)
+        self._note(sid, "stack", canvas.getbbox())
         return _Layer.of(canvas)
+
+    def _note(self, sid: str | None, layer: str, bbox: Sequence[float] | None) -> None:
+        """Record the ink box of a typeset layer (x0, y0, x1, y1) for plan.json `checks.ink`."""
+        if bbox:
+            self.ink.append({"shot": sid, "layer": layer, "box": ink_box(*bbox)})
 
     def _tag(self, words: Sequence[str]) -> _Layer | None:
         """'Simulated imagery' / 'Preview' in the top corner of every capture: films travel without context."""
@@ -375,38 +405,48 @@ class _Film:
             return None
         canvas, draw = self._canvas()
         ascent, _ = self.type.font(TAG).getmetrics()
-        self.type.draw(draw, self.margin, 0.8 * self.margin + ascent, " · ".join(words), TAG)
+        top = 0.8 * self.margin if self.lay.tag == "corner" else self.lay.top
+        self.type.draw(draw, self.margin, top + ascent, " · ".join(words), TAG)
+        self._note(None, "tag", canvas.getbbox())
         return _Layer.of(canvas, shadow=0.6, blur=3 * self.unit)
 
-    def _third(self, shot: _Shot) -> tuple[_Layer, float]:
+    def _third(self, shot: _Shot, sid: str) -> tuple[_Layer, float]:
         """Date label (+ note) above the rail, and the baseline of the accent rule animated above it."""
         canvas, draw = self._canvas()
         t, u = self.type, self.unit
         base = self.rail_y - 34 * u
         if shot.note:
-            for line in reversed(t.wrap(shot.note, NOTE, 0.7 * self.width)):
+            for line in reversed(t.wrap(shot.note, NOTE, min(0.7 * self.width, self.lay.text_width))):
                 t.draw(draw, self.margin, base, line, NOTE)
                 base -= NOTE.size * u * 1.3
             base -= 10 * u
         t.draw(draw, self.margin, base, shot.label, DATE)
         cap = -t.font(DATE).getbbox("H", anchor="ls")[1]
-        return _Layer.of(canvas, shadow=0.55, blur=4 * u), base - cap - 16 * u
+        rule = base - cap - 16 * u
+        bbox = canvas.getbbox() or (self.margin, rule, self.margin, rule)
+        self._note(sid, f"third {shot.date}", (
+            min(bbox[0], self.margin), min(bbox[1], rule - 4 * u),
+            max(bbox[2], self.margin + 56 * u), max(bbox[3], rule),
+        ))  # fmt: skip
+        return _Layer.of(canvas, shadow=0.55, blur=4 * u), rule
 
     def _rail_x(self, section: _Section, position: float) -> float:
         """x of a fractional capture index on the rail, proportional to real time."""
         days = section.days
         i = min(int(position), len(days) - 1)
         day = days[i] + (days[min(i + 1, len(days) - 1)] - days[i]) * (position - i)
-        x0, x1, span = self.margin, self.width - self.margin, days[-1] - days[0]
+        (x0, x1), span = self.rail_ends, days[-1] - days[0]
         return x1 if span == 0 else x0 + (x1 - x0) * (day - days[0]) / span
 
-    def _rail(self, section: _Section) -> _Layer:
+    def _rail(self, section: _Section, sid: str) -> _Layer:
         canvas, draw = self._canvas()
         u, y, paper = self.unit, self.rail_y, self.type.colors["paper"]
-        draw.rectangle((self.margin, y - u, self.width - self.margin, y + u), fill=(*paper, 90))
+        (x0, x1), knob = self.rail_ends, 5 * u
+        draw.rectangle((x0, y - u, x1, y + u), fill=(*paper, 90))
         for i in range(len(section.shots)):
             x = self._rail_x(section, i)
             draw.rectangle((x - u, y - 6 * u, x + u, y + 6 * u), fill=(*paper, 150))
+        self._note(sid, "rail", (x0 - knob, y - 6 * u, x1 + knob, y + 6 * u))  # the knob reaches either end
         return _Layer.of(canvas)
 
     def _layout(self, shots: Sequence[dict]) -> None:
@@ -422,8 +462,8 @@ class _Film:
                 shot["name"], caps, (shot["focus"][0], shot["focus"][1]),
                 sec["start"], sec["length"], sec["lead"], sec["tail"], [c.day for c in caps],
             )  # fmt: skip
-            section.thirds = [self._third(c) for c in caps]
-            section.rail = self._rail(section)
+            section.thirds = [self._third(c, shot["id"]) for c in caps]
+            section.rail = self._rail(section, shot["id"])
             by_id[shot["id"]] = section
             self.sections.append(section)
         for shot in shots:
@@ -431,7 +471,9 @@ class _Film:
                 continue
             blocks = [(b["text"], STYLES[b["style"]], b["gap"]) for b in shot["blocks"]]
             sec = shot["seconds"]
-            card = _Card(sec["start"], sec["duration"], self._stack(blocks), dissolve=sec["dissolve"])
+            card = _Card(
+                sec["start"], sec["duration"], self._stack(blocks, shot["id"]), dissolve=sec["dissolve"]
+            )
             card.prev, card.next = by_id.get(shot.get("prev") or ""), by_id.get(shot.get("next") or "")
             self.cards.append(card)
 
@@ -518,7 +560,7 @@ class _Film:
         """Accent fill up to the current date, lit ticks for the visits passed, and a marker dot."""
         u, y = self.unit, self.rail_y
         x = self._rail_x(section, position)
-        self._bar(frame, self.margin, y - u, x, y + u, 1.0)
+        self._bar(frame, self.rail_ends[0], y - u, x, y + u, 1.0)
         for i in range(min(int(position + 1e-6), len(section.shots) - 1) + 1):
             xi = self._rail_x(section, i)
             self._bar(frame, xi - u, y - 6 * u, xi + u, y + 6 * u, 1.0)
@@ -559,9 +601,6 @@ class _Film:
         """Frame k of the film (classic plans keep their timeline in seconds)."""
         return self.frame(k / self.fps)
 
-    def encode(self, part: Path, *, crf: int, preset: str, meter: LumaMeter | None = None) -> None:
-        encode_frames(self, part, crf=crf, preset=preset, meter=meter)
-
     def poster(self) -> bytes:
         """The poster JPEG: the main vantage's final hold."""
         params = [cv2.IMWRITE_JPEG_QUALITY, POSTER_QUALITY, cv2.IMWRITE_JPEG_PROGRESSIVE, 1]
@@ -576,19 +615,40 @@ class Renderable(Protocol):
     height: int
     fps: int
     frames: int
+    lay: Layout
+    ink: list[dict]
 
     def frame_at(self, k: int) -> np.ndarray: ...
 
     def poster(self) -> bytes: ...
 
 
+def web_args(web: Mapping[str, Any]) -> list[str]:
+    """Output options of the -web.mp4 encode: H.264 High at crf under a VBV cap (maxrate, bufsize),
+    faststart and the same BT.709, bitexact settings as the main film."""
+    return [
+        "-c:v", "libx264", "-profile:v", "high", "-crf", str(web["crf"]), "-preset", web["preset"],
+        "-maxrate", str(web["maxrate"]), "-bufsize", str(web["bufsize"]),
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", *_ENCODE,
+    ]  # fmt: skip
+
+
 def encode_frames(
-    film: Renderable, part: Path, *, crf: int, preset: str, meter: LumaMeter | None = None
+    film: Renderable,
+    part: Path,
+    *,
+    crf: int,
+    preset: str,
+    meter: LumaMeter | None = None,
+    web: tuple[Path, Mapping[str, Any]] | None = None,
 ) -> None:
-    """Pipe every frame of a film to ffmpeg (and through the luminance meter, which only reads)."""
+    """Pipe every frame of a film to ffmpeg (and through the luminance meter, which only reads);
+    `web` (path, plan.json encode.web) adds the web encode as a second output of the same pipe."""
+    extra_outputs = [(web[0], web_args(web[1]))] if web is not None else []
     with FrameWriter(
-        part, film.width, film.height, fps=film.fps, crf=crf, preset=preset, extra=_ENCODE
-    ) as writer:
+        part, film.width, film.height, fps=film.fps, crf=crf, preset=preset, extra=_ENCODE,
+        extra_outputs=extra_outputs,
+    ) as writer:  # fmt: skip
         for k in range(film.frames):
             frame = film.frame_at(k)
             if meter is not None:
@@ -609,6 +669,26 @@ def renderer(project: Project, plan: FilmPlan) -> Renderable:
     raise ValueError(f"film {plan.id}: no renderer for cut {cut!r}")
 
 
+def check_ink(plan: FilmPlan, film: Renderable) -> list[str]:
+    """Write the ink box of every typeset layer to plan.json `checks` ({safe: [x0, y0, x1, y1], ink:
+    [{shot, layer, box: [x, y, w, h]}], outside: [indices]}) and return one line per layer that
+    leaves the safe zone (more than INK_TOLERANCE px). Each is also a plan warning."""
+    rect = list(film.lay.rect)
+    bad = [k for k, item in enumerate(film.ink) if outside(item["box"], rect, INK_TOLERANCE)]
+    plan.checks = {"safe": rect, "ink": film.ink, "outside": bad}
+    problems = []
+    for k in bad:
+        item = film.ink[k]
+        where = f"{item['shot']} {item['layer']}" if item["shot"] else item["layer"]
+        problems.append(
+            f"{where}: ink box {item['box']} (x, y, w, h) leaves the safe zone {rect} ({film.lay.name})"
+        )
+    for problem in problems:
+        if problem not in plan.warnings:
+            plan.warnings.append(problem)
+    return problems
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -618,12 +698,13 @@ def _sha256(path: Path) -> str:
 
 
 def _render_parts(
-    project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool
+    project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool, release: bool = False
 ) -> tuple[dict[Path, Path], FilmPlan]:
     """Write one film's outputs as *.part files: ({final: part}, the plan with its render record).
-    On failure the parts written so far are deleted."""
+    On failure the parts written so far are deleted. With `release`, text outside the safe zone is
+    an error."""
     stem = f"{project.slug}-{plan.id}"
-    mp4, poster = out_dir / f"{stem}.mp4", out_dir / f"{stem}.jpg"
+    mp4, poster, web_mp4 = out_dir / f"{stem}.mp4", out_dir / f"{stem}.jpg", out_dir / f"{stem}-web.mp4"
     plan_path, board = out_dir / f"{stem}{PLAN_SUFFIX}", out_dir / f"{stem}{STORYBOARD_SUFFIX}"
     parts: dict[Path, Path] = {}  # final → part; never *.mp4: packaging ships every film/*.mp4
 
@@ -632,6 +713,11 @@ def _render_parts(
         return parts[final]
 
     film = renderer(project, plan)
+    ink = check_ink(plan, film)
+    if release and ink:
+        raise ReleaseError(
+            f"release film {plan.id} blocked: text outside the safe zone:\n  " + "\n  ".join(ink)
+        )
     try:
         if plan_only:
             plan.render = None
@@ -643,12 +729,20 @@ def _render_parts(
                     pass
         else:
             meter = LumaMeter(plan.plan["fps"])
-            encode_frames(film, part(mp4), crf=plan.encode["crf"], preset=plan.encode["preset"], meter=meter)
+            web = plan.encode.get("web")
+            encode_frames(
+                film, part(mp4), crf=plan.encode["crf"], preset=plan.encode["preset"], meter=meter,
+                web=(part(web_mp4), web) if web else None,
+            )  # fmt: skip
             meter.check(f"film {plan.id}")
             part(poster).write_bytes(film.poster())
+
+            def record(path: Path) -> dict[str, Any]:
+                return {"bytes": parts[path].stat().st_size, "sha256": _sha256(parts[path])}
+
             plan.render = {
-                "mp4": {"bytes": parts[mp4].stat().st_size, "sha256": _sha256(parts[mp4])},
-                "web": None,
+                "mp4": record(mp4),
+                "web": record(web_mp4) if web else None,
                 "flash": meter.result(),
                 "ffmpeg": ffmpeg_version(),
             }
@@ -680,10 +774,12 @@ def _final(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool) 
     return out_dir / (f"{stem}{PLAN_SUFFIX}" if plan_only else f"{stem}.mp4")
 
 
-def _worker(project: Project, plan: FilmPlan, out_dir: Path) -> tuple[dict[Path, Path], FilmPlan]:
+def _worker(
+    project: Project, plan: FilmPlan, out_dir: Path, release: bool
+) -> tuple[dict[Path, Path], FilmPlan]:
     """One film rendered in a worker process (OpenCV single-threaded: the films run side by side)."""
     cv2.setNumThreads(1)
-    return _render_parts(project, plan, out_dir, plan_only=False)
+    return _render_parts(project, plan, out_dir, plan_only=False, release=release)
 
 
 def film_jobs(n: int) -> int:
@@ -702,7 +798,7 @@ def film_jobs(n: int) -> int:
 
 
 def _render_all(
-    project: Project, plans: Sequence[FilmPlan], out_dir: Path, *, plan_only: bool
+    project: Project, plans: Sequence[FilmPlan], out_dir: Path, *, plan_only: bool, release: bool = False
 ) -> list[FilmPlan]:
     """Render every plan (in worker processes when film_jobs allows) and rename the outputs only
     once every film has succeeded; on any failure every film's *.part files are deleted."""
@@ -711,11 +807,11 @@ def _render_all(
     try:
         if jobs == 1:
             for plan in plans:
-                done.append(_render_parts(project, plan, out_dir, plan_only=plan_only))
+                done.append(_render_parts(project, plan, out_dir, plan_only=plan_only, release=release))
         else:
             ctx = multiprocessing.get_context("spawn")  # never fork a process that holds OpenCV threads
             with ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as pool:
-                futures = [pool.submit(_worker, project, plan, out_dir) for plan in plans]
+                futures = [pool.submit(_worker, project, plan, out_dir, release) for plan in plans]
                 errors = []
                 for future in futures:
                     try:
@@ -753,9 +849,10 @@ def render_film(
     plan_only: bool = False,
 ) -> list[Path]:
     """Plan and render the films (all of them, or the ids in `only`) into out_dir = dist/<slug>/film:
-    MP4 + poster + plan.json + storyboard each. `plan_only` writes the plan and storyboard without
-    encoding; `release` first refuses a draft project or non-releasable facts. Returns the MP4s
-    (the plan.json files with plan_only)."""
+    MP4 (+ -web.mp4) + poster + plan.json + storyboard each. `plan_only` writes the plan and
+    storyboard without encoding; `release` first refuses a draft project or non-releasable facts,
+    and refuses text outside a film's safe zone. Returns the MP4s (the plan.json files with
+    plan_only)."""
     if release:
         problems = check_release(project)
         if problems:
@@ -765,7 +862,7 @@ def render_film(
     if only is None:
         _clean(project, out_dir, list(resolve_films(project)))
     outputs = []
-    for plan in _render_all(project, list(plans.values()), out_dir, plan_only=plan_only):
+    for plan in _render_all(project, list(plans.values()), out_dir, plan_only=plan_only, release=release):
         out = _final(project, plan, out_dir, plan_only=plan_only)
         p = plan.plan
         sections = sum(s["kind"] in ("section", "capture") for s in p["shots"])

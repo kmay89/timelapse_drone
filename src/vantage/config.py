@@ -248,6 +248,7 @@ class FilmSettings(Model):
     max_upscale: float = Field(
         1.6, ge=1.0, le=3.0, description="Output px per master px never exceeds this in a push."
     )
+    web: bool = Field(True, description="Also write <name>-web.mp4, a copy of at most 25 MiB for websites.")
 
 
 class OutputSettings(Model):

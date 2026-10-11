@@ -8,6 +8,9 @@ short edge / 1080 × type_scale) and then evaluates each frame from the plan alo
     dissolves → scrims behind each text block's ink → date label → words rising at sub-pixel offsets
     → rail and knob → tag ('Simulated imagery', 'Preview', and ' · plan <hash6>' in drafts).
 
+The rail's ends are inset by its knob (8.5 units), so the knob never reaches past the text edges.
+Every typeset layer's ink box (with its rise travel) is kept in `ink` for plan.json `checks`.
+
 Curtains split two warps of the same camera at the rule (before left, after right) under a 3-unit
 accent rule and grip; their labels are clipped to their own side and shown only inside the plan's
 reveal intervals. Stats set the plan's figure on a fixed digit advance, one layer per glyph sliding
@@ -33,7 +36,7 @@ from vantage.config import Project
 from vantage.film.beat import Window, keyed, lerp, mix_cam, ramp
 from vantage.film.layout import Layout
 from vantage.film.plan import ROLES, font_path
-from vantage.film.render import _hex, _Layer, _mix, _Style, _Type
+from vantage.film.render import _hex, _Layer, _mix, _Style, _Type, ink_box
 from vantage.film.safety import IMAGES, SURFACES
 from vantage.models import FilmPlan
 
@@ -61,6 +64,7 @@ END_STYLES = {
     "honesty": HONESTY, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
 }  # fmt: skip
 RISE = 14  # units a text block rises while it fades in
+KNOB = 8.5  # units: the rail knob's radius with its ring (the rail's ends are inset by it)
 LRU = 4  # masters kept decoded (a dissolve needs two)
 
 Items = Sequence[tuple[float, float, str, _Style, str]]  # x, baseline y, text, style, align (l|r|c)
@@ -142,6 +146,8 @@ class _Cut:
         self.third = max(1, round(self.fpb / 3))
         self.lay = Layout.from_record(self.width, self.height, p["layout"])
         self.u = u = self.lay.unit
+        self.rail_ends = (self.lay.margin + KNOB * u, self.lay.right - KNOB * u)
+        self.ink: list[dict[str, Any]] = []
         inputs = p["inputs"]
         files = {role: font_path(inputs["fonts"][role]["file"], project.brand) for role in ROLES}
         colors = inputs["colors"]
@@ -185,8 +191,23 @@ class _Cut:
     def _cap(self, style: _Style) -> float:
         return -self.type.font(style).getbbox("H", anchor="ls")[1]
 
-    def _ink(self, items: Items, *, shadow: float = 0.6, blur: float = 4.0) -> tuple[_Layer, tuple[int, ...]]:
-        """A layer of text items (x, baseline, text, style, align) and its ink box."""
+    def _note(self, sid: str | None, layer: str, bbox: Sequence[float], rise: float = 0.0) -> None:
+        """Record an ink box (x0, y0, x1, y1), grown `rise` px down for text that rises into place."""
+        self.ink.append(
+            {"shot": sid, "layer": layer, "box": ink_box(bbox[0], bbox[1], bbox[2], bbox[3] + rise)}
+        )
+
+    def _ink(
+        self,
+        items: Items,
+        *,
+        shadow: float = 0.6,
+        blur: float = 4.0,
+        note: tuple[str | None, str] | None = None,
+        rise: float = 0.0,
+    ) -> tuple[_Layer, tuple[int, ...]]:
+        """A layer of text items (x, baseline, text, style, align) and its ink box (recorded under
+        `note` = (shot id, layer name) with its rise travel)."""
         canvas = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
         for x, y, text, style, align in items:
@@ -194,6 +215,8 @@ class _Cut:
             x = x - w if align == "r" else x - w / 2 if align == "c" else x
             self.type.draw(draw, x, y, text, style)
         bbox = canvas.getbbox() or (0, 0, 1, 1)
+        if note is not None and canvas.getbbox():
+            self._note(note[0], note[1], bbox, rise)
         return _Layer.of(canvas, shadow=shadow, blur=blur * self.u), bbox
 
     def _scrim(self, bbox: Sequence[float], alpha: float, rise: float = 0.0) -> _Layer:
@@ -216,9 +239,12 @@ class _Cut:
         if not words:
             return None
         lay, text = self.lay, " · ".join(words)
+        style = TAG
+        if (w := self.type.width(text, TAG)) > lay.text_width:  # shrink to fit between the margins
+            style = dataclasses.replace(TAG, size=TAG.size * lay.text_width / w * 0.98)
         top = lay.tag == "top-right"
-        base = lay.top + self._cap(TAG) if top else lay.rail_y - 18 * self.u
-        layer, box = self._ink([(lay.right, base, text, TAG, "r")], shadow=0.6, blur=3)
+        base = lay.top + self._cap(style) if top else lay.rail_y - 18 * self.u
+        layer, box = self._ink([(lay.right, base, text, style, "r")], shadow=0.6, blur=3, note=(None, "tag"))
         self.tag_scrim = self._scrim(box, 0.3)
         return layer
 
@@ -261,14 +287,14 @@ class _Cut:
                 self._typeset_title(shot, text)
             elif kind == "capture":
                 cap_top = lay.label_top + self._cap(DATE)
-                label, box = self._ink([(lay.margin, cap_top, shot["label"], DATE, "l")])
+                label, box = self._ink([(lay.margin, cap_top, shot["label"], DATE, "l")], note=(sid, "label"))
                 entry: dict[str, Any] = {"label": label, "label_scrim": self._scrim(box, 0.42)}
                 words = text.get("words")
                 if words:
-                    entry["words"], entry["words_scrim"] = self._words(words)
+                    entry["words"], entry["words_scrim"] = self._words(words, sid)
                 self.layers[sid] = entry
             elif kind in ("card", "end"):
-                self.layers[sid] = {"stack": self._stack(shot["text"])}
+                self.layers[sid] = {"stack": self._stack(shot["text"], sid)}
             elif kind == "curtain":
                 self._typeset_curtain(shot)
             elif kind == "stat":
@@ -283,8 +309,11 @@ class _Cut:
         self.rail_layers = {n: self._rail_layer(days) for n, days in self.rails.items()}
         x0, x1, y = lay.margin, lay.right, lay.rail_y
         self.rail_scrim = self._scrim((x0, y - 8 * u, x1, y + 8 * u), 0.32)
+        if self.rails:  # track, ticks and the knob at either end
+            k = KNOB * u
+            self._note(None, "rail", (self.rail_ends[0] - k, y - k, self.rail_ends[1] + k, y + k))
 
-    def _words(self, words: str) -> tuple[_Layer, _Layer]:
+    def _words(self, words: str, sid: str | None = None) -> tuple[_Layer, _Layer]:
         """Lead words at the lead baseline (shrunk to fit between the margins) and their scrim."""
         lay, u, t = self.lay, self.u, self.type
         size = 1.0
@@ -292,7 +321,15 @@ class _Cut:
         if w > lay.text_width:
             size = lay.text_width / w
         style = _Style(LEAD.role, LEAD.size * size, LEAD.weight)
-        layer, box = self._ink([(lay.margin, lay.lead_baseline, words, style, "l")], shadow=0.8, blur=7)
+        for _ in range(4):  # the ink (overhangs included) fits too, at the font's whole px size
+            ink = t.font(style).getbbox(words, anchor="ls")[2]
+            if ink <= lay.text_width:
+                break
+            style = _Style(LEAD.role, style.size * lay.text_width / ink * 0.995, LEAD.weight)
+        layer, box = self._ink(
+            [(lay.margin, lay.lead_baseline, words, style, "l")], shadow=0.8, blur=7,
+            note=(sid, "words"), rise=RISE * u,
+        )  # fmt: skip
         return layer, self._scrim(box, 0.5, RISE * u)
 
     def _typeset_curtain(self, shot: dict[str, Any]) -> None:
@@ -301,14 +338,15 @@ class _Cut:
         cap_top = shot["label_top"] + self._cap(style)
         before, after = shot["labels"]
         labels, scrims = [], []
-        for x, text, align in ((lay.margin, before, "l"), (lay.right, after, "r")):
-            layer, box = self._ink([(x, cap_top, text, style, align)])
+        sid = shot["id"]
+        for x, text, align, side in ((lay.margin, before, "l", "before"), (lay.right, after, "r", "after")):
+            layer, box = self._ink([(x, cap_top, text, style, align)], note=(sid, side))
             labels.append(layer)
             scrims.append(self._scrim(box, 0.42))
         words, word_scrims, index = [], [], {}
         for k, step in enumerate(shot["steps"]):
             if step.get("words"):
-                layer, scrim = self._words(step["words"])
+                layer, scrim = self._words(step["words"], sid)
                 index[k] = len(words)
                 words.append(layer)
                 word_scrims.append(scrim)
@@ -359,25 +397,33 @@ class _Cut:
         base = lay.top + (lay.bottom - lay.top - height) / 2 + cap_v
         x = float(lay.margin)
         glyphs = []
+        sid = shot["id"]
         for c, adv in zip(value, advances(value_s), strict=True):
             if not c.isspace():
                 w = t.width(c, value_s)
-                layer, _ = self._ink([(x + (adv - w) / 2, base, c, value_s, "l")], shadow=0.0)
+                layer, _ = self._ink(
+                    [(x + (adv - w) / 2, base, c, value_s, "l")], shadow=0.0, note=(sid, f"value {c}")
+                )  # its slide stays inside the mask, so the box is where it lands
                 glyphs.append(layer)
             x += adv
         rest = []
         if unit:
-            layer, _ = self._ink([(x + 0.18 * value_s.size * u, base, unit, unit_s, "l")], shadow=0.0)
+            layer, _ = self._ink(
+                [(x + 0.18 * value_s.size * u, base, unit, unit_s, "l")], shadow=0.0, note=(sid, "unit")
+            )
             rest.append(layer)
         y = base + 56 * u + self._cap(label_s)
         for k, line in enumerate(lines):
-            layer, _ = self._ink([(lay.margin, y + k * step, line, label_s, "l")], shadow=0.0)
+            layer, _ = self._ink(
+                [(lay.margin, y + k * step, line, label_s, "l")], shadow=0.0, note=(sid, "label")
+            )
             rest.append(layer)
         y += (len(lines) - 1) * step
         if source:
             layer, _ = self._ink(
-                [(lay.margin, y + 30 * u + self._cap(source_s), source, source_s, "l")], shadow=0.0
-            )
+                [(lay.margin, y + 30 * u + self._cap(source_s), source, source_s, "l")], shadow=0.0,
+                note=(sid, "source"),
+            )  # fmt: skip
             rest.append(layer)
         descent = t.font(value_s).getmetrics()[1]
         top, bottom = math.floor(base - cap_v - 0.12 * value_s.size * u), math.ceil(base + descent)
@@ -399,7 +445,8 @@ class _Cut:
                 )
                 layer, box = self._ink([(lay.margin, base_k, kicker, style, "l")], blur=3)
                 kick_layers.append(layer)
-            boxes.append(box)
+            boxes.append(box)  # the widest tracking, where it ends
+            self._note(shot["id"], "kicker", box)
         words = (text.get("title") or "").split()
         n = len(words)
         sizes = [n // 3 + (1 if g < n % 3 else 0) for g in range(min(3, n))]
@@ -418,8 +465,9 @@ class _Cut:
                 x = float(lay.margin)
                 for g in line:
                     layer, box = self._ink(
-                        [(x, base + row * step, groups[g], style, "l")], shadow=0.5, blur=5
-                    )
+                        [(x, base + row * step, groups[g], style, "l")], shadow=0.5, blur=5,
+                        note=(shot["id"], f"title {g + 1}"), rise=RISE * u,
+                    )  # fmt: skip
                     group_layers.append(layer)
                     boxes.append(box)
                     x += t.width(groups[g], style) + space
@@ -434,7 +482,7 @@ class _Cut:
             scrim = self._scrim(bbox, 0.45, RISE * u)
         self.layers[shot["id"]] = {"kicker": kick_layers, "groups": group_layers, "scrim": scrim}
 
-    def _stack(self, items: Sequence[dict[str, str]]) -> _Layer:
+    def _stack(self, items: Sequence[dict[str, str]], sid: str | None = None) -> _Layer:
         """Centred lines of a card or the end card, wrapped and shrunk to fit the safe zone."""
         lay, u, t = self.lay, self.u, self.type
         blocks: list[tuple[str | None, _Style, float]] = []
@@ -482,13 +530,15 @@ class _Cut:
                 draw.rectangle((x0, y0, x0 + 44 * u * scale, y0 + 3 * u * scale), fill=t.colors["accent"])
             else:
                 t.draw(draw, cx - t.width(text, style, scale) / 2, top + base, text, style, scale=scale)
+        if bbox := canvas.getbbox():
+            self._note(sid, "stack", bbox)
         return _Layer.of(canvas)
 
     def _rail_layer(self, days: list[int]) -> _Layer:
         canvas = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
         u, y, paper = self.u, self.lay.rail_y, self.type.colors["paper"]
-        draw.rectangle((self.lay.margin, y - u, self.lay.right, y + u), fill=(*paper, 110))
+        draw.rectangle((self.rail_ends[0], y - u, self.rail_ends[1], y + u), fill=(*paper, 110))
         for i in range(len(days)):
             x = self._rail_x(days, i)
             draw.rectangle((x - u, y - 6 * u, x + u, y + 6 * u), fill=(*paper, 170))
@@ -497,7 +547,7 @@ class _Cut:
     def _rail_x(self, days: list[int], position: float) -> float:
         i = min(int(position), len(days) - 1)
         day = days[i] + (days[min(i + 1, len(days) - 1)] - days[i]) * (position - i)
-        x0, x1, span = self.lay.margin, self.lay.right, days[-1] - days[0]
+        (x0, x1), span = self.rail_ends, days[-1] - days[0]
         return x1 if span == 0 else x0 + (x1 - x0) * (day - days[0]) / span
 
     # ----------------------------------------------------------- images --- #
@@ -791,7 +841,7 @@ class _Cut:
         if opacity < 0.998:
             r0, r1 = max(int(y - 12 * u) - 2, 0), min(math.ceil(y + 12 * u) + 2, self.height)
             band = (r0, r1, frame[r0:r1].copy())
-        _bar(frame, self.lay.margin, y - 1.5 * u, x, y + 1.5 * u, self.accent)
+        _bar(frame, self.rail_ends[0], y - 1.5 * u, x, y + 1.5 * u, self.accent)
         for k in range(min(int(pos + 1e-6), len(days) - 1) + 1):
             xk = self._rail_x(days, k)
             _bar(frame, xk - u, y - 6 * u, xk + u, y + 6 * u, self.accent)

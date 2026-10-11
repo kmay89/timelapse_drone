@@ -153,6 +153,7 @@ def test_render_film_without_vertical_removes_stale_cut(tmp_path, monkeypatch):
 
     assert [f.name for f in render_film(project, out)] == ["tiny-site-16x9.mp4"]
     assert sorted(p.name for p in out.iterdir()) == [
+        "tiny-site-16x9-web.mp4",
         "tiny-site-16x9.jpg",
         "tiny-site-16x9.mp4",
         "tiny-site-16x9.plan.json",
@@ -173,12 +174,13 @@ def test_render_film_is_reproducible_and_never_leaves_partial_mp4s(tmp_path, mon
 
     # Packaging ships every film/*.mp4: only finished films may match, and they are byte-identical.
     assert sorted(p.name for p in second.iterdir()) == [
+        "tiny-site-16x9-web.mp4",
         "tiny-site-16x9.jpg",
         "tiny-site-16x9.mp4",
         "tiny-site-16x9.plan.json",
         "tiny-site-16x9.storyboard.jpg",
     ]
-    for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.jpg"):
+    for name in ("tiny-site-16x9.mp4", "tiny-site-16x9-web.mp4", "tiny-site-16x9.jpg"):
         assert (first / name).read_bytes() == (second / name).read_bytes()
 
 
@@ -257,7 +259,7 @@ def test_cards_and_lower_thirds_print_facts_not_tokens(tmp_path, monkeypatch):
     monkeypatch.setattr(
         _Film,
         "_stack",
-        lambda self, blocks: stack(self, stacked.extend(b[0] or "" for b in blocks) or blocks),
+        lambda self, blocks, sid=None: stack(self, stacked.extend(b[0] or "" for b in blocks) or blocks, sid),
     )
 
     sections = _sections(project, MastersIndex.load(project.masters_dir / "index.json"))

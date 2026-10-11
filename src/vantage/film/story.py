@@ -52,6 +52,7 @@ from vantage.film.plan import (
     FilmDef,
     _Printer,
     _sha256,
+    encode_settings,
     fact_snapshot,
     film_size,
 )
@@ -914,13 +915,7 @@ def derive_cut(
         plan=plan,
         facts=fact_snapshot(project, used),
         warnings=warnings,
-        encode={
-            "crf": 20 if fast else 18,
-            "preset": "veryfast" if fast else "slow",
-            "web": None,
-            "gop": None,
-            "tracks": False,
-        },
+        encode=encode_settings(film, settings, frames, fps, fast=fast),
     )
 
 

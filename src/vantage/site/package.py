@@ -10,8 +10,9 @@ dist/<slug>/HOW-TO-VIEW.txt  SHA256SUMS  build.json
 
 Films already rendered into dist/<slug>/film are checked against the plans the current YAML, masters
 and facts would make (film/plan.py `film_records`): a release refuses any problem, a draft package
-logs them. build.json records every film plan; SHA256SUMS lists each film with its plan.json and
-storyboard.
+logs them (a film's -web.mp4 is checked against its render record like the film itself).
+build.json records every film plan; SHA256SUMS lists each film and its -web.mp4 with its plan.json
+and storyboard.
 """
 
 from __future__ import annotations
@@ -323,11 +324,12 @@ def _how_to_view(story: dict[str, Any], files: dict[str, Path], films: list[Path
     if "lite" in files:
         rows.append(("By email or message", files["lite"].name, "a small edition with the key images"))
     for film in films:
-        use = (
-            "for phones: save to Photos or send in a message"
-            if "9x16" in film.name
-            else "for screens and talks"
-        )
+        if film.name.endswith("-web.mp4"):
+            use = "a smaller copy for websites and uploads (under 25 MB)"
+        elif "9x16" in film.name:
+            use = "for phones: save to Photos or send in a message"
+        else:
+            use = "for screens and talks"
         rows.append(("The films", f"film/{film.name}", use))
     width = max(len(name) for _, name, _ in rows)
     sizes = {name: size(out.parent / name) for _, name, _ in rows}

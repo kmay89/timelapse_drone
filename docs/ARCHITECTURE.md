@@ -59,14 +59,14 @@ src/vantage/
   film/
     plan.py              FilmPlans: YAML + masters + fonts → one hashed plan per film; the film set; the release gate
     beat.py              the beat grid (frames per beat, dissolves) and ports of the runtime's holdWindows/keyed
-    layout.py            safe zones and text/rail anchors of the story layouts (16:9, 9:16)
+    layout.py            safe zones and text/rail anchors of every film layout (story and classic, 16:9 and 9:16)
     story.py             derives a story cut's shots from the chapters: title, captures, cards, curtains, stats,
                          end; degrade for 1–2 captures; subject-aware push targets and zoom clamps
     cut.py               renders story plans: pure frame(f) (pyramid warps, dissolves, words, rail, tag,
                          curtain splits, tabular stat figures, surface dips)
     safety.py            photosensitivity: static plan check and the per-frame luminance (flash) meter
-    render.py            renders plans to MP4 + poster (classic `_Film`, shared drawing code, the encode,
-                         films side by side in worker processes)
+    render.py            renders plans to MP4 + web copy + poster (classic `_Film`, shared drawing code, the
+                         encode, ink checks, films side by side in worker processes)
     storyboard.py        one contact-sheet tile per key frame of a plan, with fact status chips
   llm/claude.py          optional Claude vision helpers (captions, alt text, milestones)
   demo/synth.py          procedural "drone footage" of a fictional site changing over time
@@ -458,8 +458,8 @@ A film has one of two cuts:
   each capture holds `hold_s` and dissolves `fade_s` into the next (linear light) under an eased 6 %
   push. `hold_s`, `fade_s`, `title_card_s` and `end_card_s` in `output.film` time it.
 
-Not yet built: the event-screen loop (`preset: screen`, `loop`), web encodes and tracks. A plan for
-a loop film is refused with "not supported yet".
+Not yet built: the event-screen loop (`preset: screen`, `loop`) and tracks. A plan for a loop film is
+refused with "not supported yet".
 
 Rendering: when more than one film is rendered and `os.cpu_count()` ≥ 4, each film renders in its
 own worker process (`ProcessPoolExecutor`, spawn context, `cv2.setNumThreads(1)` inside), one per
@@ -472,7 +472,9 @@ when one fails. Parallel and sequential renders give the same bytes.
 ```
 <slug>-<id>.mp4              H.264 High, yuv420p, BT.709 tags, +faststart, bitexact, no audio stream;
                              crf 18 slow (VANTAGE_FAST: crf 20 veryfast)
-<slug>-<id>.jpg              poster: the main vantage's final hold
+<slug>-<id>-web.mp4          web copy ≤ 25 MiB: the same frames, crf 23 under a VBV cap (see "Web encode");
+                             not for loop films, nor with output.film.web: false
+<slug>-<id>.jpg              poster (classic: the main vantage's final hold; story: the last frame of the last capture)
 <slug>-<id>.plan.json        the FilmPlan plus its render record
 <slug>-<id>.storyboard.jpg   one tile per key frame
 ```
@@ -499,6 +501,7 @@ project.yaml `output.film` (FilmSettings). Existing fields are unchanged; `hold_
 cut: story            # story | classic: the cut of the derived films
 bpm: 100              # 60–160; the beat grid of story cuts
 max_upscale: 1.6      # 1.0–3.0; output px per master px never exceeds this in a push
+web: true             # write <name>-web.mp4
 require_approval: false
 ```
 
@@ -639,20 +642,45 @@ both derived cuts are 62 beats (37.2 s at 100 bpm).
 ### Layout presets (film/layout.py)
 
 `Layout(name, width, height, safe px [t, r, b, l], margin, label_top, lead_baseline, rail_y, tag,
-type_scale)`; px values are rounded. Styles are in units of short edge / 1080 × type_scale. A film's
-`safe` fractions replace the preset's.
+type_scale, scrim, rail_x)`; px values are rounded. Styles are in units of short edge / 1080 ×
+type_scale. Every cut reads its layout from the plan (`plan.layout`, `Layout.record()`); the classic
+renderer no longer has constants of its own.
 
 | layout | safe t, r, b, l | label cap-top | lead baseline | rail | tag |
 |---|---|---|---|---|---|
 | story-16x9 | .06H .05W .06H .05W | safe top | .78H | .88H | top-right in safe |
 | story-9x16 | .14H .12W .28H .06W | .16H | .60H | .70H | right, baseline rail − 18u |
-| classic 16x9 / 9x16 | margin .055W / .075W, rail H − round(.075H / .13H) (unchanged) | | | | |
+| classic-16x9 | .05 all round (ink check only) | margin round(.055W) | | H − round(.075H) | `corner`: .8·margin from the top-left |
+| classic-9x16 | as story-9x16 | lower third above the rail | | .70H | `top-left`: ascent top at the safe top |
+
+- At 1080 × 1920 the story-9x16 safe zone is px [269, 130, 538, 65], the rectangle (65, 269)–(950,
+  1382): between 14 % and 72 % of the height and clear of the right 12 %.
+- `films.<id>.safe` ([top, right, bottom, left] fractions) and `type_scale` apply to every layout,
+  story and classic. The anchors move with the edge they hang from: label cap-top with the top
+  (story-9x16 `.16 + (t − .14)`), lead baseline and rail with the bottom (`.70 + (.28 − b)`), the
+  classic margin with the left (`.055 + (l − .05)`), the classic-16x9 rail `H − round((.075 + b −
+  .05)·H)`. With the preset's own fractions the numbers are exactly the preset's.
+- Classic layouts also record `scrim` [first row, ramp rows] of the bottom scrim (16:9: the bottom
+  round(.42H) rows ramping over all of them, as before; 9:16: from rail − round(.30H), ramping over
+  round(.22H), then held to the bottom) and `rail_x` [x0, x1] (16:9: margin, W − margin; 9:16 inset
+  by the 5-unit knob). Cards in classic-9x16 wrap to min(.8W, text width) and shrink to fit the safe
+  height, centred in the safe zone; classic-16x9 keeps .8W × .86H centred in the frame. The classic
+  16:9 film is byte-identical to the one before layouts.
+- Story rails are inset by the knob (8.5 units) at both ends, so the knob never reaches past the text
+  edges. The story tag and lead words shrink until their ink (overhangs included) fits between the
+  margins.
+- **Ink checks** (`render.check_ink`): both renderers record the ink box of every typeset layer
+  ([x, y, w, h]; rising text includes its rise travel; the rail includes its knob) and write plan.json
+  `checks` (not hashed): `{"safe": [x0, y0, x1, y1], "ink": [{"shot": id | null, "layer": name,
+  "box": [x, y, w, h]}], "outside": [indices]}`. A box more than 1 px (antialiasing) outside the safe
+  rectangle is a plan warning; `vantage film --release` refuses it.
 
 Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
 fit between the margins), curtain labels 44, stat value 220 / unit 77 / label 44 / source 26, card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
 are composited at sub-pixel offsets by bilinear warping of the pre-rendered layer patch. Scrims are
 feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands.
-In 9:16 every word, the end card and the rail stay between 0.14H and 0.72H, clear of the right edge.
+In 9:16 (story and classic) every word, the end card and the rail stay between 0.14H and 0.72H, clear
+of the right edge.
 
 ### Safety (film/safety.py)
 
@@ -684,9 +712,12 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
   "hash": "<sha256 hex of canonical(plan)>",           // people quote the first 12 characters
   "plan": {                                            // hashed: everything that decides frames
     "slug": "demo-lakeside", "cut": "classic", "preset": null, "renderer": 1,   // renderer: bumped when frames change for an equal plan
+                                                                                // (classic 1; story 2: rails inset by their knob)
     "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
     "grid": null | {"bpm": 100.0, "fpb": 18, "dissolve": 12, "beats": 37},   // story: effective bpm; classic: null
-    "layout": {"name": "classic-16x9", "margin": 106, "rail_y": 999, "type_scale": 1.0},
+    "layout": {"name": "classic-16x9", "safe": [54, 96, 54, 96], "margin": 106, "label_top": 54,
+               "lead_baseline": 999, "rail_y": 999, "tag": "corner", "type_scale": 1.0,
+               "scrim": [626, 454], "rail_x": [106, 1814]},
     // story: {"name": "story-16x9", "safe": [65, 96, 65, 96], "margin": 96, "label_top": 65,
     //         "lead_baseline": 842, "rail_y": 950, "tag": "top-right", "type_scale": 1.0}
     "draft": false, "simulated": true, "tag": ["Simulated imagery"],          // + "Preview" in drafts
@@ -703,8 +734,11 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
     // story instead: "poster": <frame> (the last frame of the last capture shot, else of the last curtain)
   "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
-  "encode": {"crf": 18, "preset": "slow", "web": null, "gop": null, "tracks": false},  // NOT hashed: bytes, not frames
-  "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": null,
+  "checks": {"safe": [96, 54, 1824, 1026], "ink": [{"shot": "T1", "layer": "stack", "box": [598, 330, 724, 420]}],
+             "outside": []},                           // NOT hashed: written by the renderer (see Layout presets)
+  "encode": {"crf": 18, "preset": "slow", "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
+             "bufsize": 8030000} | null, "gop": null, "tracks": false},  // NOT hashed: bytes, not frames
+  "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": {"bytes": 0, "sha256": ""} | null,
              "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0467, "frame": 384},
              "ffmpeg": "6.1.1-3ubuntu5"} }             // written after the encode; null with --plan-only
 ```
@@ -766,6 +800,22 @@ date, a vantage name to the masters' name) and a warning is recorded.
 - Labels use the bundled Inter. JPEG quality 85, baseline, no metadata; the same plan gives the
   same bytes.
 
+### Web encode and budgets
+
+- Every film whose plan has `encode.web` (not loop films; not with `output.film.web: false`) gets
+  `<slug>-<id>-web.mp4`, encoded from the same frame pipe as the main film (`FrameWriter`
+  `extra_outputs`: one rawvideo input, one independent encoder per output, so the main film's bytes
+  equal a single-output encode).
+- Args: `-c:v libx264 -profile:v high -crf 23 -preset slow (VANTAGE_FAST: veryfast) -maxrate R
+  -bufsize 2R -pix_fmt yuv420p -movflags +faststart` plus the main film's BT.709 and bitexact args.
+  R = min(6,000,000, floor(0.9 · 25 MiB · 8 / duration_s)) bit/s, floored to a whole kbit/s
+  (`plan.web_maxrate`; 37.2 s → 5,073,000).
+- `render.web` records its bytes and sha256; the release gate checks it like the MP4.
+- `scripts/budgets.py` (`film_checks`): when `dist/<slug>/film/` exists, every `*.plan.json` whose
+  `encode.web` is not null needs `film/<stem>-web.mp4` (missing: exit 2), and each must be ≤ 25 MiB
+  (check `<slug> film <stem>-web.mp4`). Main MP4s and `film/usb/` are not budgeted; a dist without
+  `film/` (`--no-film`) has no film checks.
+
 ### Release gate (film/plan.py check_films; package and film --release)
 
 `package --release` runs `check_release`, rebuilds the site, then re-plans every film found in
@@ -776,14 +826,16 @@ date, a vantage name to the masters' name) and a warning is recorded.
 3. It is stale: the plan hash differs from the re-planned hash. The message names the differing
    top-level plan keys, and hints at VANTAGE_FAST when only the size differs.
 4. `plan.draft` is true.
-5. The MP4 sha256 differs from the `render` record, `render` is null, or a plan has no MP4.
+5. The MP4 (or its -web.mp4) sha256 differs from the `render` record, `render` is null, or a plan
+   has no MP4.
 6. A fact it prints (as re-planned) is not releasable under the current facts.yaml.
 7. `render.flash.pass` is false (every cut is metered; a failing film is never written).
 8. `require_approval` is on and neither the hash nor its first 12 characters is listed in any
    `approvals.yaml` `approvals[].films`.
 
 No films at all is allowed (with a warning). A non-release `package` logs the same problems as
-warnings. `vantage film --release` runs `check_release` and refuses a draft before planning.
+warnings. `vantage film --release` runs `check_release` and refuses a draft before planning, and
+refuses a film with text outside its safe zone (`checks.outside`).
 
 ### build.json additions
 
@@ -794,7 +846,9 @@ warnings. `vantage film --release` runs `check_release` and refuses a draft befo
           "frames": 1410, "fresh": true, "draft": false, "facts": [], "unreleasable": [], "problems": []}}
 ```
 
-`files` and SHA256SUMS list every top-level `film/` deliverable: each MP4, plan.json and storyboard.
+`files` and SHA256SUMS list every top-level `film/` deliverable: each MP4 and -web.mp4, plan.json and
+storyboard. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy for websites and
+uploads (under 25 MB)".
 
 ### Module API
 
@@ -812,11 +866,16 @@ vantage.film.plan.resolve_films(project: Project) -> dict[str, FilmDef]     # en
 vantage.film.beat.beat_grid(fps, bpm) -> Grid                               # ValueError "bpm too fast for fps"
 vantage.film.beat.frames_per_beat(fps, bpm) / dissolve_frames(fps, B) / bar_beat(f, B)
 vantage.film.beat.hold_windows(keys, hold) / keyed(windows, values, v, mix)  # ports of runtime/js/25-stage.js
-vantage.film.layout.layout(name, width, height, *, safe=None, type_scale=1.0) -> Layout
+vantage.film.layout.layout(name, width, height, *, safe=None, type_scale=1.0) -> Layout   # story-*/classic-*
+vantage.film.render.check_ink(plan: FilmPlan, film) -> list[str]            # plan.checks; text outside the safe zone
+vantage.film.plan.encode_settings(film, settings, frames, fps, *, fast) -> dict   # plan.json encode (web included)
+vantage.film.plan.web_maxrate(duration_s: float) -> int                     # the web encode's VBV cap, bit/s
 vantage.film.story.derive_cut(project, film, index, fonts, hashes, warnings, *, fast) -> FilmPlan
 vantage.film.safety.check_plan(plan: dict) -> None                          # PlanError
 vantage.film.safety.surface_dip(fps, dissolve, night, paper) -> int          # frames of a dip to or from paper
 vantage.film.safety.LumaMeter(fps).add(frame) / .result() / .check(name)    # FlashError
-vantage.film.render.encode_frames(film, part, *, crf, preset, meter=None)   # the one encode path
+vantage.film.render.encode_frames(film, part, *, crf, preset, meter=None, web=None)  # the one encode path;
+                                                                            # web=(path, encode.web) adds the web copy
+vantage.media.ffmpeg.FrameWriter(..., extra_outputs: Sequence[tuple[Path, Sequence[str]]] = ())  # one pipe, several encodes
 vantage.media.ffmpeg.ffmpeg_version() -> str
 ```

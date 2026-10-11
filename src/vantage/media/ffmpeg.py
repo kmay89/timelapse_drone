@@ -235,6 +235,10 @@ class FrameWriter:
 
     with FrameWriter(out, 1920, 1080, fps=30) as w:
         w.write(frame_bgr)
+
+    `extra_outputs` [(path, args)] adds more encodes of the same frames from the one rawvideo pipe:
+    each output's args are its complete output options (codec, rate control, filters, flags), so
+    every output is encoded independently and the main one's bytes equal a single-output run.
     """
 
     def __init__(
@@ -248,9 +252,11 @@ class FrameWriter:
         crf: int = 20,
         preset: str = "medium",
         extra: Sequence[str] = (),
+        extra_outputs: Sequence[tuple[Path, Sequence[str]]] = (),
     ) -> None:
         self.out, self.width, self.height = out, width, height
-        out.parent.mkdir(parents=True, exist_ok=True)
+        for path in (out, *(p for p, _ in extra_outputs)):
+            path.parent.mkdir(parents=True, exist_ok=True)
         if codec == "hevc":
             venc = ["-c:v", "libx265", "-tag:v", "hvc1", "-x265-params", "log-level=error"]
         else:
@@ -283,6 +289,8 @@ class FrameWriter:
             *extra,
             str(out),
         ]
+        for path, args in extra_outputs:
+            self.cmd += [*args, str(path)]
         self.proc: subprocess.Popen | None = None
         self._stderr: _StderrTail | None = None
 

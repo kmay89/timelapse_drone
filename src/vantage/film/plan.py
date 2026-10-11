@@ -30,13 +30,16 @@ import yaml
 
 from vantage import log
 from vantage.config import FILM_ID_RE, BrandKit, FilmSettings, FontSpec, Project, ScrubChapter
+from vantage.film.layout import layout
 from vantage.models import FilmPlan, MastersIndex
 from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
 
-FILM_RENDERER = {"classic": 1, "story": 1}  # bumped when frame(i) changes for an equal plan
+FILM_RENDERER = {"classic": 1, "story": 2}  # bumped when frame(i) changes for an equal plan
 FAST_LONG_EDGE = 960
+WEB_LIMIT = 25 * 1024 * 1024  # bytes: the largest file static hosts serve (Cloudflare Pages)
+WEB_MAXRATE_CAP = 6_000_000  # bit/s
 PLAN_SUFFIX = ".plan.json"
 STORYBOARD_SUFFIX = ".storyboard.jpg"
 SIMULATED_NOTE = "Simulated imagery for demonstration; not actual aerial footage."
@@ -320,6 +323,24 @@ def film_id(slug: str, name: str) -> str | None:
     return fid.removesuffix("-web") or None
 
 
+def web_maxrate(duration_s: float) -> int:
+    """The web encode's VBV cap R in bit/s: min(6 Mbit/s, floor(0.9 · 25 MiB · 8 / duration)),
+    floored to a whole kbit/s. With bufsize 2R the web copy stays under 25 MiB."""
+    rate = math.floor(0.9 * WEB_LIMIT * 8 / max(duration_s, 1e-3))
+    return min(WEB_MAXRATE_CAP, rate // 1000 * 1000)
+
+
+def encode_settings(film: FilmDef, settings: FilmSettings, frames: int, fps: int, *, fast: bool) -> dict:
+    """plan.json `encode` (not hashed: it changes bytes, not frames). `web` is the -web.mp4 encode:
+    crf 23 under a VBV cap, null for loop films and when output.film.web is false."""
+    preset = "veryfast" if fast else "slow"
+    web = None
+    if settings.web and not film.loop:
+        rate = web_maxrate(frames / fps)
+        web = {"crf": 23, "preset": preset, "maxrate": rate, "bufsize": 2 * rate}
+    return {"crf": 20 if fast else 18, "preset": preset, "web": web, "gop": None, "tracks": False}
+
+
 def _check_timing(project: Project) -> None:
     settings = project.config.output.film
     timing = (settings.title_card_s, settings.fade_s, settings.end_card_s)
@@ -518,8 +539,7 @@ def _classic(
             shot["f0"], shot["f1"] = _frame(s["start"], fps), _frame(s["start"] + s["length"], fps)
             shot["key"] = shot["shots"][0]["key"]
     shots[-1]["f1"] = frames
-    margin = round((0.075 if portrait else 0.055) * width)
-    rail_y = height - round((0.13 if portrait else 0.075) * height)
+    lay = layout(f"classic-{film.aspect}", width, height, safe=film.safe, type_scale=film.type_scale)
     masters = {}
     for shot in shots:
         for cap in shot.get("shots", []):
@@ -537,12 +557,7 @@ def _classic(
         "loop": False,
         "sound": "none",
         "grid": None,
-        "layout": {
-            "name": f"classic-{film.aspect}",
-            "margin": margin,
-            "rail_y": rail_y,
-            "type_scale": 1.0,
-        },
+        "layout": lay.record(),
         "draft": cfg.draft,
         "simulated": cfg.simulated,
         "tag": [w for w, on in (("Simulated imagery", cfg.simulated), ("Preview", cfg.draft)) if on],
@@ -572,13 +587,7 @@ def _classic(
         plan=plan,
         facts=fact_snapshot(project, used),
         warnings=warnings,
-        encode={
-            "crf": 20 if fast else 18,
-            "preset": "veryfast" if fast else "slow",
-            "web": None,
-            "gop": None,
-            "tracks": False,
-        },
+        encode=encode_settings(film, settings, frames, fps, fast=fast),
     )
 
 
@@ -717,8 +726,10 @@ __all__ = [
     "FilmDef",
     "capture_labels",
     "check_films",
+    "encode_settings",
     "film_records",
     "film_size",
     "plan_films",
     "resolve_films",
+    "web_maxrate",
 ]
