@@ -759,6 +759,23 @@ def test_push_keeps_its_subject_above_the_words(tmp_path, monkeypatch):
     assert v <= v1 + 1e-9 < p["layout"]["lead_baseline"] / p["height"], (v, v1)
 
 
+def test_push_eases_back_as_slowly_as_it_went_in(tmp_path):
+    """Every camera move lasts at least a push (B + B/3 frames): the release after a push no longer
+    snaps back inside the next dissolve; check_plan refuses a faster move."""
+    steps = [STEPS[0], {**STEPS[1], "focus": [0.5, 0.5, 1.6]}, STEPS[2]]
+    project = tiny(tmp_path / "p", steps=steps, chapters=[COMPARE])
+    p = _plan(project).plan
+    push = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["push"])
+    assert push["push_f1"] - push["push_f0"] == B + 3  # B + B/3 at B = 8
+    cams = p["camera"]
+    moves = [w1["a"] - w0["b"] for w0, w1 in itertools.pairwise(cams)]
+    assert moves and min(moves) >= B + 3, cams
+    fast = json.loads(json.dumps(p))
+    fast["camera"][1]["a"] = fast["camera"][0]["b"] + 4
+    with pytest.raises(PlanError, match="faster than a push"):
+        check_plan(fast)
+
+
 def test_default_is_story_and_classic_opt_out(tmp_path, monkeypatch):
     monkeypatch.setenv("VANTAGE_FAST", "1")
     story_film = {k: v for k, v in FILM.items() if k != "cut"}

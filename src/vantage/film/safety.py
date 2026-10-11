@@ -167,6 +167,16 @@ def check_plan(plan: dict[str, Any]) -> None:
             if (prev["kind"] in IMAGES or mine != theirs) and n < need:
                 problems.append(f"{sid}: a {n}-frame dip is shorter than {need} frames")
         prev = shot
+    third = max(1, round(fpb / 3))  # beat.Grid.third
+    cams = plan.get("camera") or []
+    for w0, w1 in pairwise(cams):
+        n = w1["a"] - w0["b"]
+        moved = (w0["x"], w0["y"], w0["zoom"]) != (w1["x"], w1["y"], w1["zoom"])
+        if moved and n < fpb + third:
+            problems.append(
+                f"camera: a {n}-frame move at frame {w0['b']} is faster than a push ({fpb + third} "
+                "frames); a push must ease back at least as slowly as it went in"
+            )
     if problems:
         raise PlanError("film plan is not safe to render:\n  " + "\n  ".join(problems))
 

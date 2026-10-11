@@ -901,9 +901,10 @@ def derive_cut(
                 dissolve = None if n == 1 and b.prev and b.prev["kind"] == "title" else b.entry()
                 if b.prev is not None and b.prev["kind"] not in IMAGES:
                     cam.hold(f0, rest)
-                if pushed is not None:  # the previous push eases back during this dissolve
-                    cam.until(f0)
-                    cam.hold(f0 + D, rest)
+                if pushed is not None and target is None:  # the previous push eases back from the
+                    cam.until(f0)  # dissolve on, as slowly as it went in (B + B/3 frames)
+                    cam.hold(f0 + B + third, rest)
+                # (pushed and target: the camera glides from the last subject to this one)
                 if target is not None:
                     cam.until(f0 + B)
                     cam.hold(f0 + 2 * B + third, target, f0 + beats * B)
@@ -1011,11 +1012,8 @@ def derive_cut(
         if cfg.simulated:
             lines.append({"role": "fine", "text": SIMULATED_NOTE})
     dip = b.dip("night")
-    if b.prev is not None and b.prev["kind"] in IMAGES:
+    if b.prev is not None and b.prev["kind"] in IMAGES:  # a push holds while the image dips out
         cam.until(b.f + dip)
-    if pushed is not None:
-        cam.until(b.f)
-        cam.hold(b.f + D, b.rest(images[-1]))
     end_beats = film.end_beats
     if film.loop:  # a whole number of GOPs: lengthen the end card
         end_beats += -(b.f // B + end_beats + LOOP_BEATS["dip"]) % GOP_BEATS
@@ -1156,9 +1154,11 @@ def _curtain_shot(
         and prev.get("capture") == c.after.date
     )
     dissolve = None if same else b.entry()
-    if prev is not None and prev["kind"] in IMAGES:
+    if prev is not None and prev["kind"] in IMAGES:  # a push before eases back as slowly as it went in
         cam.until(f0)
-    cam.hold(f0 + B if prev is not None and prev["kind"] in IMAGES else f0, rest, f0 + B)
+        cam.hold(f0 + B + b.grid.third, rest)
+    else:
+        cam.hold(f0, rest, f0 + B)
     say = b.say()
     where = f"chapter {c.chapter!r}"
     labels = []

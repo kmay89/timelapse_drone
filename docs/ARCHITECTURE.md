@@ -601,8 +601,12 @@ two pushes), with or without VANTAGE_FAST.
     do-not-print fact drops the words with a warning). They land at beat 1 (beat 0 on the first
     image, `step.land`), rise 14 units while fading in over B/3 frames, and fade out with the next
     dissolve.
-  - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`), holds to
-    the end of the shot and eases back during the next shot's dissolve.
+  - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`) and holds
+    to the end of the shot. It eases back as slowly as it went in: over B + B/3 frames from the next
+    shot's first frame (through its dissolve), or, when the next shot pushes too, the camera glides
+    from one target to the next. Before a curtain it eases back over B + B/3 from the curtain's first
+    frame; before a card, stat or the end card it holds while the image dips out. `check_plan`
+    refuses any camera move shorter than B + B/3 frames.
   - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
 - **card** (4 beats): inserted when consecutive image shots (captures, curtains) change vantage. The
   chapter kicker and title (else the vantage name) on night. A dip (`dip`) from the image in display
