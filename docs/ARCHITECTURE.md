@@ -452,6 +452,8 @@ nothing. A renderer then evaluates a pure frame function over the plan and pipes
 ffmpeg. The same plan, with the same inputs, gives the same bytes with the same ffmpeg build, on any
 machine: x264's thread count, which changes its output, is pinned to 4 (`-threads 4`,
 `media.ffmpeg.ENCODER_THREADS`, recorded as `encode.threads`) rather than left to the CPU count.
+The demo's synthetic footage is encoded with `threads=0` (x264 auto, as before): it is an input,
+and the demo story's hotspots are authored against the crop that footage aligns to.
 
 A film has one of two cuts:
 

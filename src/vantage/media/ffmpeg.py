@@ -245,7 +245,7 @@ class FrameWriter:
 
     The encoder's thread count is pinned (`threads`, default ENCODER_THREADS): x264 splits its work
     by thread count, and left on auto (1.5 × the CPUs it may use) the same frames give different
-    bytes on machines with different CPU counts.
+    bytes on machines with different CPU counts. `threads=0` leaves it to x264 (auto).
     """
 
     def __init__(
