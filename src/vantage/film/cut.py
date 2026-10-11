@@ -42,7 +42,7 @@ from vantage.film.beat import Window, keyed, lerp, mix_cam, ramp
 from vantage.film.layout import Layout
 from vantage.film.plan import ROLES, font_path
 from vantage.film.render import _hex, _Layer, _mix, _Style, _Type, ink_box
-from vantage.film.safety import IMAGES, SURFACES
+from vantage.film.safety import SURFACES
 from vantage.models import FilmPlan
 
 # Styles, in units (short edge / 1080 × type_scale).
@@ -420,16 +420,21 @@ class _Cut:
         if source:
             height += 30 * u + self._cap(source_s)
         base = lay.top + (lay.bottom - lay.top - height) / 2 + cap_v
-        x = float(lay.margin)
+        # Digits sit centred on a tabular advance; the first glyph's ink starts on the text column.
+        adv0 = advances(value_s)[0]
+        lsb = t.font(value_s).getbbox(value[0], anchor="ls")[0] if value.strip() else 0
+        x = float(lay.margin) - (adv0 - t.width(value[0], value_s)) / 2 - lsb
         glyphs = []
+        ink_bottom = base
         sid = shot["id"]
         for c, adv in zip(value, advances(value_s), strict=True):
             if not c.isspace():
                 w = t.width(c, value_s)
-                layer, _ = self._ink(
+                layer, box = self._ink(
                     [(x + (adv - w) / 2, base, c, value_s, "l")], shadow=0.0, note=(sid, f"value {c}")
                 )  # its slide stays inside the mask, so the box is where it lands
                 glyphs.append(layer)
+                ink_bottom = max(ink_bottom, box[3])
             x += adv
         rest = []
         if unit:
@@ -450,8 +455,9 @@ class _Cut:
                 note=(sid, "source"),
             )  # fmt: skip
             rest.append(layer)
-        descent = t.font(value_s).getmetrics()[1]
-        top, bottom = math.floor(base - cap_v - 0.12 * value_s.size * u), math.ceil(base + descent)
+        # The slide is clipped at the figure's own ink (its baseline, or a comma's tail), never lower,
+        # so rising glyphs never show in the band above the label.
+        top, bottom = math.floor(base - cap_v - 0.12 * value_s.size * u), math.ceil(ink_bottom) + 1
         self.layers[shot["id"]] = {"glyphs": glyphs, "rest": rest}
         self.stat_mask[shot["id"]] = (top, bottom)
 
@@ -762,20 +768,23 @@ class _Cut:
         return frame
 
     def _stat(self, i: int, f: int) -> np.ndarray:
-        """A stat on its surface: glyphs slide up into their mask (2-frame stagger, half a beat each)
-        from the downbeat, already the true figure; unit, label and source fade in on beat 1."""
+        """A stat on its surface: once its dip is over (`land`), glyphs slide up into their mask
+        (2-frame stagger, half a beat each), already the true figure; unit, label and source fade in
+        on the beat after it lands (`text_in`); all of it fades out over the last B/3 frames, so the
+        next shot starts on a clean surface."""
         shot, L = self.shots[i], self.layers[self.shots[i]["id"]]
         f0, f1, B, third = shot["f0"], shot["f1"], self.fpb, self.third
         frame = self.surfaces[shot["surface"]].copy()
         nxt = self.shots[i + 1] if i + 1 < len(self.shots) else None
-        out = 1 - ramp(f, f1 - third, third) if nxt is not None and nxt["kind"] in IMAGES else 1.0
+        out = 1 - ramp(f, f1 - third, third) if nxt is not None else 1.0
         top, bottom = self.stat_mask[shot["id"]]
         dist = bottom - top
         half = max(1, round(B / 2))
+        land = shot.get("land", f0)
         for k, glyph in enumerate(L["glyphs"]):
-            e = ramp(f, f0 + 2 * k, half)
+            e = ramp(f, land + 2 * k, half)
             _put(frame, glyph, out, dist * (1 - e), clip=(0, top, self.width, bottom))
-        e = ramp(f, f0 + B, third)
+        e = ramp(f, shot.get("text_in", f0 + B), third)
         for layer in L["rest"]:
             _put(frame, layer, e * out)
         self._surface_tag(frame, shot["surface"])

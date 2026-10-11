@@ -38,7 +38,7 @@ from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
 
-FILM_RENDERER = {"classic": 1, "story": 2}  # bumped when frame(i) changes for an equal plan
+FILM_RENDERER = {"classic": 1, "story": 3}  # bumped when frame(i) changes for an equal plan
 FAST_LONG_EDGE = 960
 WEB_LIMIT = 25 * 1024 * 1024  # bytes: the largest file static hosts serve (Cloudflare Pages)
 WEB_MAXRATE_CAP = 6_000_000  # bit/s

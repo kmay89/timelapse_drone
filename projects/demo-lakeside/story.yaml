@@ -160,7 +160,7 @@ chapters:
     surface: paper
     items:
       # Values print from facts.yaml, whose sources are numbered in the notes.
-      - { value: "{fact:flights}", label: "drone flights from the same points in the sky", source: Flight logs }
+      - { value: "{fact:flights}", label: "drone flights over the build", source: Flight logs }
       - { value: "{fact:stalls-to-meadow}", label: parking spaces returned to meadow, source: Site plan }
       - { value: "{fact:wave-pool-area}", unit: sq ft, label: "of wave pool, now beach and splash pad", source: Site plan }
       - { value: "{fact:new-paths}", unit: m, label: of new paths and promenade, source: Site plan }

@@ -630,16 +630,25 @@ two pushes), with or without VANTAGE_FAST.
     is at least 8 px clear of its ink. A label fades in over B/3, out over the last B/3 frames of its
     interval, and is clipped to its own side of the rule.
   - The rule is 3 units wide in the accent colour; the grip is a 44-unit disc with chevrons at 0.56H.
-- **stat** (`N1…`, 4 beats each, at most `stats`, default 3): items of the first stats chapter in
+- **stat** (`N1…`, at least 4 beats each, at most `stats`, default 3): items of the first stats chapter in
   scope, in order, whose value contains a `{fact:}` token. Any other item, and any item whose value,
   unit, label or source uses a do-not-print fact, is left out with a plan warning.
   - Background: the chapter's `surface` (default paper), entered by a dip (`dip`).
   - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
-    (tabular figures without raqm; other glyphs keep their own advance). Each glyph slides up into a
-    mask over B/2 frames, staggered by 2 frames, from the downbeat. The value is the plan's printed
-    fact text: it never counts.
+    (tabular figures without raqm; other glyphs keep their own advance), shifted so the first
+    glyph's ink starts on the text column with the label. Each glyph slides up into a mask over B/2
+    frames, staggered by 2 frames, from `land` (the end of the shot's dip: the figure lands on a clean
+    surface). The mask ends at the figure's own ink bottom (its baseline, or a comma's tail), so a
+    rising glyph never shows above the label. The value is the plan's printed fact text: it never
+    counts.
   - Unit at 0.35× the value size after it; label at 44 units and "Source: <source>" at 26 units
-    below. They fade in at beat 1. Ink on paper, paper on night; no scrims, no tag.
+    below. They fade in at `text_in`, the first beat at or after the figure has landed (land + B/2).
+    Ink on paper, paper on night; no scrims (a loop film adds its tag).
+  - Length: max(4, ceil((text_in − f0 + 2·B/3 + cue_frames(label + source)) / B)) beats, so label
+    and source are fully on screen for as long as they take to read at 17 characters a second (the
+    figure itself is read at a glance).
+  - Its text fades out over its last B/3 frames before any next shot, so a stat followed by a stat
+    shows one figure at a time.
   - Followed by an image, the text fades out over the last B/3 frames and the image dips in from the
     bare surface.
 - **Dips**: every dip and dissolve is D frames, except one that crosses between paper and another
@@ -790,7 +799,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
   "hash": "<sha256 hex of canonical(plan)>",           // people quote the first 12 characters
   "plan": {                                            // hashed: everything that decides frames and tracks
     "slug": "demo-lakeside", "cut": "classic", "preset": null, "renderer": 1,   // renderer: bumped when frames change for an equal plan
-                                                                                // (classic 1; story 2: rails inset by their knob)
+                                                                                // (classic 1; story 2: rails inset by their knob;
+                                                                                //  3: stat land/text_in, aligned and clipped figures)
     "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
     "grid": null | {"bpm": 100.0, "fpb": 18, "dissolve": 12, "beats": 37},   // story: effective bpm; classic: null
     "layout": {"name": "classic-16x9", "safe": [54, 96, 54, 96], "margin": 106, "label_top": 54,
@@ -865,7 +875,8 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
   capture's, or null), `from_after`, `keys` [{a, b, split}], `steps` [{index, split, f0 (sweep start),
   words, words_from: film.line | null, land, focus_requested, and when focused: focus, target,
   subjects, z_eff, upscale, push, reason}]. Text roles `before`, `after`, `words`.
-- `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper), `dip`. Text roles
+- `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper), `dip`, `land` (the
+  frame the figure starts to slide in), `text_in` (the frame unit, label and source fade in). Text roles
   `value`, `unit`, `label`, `source`.
 - `end` (`E1`): `dip`, `honesty`. Text roles `brand`, `credit`, `role`, `partner`, `link`, `fine`,
   `honesty`; a loop's end card has only `brand` and `url`.

@@ -669,7 +669,13 @@ def test_stats_are_facts_only(tmp_path):
     assert (stat["value"], stat["unit"], stat["label"], stat["source"]) == (
         "13,100", "sq ft", "of old pool", "Site plan",
     )  # fmt: skip
-    assert stat["facts"] == ["area"] and stat["surface"] == "paper" and stat["f1"] - stat["f0"] == 4 * B
+    assert stat["facts"] == ["area"] and stat["surface"] == "paper"
+    # The figure lands once the dip from the image is over; label and source fade in on the next
+    # beat and stay readable at 17 characters a second, so the shot is longer than 4 beats here.
+    third = round(B / 3)
+    assert stat["land"] == stat["f0"] + stat["dip"] and (stat["text_in"] - stat["f0"]) % B == 0
+    visible = stat["f1"] - third - (stat["text_in"] + third)
+    assert visible >= math.ceil(len("of old pool Site plan") * 12 / 17) and stat["f1"] - stat["f0"] >= 4 * B
     assert any("'42' is not a {fact:} token" in w for w in plan.warnings), plan.warnings
     assert any("stat 1" in w and "do-not-print" in w for w in plan.warnings), plan.warnings
     assert "secret" not in plan.facts
@@ -679,6 +685,23 @@ def test_stats_are_facts_only(tmp_path):
     first = cut.frame_at(stat["f0"] + 1).astype(np.float32)
     landed = cut.frame_at(stat["key"]).astype(np.float32)
     assert np.abs(first - landed).mean() > 1  # the figure slides in, then holds
+    # The value's first ink starts on the text column, like the label under it.
+    frame = cut.frame_at(stat["key"])
+    dark = frame.mean(axis=2) < 110
+    rows = np.flatnonzero(dark.any(axis=1))
+    blocks = np.split(rows, np.flatnonzero(np.diff(rows) > 2) + 1)
+    lefts = [int(np.flatnonzero(dark[blk[0] : blk[-1] + 1].any(axis=0)).min()) for blk in blocks]
+    assert len(lefts) >= 2 and abs(lefts[0] - lefts[1]) <= 2, lefts  # value, label
+    # Two stats in a row: the first fades out before the second's dip, so no two figures overlap.
+    two = {**STATS, "items": [STATS["items"][2], {**STATS["items"][2], "label": "of new lawn"}]}
+    tiny(root, chapters=[two])
+    project2 = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
+    plan2 = _plan(project2)
+    n1, n2 = (s for s in plan2.plan["shots"] if s["kind"] == "stat")
+    cut2 = _Cut(project2, plan2)
+    bare = cut2.surfaces["paper"]
+    for f in range(n1["f1"], n2["land"]):  # from N1's end to the moment N2's figure starts
+        assert np.abs(cut2.frame_at(f).astype(int) - bare).max() <= 2, f
     # No more than `stats` items.
     many = {**STATS, "items": [STATS["items"][2]] * 5}
     project = tiny(root, chapters=[many], films={"16x9": {"stats": 2}})

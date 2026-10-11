@@ -69,7 +69,7 @@ from vantage.film.plan import (
     said,
 )
 from vantage.film.safety import IMAGES, check_plan, surface_dip
-from vantage.film.tracks import Tracks, iso639_2, plain_markdown, sentence, track_facts
+from vantage.film.tracks import Tracks, cue_frames, iso639_2, plain_markdown, sentence, track_facts
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
 from vantage.site.render import capture_label as date_label
@@ -958,6 +958,12 @@ def derive_cut(
                 if b.prev is not None and b.prev["kind"] in IMAGES:
                     cam.until(b.f + dip)
                 k = sum(s["kind"] == "stat" for s in b.shots) + 1
+                # The figure lands once the dip is over, on a clean surface; the label and source
+                # fade in on the next beat and stay long enough to read at 17 characters a second.
+                land = dip if b.prev is not None else 0
+                text_in = -(-(land + round(B / 2)) // B) * B
+                read = " ".join(filter(None, (item["label"], item["source"])))  # the figure: at a glance
+                beats = max(4, -(-(text_in + 2 * third + cue_frames(read, fps)) // B))
                 text = [
                     {"role": role, "text": item[role]}
                     for role in ("value", "unit", "label", "source")
@@ -976,10 +982,12 @@ def derive_cut(
                         "source": item["source"],
                         "surface": surface,
                         "dip": dip,
+                        "land": b.f + land,
+                        "text_in": b.f + text_in,
                     },
-                    4,
+                    beats,
                 )
-                shot["key"] = shot["f0"] + 3 * B
+                shot["key"] = min(shot["f1"] - third - 1, shot["text_in"] + third + B)
                 start = shot["f0"] + dip // 2
                 b.tracks.cue(
                     start, " ".join(filter(None, (item["value"], item["unit"], item["label"]))), item["facts"]
