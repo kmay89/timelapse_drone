@@ -215,7 +215,13 @@ def test_derive_cut_shapes_and_grid(tmp_path):
             events.append(step["push_f0"])
             assert step["push_f1"] == step["push_f0"] + B + round(B / 3)
     assert all(f % B == 0 for f in events), events
-    assert caps[0]["step"]["land"] == caps[0]["f0"]  # beat 0 on the film's first image
+    assert caps[0]["step"]["land"] == caps[0]["f0"] + B  # beat 1, even on the film's first image
+    # The title holds until "Testville · 2025. A Tiny Site Grows Up" reads at 17 characters/s.
+    title = shots[0]
+    assert (
+        title["f1"] - title["f0"]
+        >= 2 * B + math.ceil(len("Testville · 2025. A Tiny Site Grows Up") * 12 / 17) + B
+    )
     assert caps[2]["step"]["land"] == caps[2]["f0"] + B
     assert shots[0]["capture"] == DATES[0] and shots[0]["file"] == caps[0]["file"]
     assert [s["rail"] for s in caps] == [0, 1, 2, 3, 4]

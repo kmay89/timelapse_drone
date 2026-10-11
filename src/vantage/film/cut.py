@@ -830,7 +830,7 @@ class _Cut:
         shot, L = self.shots[i], self.layers[self.shots[i]["id"]]
         third, u = self.third, self.u
         frame = self._warp(shot["file"], self.camera(f))
-        out = 1 - ramp(f, shot["f1"] - third, third)
+        out = 1 - ramp(f, shot["f1"] - self.fpb, self.fpb)  # text and scrim leave over a whole beat
         a = 0.30 * out
         if a > 0.002:
             frame[:] = cv2.addWeighted(frame, 1 - a, self.card_bg, a, 0)

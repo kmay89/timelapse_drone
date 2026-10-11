@@ -153,7 +153,7 @@ def check_plan(plan: dict[str, Any]) -> None:
                     problems.append(f"{sid}: a curtain sweep of {k1['a'] - k0['b']} frames is under 2 beats")
         if kind == "title" and shot.get("groups"):
             third = max(1, round(fpb / 3))  # beat.Grid.third
-            if shot["groups"][-1] + third > shot["f1"] - third:
+            if shot["groups"][-1] + third > shot["f1"] - fpb:  # all in before the last beat's fade
                 problems.append(f"{sid}: its words are never all on screen (title_beats too short)")
         if kind in ("card", "end", "stat") and shot.get("dip", 0) > shot["f1"] - shot["f0"] - fpb:
             problems.append(

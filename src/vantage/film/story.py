@@ -601,7 +601,9 @@ def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> di
         "file": cap.file,
         "groups": [f0 + B, f0 + B + third, f0 + B + 2 * third],
     }
-    b.add(shot, b.film.title_beats)
+    # All in by 2B; held until kicker and title read at 17 characters a second; out over the last beat.
+    read = sentence(kicker, title)
+    b.add(shot, max(b.film.title_beats, -(-(2 * B + cue_frames(read, b.grid.fps) + B) // B)))
     shot["key"] = min(shot["f1"] - third - 1, f0 + 2 * B + third)
     b.tracks.cue(f0, title or kicker, title_facts if title else kicker_facts)
     b.tracks.line(
@@ -912,7 +914,7 @@ def derive_cut(
                 text = [{"role": "label", "text": cap.label}]
                 if step and step["words"]:
                     text.append({"role": "words", "text": step["words"]})
-                    step["land"] = f0 if dissolve is None else f0 + B
+                    step["land"] = f0 + B  # on beat 1 (after the title, the picture plays clean first)
                 if step is not None:
                     step.pop("facts")
                     if target is not None:

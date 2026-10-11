@@ -585,11 +585,14 @@ or compare chapter in scope plays the main vantage's captures as one quiet serie
 the 16:9 cut is 62 beats (37.2 s at 100 bpm) and the 9:16 cut 60 beats (its narrower crop clamps
 two pushes), with or without VANTAGE_FAST.
 
-- **title** (`title_beats`, 4): the first image (the first series capture, else the first curtain's
-  before image) at rest under a 30 % night
+- **title** (at least `title_beats`, 4): the first image (the first series capture, else the first
+  curtain's before image) at rest under a 30 % night
   scrim. The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
   across beat 0; the title's word groups (up to three, split by word count) rise on frames B, B + B/3
-  and B + 2B/3 (`groups`). Text and scrim fade out over the last B/3 frames. Frame 0 is the image.
+  and B + 2B/3 (`groups`), all in by 2B. Text and scrim fade out over the last beat (B frames, so
+  the scrim's removal never pops). The shot is lengthened until "<kicker>. <title>" is fully on
+  screen for as long as it takes to read at 17 characters a second (the demo: 8 beats). Frame 0
+  is the image.
 - **capture** (one per capture of each series: `from`..`to` minus `exclude`d captures): 1 beat with
   no step, 3 with a step, 4 with a push (at least 3 when the film has a single image).
   - Every capture except the film's first image starts with a dissolve on its first frame: `_mix` in
@@ -598,8 +601,8 @@ two pushes), with or without VANTAGE_FAST.
   - The date label swaps at the dissolve's midpoint; the rail knob eases (smoothstep) to the new
     tick over the dissolve. Ticks sit at the real dates of the series.
   - Words: `film.line`, else the step's leading `**bold**` run, resolved through the facts (a
-    do-not-print fact drops the words with a warning). They land at beat 1 (beat 0 on the first
-    image, `step.land`), rise 14 units while fading in over B/3 frames, and fade out with the next
+    do-not-print fact drops the words with a warning). They land at beat 1 (`step.land`; on the
+    film's first image too, so the picture plays clean for a beat after the title), rise 14 units while fading in over B/3 frames, and fade out with the next
     dissolve.
   - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`) and holds
     to the end of the shot. It eases back as slowly as it went in: over B + B/3 frames from the next
@@ -807,7 +810,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
   "plan": {                                            // hashed: everything that decides frames and tracks
     "slug": "demo-lakeside", "cut": "classic", "preset": null, "renderer": 1,   // renderer: bumped when frames change for an equal plan
                                                                                 // (classic 1; story 2: rails inset by their knob;
-                                                                                //  3: stat land/text_in, aligned and clipped figures)
+                                                                                //  3: stat land/text_in, aligned and clipped figures;
+                                                                                //  4: the title fades over a whole beat)
     "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
     "grid": null | {"bpm": 100.0, "fpb": 18, "dissolve": 12, "beats": 37},   // story: effective bpm; classic: null
     "layout": {"name": "classic-16x9", "safe": [54, 96, 54, 96], "margin": 106, "label_top": 54,
