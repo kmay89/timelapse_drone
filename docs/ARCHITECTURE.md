@@ -531,7 +531,7 @@ films:                       # optional; id → FilmSpec; merged over the derive
   9x16: {chapters: main}     # derived when output.film.vertical (aspect from the id)
   screen: {preset: screen}   # the event loop (auto: false) → render it with --film screen
 # FilmSpec fields (all optional): preset (screen) · cut · aspect (16x9|9x16) · bpm · chapters (all | main | [chapter ids])
-#   · stats (0–6, default 3) · title_beats (4) · end_beats (6) · safe [top, right, bottom, left] (fractions)
+#   · stats (0–6, default 3) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
 #   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
 #   · enabled (true) · hours (loop films)
 steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare steps
@@ -733,7 +733,9 @@ of the right edge.
   its shot, there are no hard cuts between images (a curtain may open without a dissolve only on the
   image already on screen, `from_after`), an image after a surface always dips in, every card, stat
   or end dip is as long, any dip to or from paper lasts at least `surface_dip` frames, and every
-  curtain sweep lasts at least 2 beats. A loop plan opens with a `rise` and closes with a `dip`, each
+  curtain sweep lasts at least 2 beats. The title's last word group is fully in before its fade
+  starts, and a card, stat or end card's dip leaves at least one beat of the shot for its text (a
+  long dip from paper can need more `end_beats` than the minimum). A loop plan opens with a `rise` and closes with a `dip`, each
   at least ceil(0.34·fps) frames, and its frame count is a multiple of 2B. Classic plans keep their
   own timing and are not checked.
 - **Luminance** (`LumaMeter`, render time, every frame of every cut): each frame is downscaled to 1/8
@@ -897,7 +899,7 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   "Credits"; a chapter starts with the card that introduces it. The title shot belongs to the first
   chapter, which starts at frame 0. Classic: one chapter per section, then "Credits".
 - **Transcript** (`.txt`): the project title and subtitle, then "<m:ss> film, no sound. <honesty
-  line>" (from `provenance`, for classic cuts too), a blank line, then one `[m:ss] …` line per shot:
+  line>" (from `provenance`, for classic cuts too), a blank line, then one `[m:ss] …` line per shot (a line never starts after the last frame):
   - title: "Title over the <label> view: <kicker>. <title>";
   - capture: "Aerial view (<vantage name>), <label>: <step text, plain, else the note>" for a series'
     first capture, "Same view, <label>: …" after it;

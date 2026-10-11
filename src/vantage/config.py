@@ -601,8 +601,12 @@ class FilmSpec(Model):
         None, description="all | main (the first scrub's vantage, plus stats) | [chapter ids]."
     )
     stats: int | None = Field(None, ge=0, le=6, description="Stats shown (default 3).")
-    title_beats: int | None = Field(None, ge=1, le=16)
-    end_beats: int | None = Field(None, ge=1, le=16)
+    title_beats: int | None = Field(
+        None, ge=3, le=16, description="At least 3: the title's words rise on beat 1."
+    )
+    end_beats: int | None = Field(
+        None, ge=2, le=16, description="At least 2: a dip, then the end card's text."
+    )
     safe: list[float] | None = Field(None, description="[top, right, bottom, left] safe margins, fractions.")
     type_scale: float | None = Field(None, gt=0.25, le=4)
     max_upscale: float | None = Field(None, ge=1.0, le=3.0)

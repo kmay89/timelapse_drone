@@ -150,7 +150,10 @@ class Tracks:
                 "subtitle": subtitle,
                 "honesty": honesty,
                 "facts": list(dict.fromkeys(facts)),
-                "lines": sorted(self.lines, key=lambda line: line["f0"]),
+                "lines": sorted(
+                    ({**line, "f0": min(line["f0"], max(frames - 1, 0))} for line in self.lines),
+                    key=lambda line: line["f0"],
+                ),
             },
         }
 

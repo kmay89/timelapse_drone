@@ -82,7 +82,9 @@ SURFACES = frozenset({"night", "paper"})
 
 def check_plan(plan: dict[str, Any]) -> None:
     """Raise PlanError when a story plan cuts between images, dissolves faster than 0.34 s, sweeps a
-    curtain in under 2 beats or dips into or out of paper faster than `surface_dip`.
+    curtain in under 2 beats, dips into or out of paper faster than `surface_dip`, ends its title
+    before its words are all in, or dips into a card, stat or end card for so long that less than
+    a beat of the shot is left for its text.
 
     Classic plans keep their own hold/fade timing and are not checked here (the meter still
     measures them)."""
@@ -142,6 +144,15 @@ def check_plan(plan: dict[str, Any]) -> None:
             for k0, k1 in pairwise(keys):
                 if k1["a"] - k0["b"] < 2 * fpb:
                     problems.append(f"{sid}: a curtain sweep of {k1['a'] - k0['b']} frames is under 2 beats")
+        if kind == "title" and shot.get("groups"):
+            third = max(1, round(fpb / 3))  # beat.Grid.third
+            if shot["groups"][-1] + third > shot["f1"] - third:
+                problems.append(f"{sid}: its words are never all on screen (title_beats too short)")
+        if kind in ("card", "end", "stat") and shot.get("dip", 0) > shot["f1"] - shot["f0"] - fpb:
+            problems.append(
+                f"{sid}: a {shot.get('dip', 0)}-frame dip leaves under a beat of its "
+                f"{shot['f1'] - shot['f0']} frames for its text (end_beats too short?)"
+            )
         if kind in ("card", "end", "stat") and prev is not None:
             n = shot.get("dip", 0)
             mine, theirs = surface(shot), surface(prev)

@@ -179,6 +179,8 @@ def test_resolve_films_precedence(tmp_path):
         ({"x": {"sound": "file"}}, "not supported yet"),
         ({"x": {"bpm": 200}}, "less than or equal"),
         ({"x": {"safe": [0.1, 0.1]}}, "safe must be"),
+        ({"x": {"title_beats": 2}}, "greater than or equal to 3"),
+        ({"x": {"end_beats": 1}}, "greater than or equal to 2"),
     ],
 )
 def test_film_specs_are_validated(tmp_path, films, match):
@@ -375,6 +377,22 @@ def test_flash_meter():
     for v in (40, 200, 40, 200, 40):
         meter.add(np.full((64, 64, 3), v, np.uint8))
     assert not meter.passed and meter.result()["pass"] is False
+
+
+def test_short_end_card_is_refused(tmp_path):
+    """end_beats 2 after a paper stat: the 18-frame dip from paper would leave the end card's text
+    under a beat (B = 8), so the plan is refused rather than ending mid-dip; transcript lines never
+    start past the film's last frame."""
+    root = tmp_path / "p"
+    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 2}})
+    project = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
+    with pytest.raises(PlanError, match="E1: a 18-frame dip leaves under a beat"):
+        _plan(project)
+    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 4}})
+    plan = _plan(_facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]}))
+    p = plan.plan
+    assert all(line["f0"] < p["frames"] for line in p["transcript"]["lines"])
+    assert p["captions"][-1]["text"] == "Made for testing."  # the credit cue survives
 
 
 def test_check_plan_rejects_short_dissolve(tmp_path):
