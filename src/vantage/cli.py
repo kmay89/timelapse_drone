@@ -869,7 +869,9 @@ def film_cmd(
     ] = None,
     plan_only: Annotated[
         bool,
-        typer.Option("--plan-only", help="Write each film's plan.json and storyboard without encoding."),
+        typer.Option(
+            "--plan-only", help="Write each film's plan.json, storyboard and tracks without encoding."
+        ),
     ] = False,
     release: Annotated[
         bool,
@@ -883,7 +885,8 @@ def film_cmd(
         ),
     ] = None,
 ) -> None:
-    """Plan and render the MP4 films (16:9, plus 9:16 when enabled) with plan.json and storyboard."""
+    """Plan and render the MP4 films (16:9, plus 9:16 when enabled) with plan.json, storyboard,
+    captions, chapters and transcript."""
     _film(_load(project), only=film, release=release, plan_only=plan_only, hours=hours)
 
 

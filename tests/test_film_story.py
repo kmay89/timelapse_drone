@@ -413,8 +413,9 @@ def test_story_render_is_reproducible(tmp_path):
         render_film(project, out[run])
     names = sorted(p.name for p in out["a"].iterdir())
     assert names == [
-        "tiny-site-16x9-web.mp4", "tiny-site-16x9.jpg", "tiny-site-16x9.mp4", "tiny-site-16x9.plan.json",
-        "tiny-site-16x9.storyboard.jpg",
+        "tiny-site-16x9-web.mp4", "tiny-site-16x9.chapters.vtt", "tiny-site-16x9.jpg", "tiny-site-16x9.mp4",
+        "tiny-site-16x9.plan.json", "tiny-site-16x9.srt", "tiny-site-16x9.storyboard.jpg", "tiny-site-16x9.txt",
+        "tiny-site-16x9.vtt",
     ]  # fmt: skip
     for name in names:
         assert (out["a"] / name).read_bytes() == (out["b"] / name).read_bytes(), name
@@ -625,7 +626,7 @@ def test_parallel_equals_sequential(tmp_path, monkeypatch):
         out[jobs] = tmp_path / f"jobs-{jobs}"
         render_film(project, out[jobs])
     names = sorted(p.name for p in out["1"].iterdir())
-    assert names == sorted(p.name for p in out["2"].iterdir()) and len(names) == 10
+    assert names == sorted(p.name for p in out["2"].iterdir()) and len(names) == 18
     assert not [n for n in names if n.endswith(".part")]
     for name in names:
         assert (out["1"] / name).read_bytes() == (out["2"] / name).read_bytes(), name

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import struct
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ from vantage.film.render import (
     render_film,
     renderer,
 )
-from vantage.media.ffmpeg import probe
+from vantage.media.ffmpeg import ffmpeg_bin, probe
 from vantage.models import FilmPlan
 from vantage.site.build import ReleaseError
 
@@ -140,7 +141,25 @@ def test_classic_16x9_unchanged(tmp_path):
     encode_frames(
         _Film(project, plan, layout=legacy), again, crf=plan.encode["crf"], preset=plan.encode["preset"]
     )
-    assert again.read_bytes() == (out / "tiny-site-16x9.mp4").read_bytes()
+    # The embedded tracks change the container, never the H.264 stream (film/tracks.py embed).
+    assert _h264(again) == _h264(out / "tiny-site-16x9.mp4")
+    # Without tracks, the file itself is the one the step-3 constants gave.
+    plain = make_project(
+        tmp_path / "q", film={**FILM, "vertical": False, "title_card_s": 0.5, "end_card_s": 0.5, "tracks": False},
+        simulated=True,
+    )  # fmt: skip
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    _render_one(plain, plan_films(plain, fast=True)["16x9"], bare, plan_only=False)
+    assert again.read_bytes() == (bare / "tiny-site-16x9.mp4").read_bytes()
+
+
+def _h264(path: Path) -> bytes:
+    """The H.264 elementary stream of an MP4 (stream copy, Annex B)."""
+    return subprocess.run(
+        [ffmpeg_bin(), "-v", "error", "-i", str(path), "-map", "0:v", "-c", "copy", "-f", "h264", "-"],
+        check=True, capture_output=True,
+    ).stdout  # fmt: skip
 
 
 def _atoms(path: Path) -> list[str]:
@@ -176,7 +195,8 @@ def test_web_encode(tmp_path):
     assert (info.codec, stream["profile"], stream["pix_fmt"], stream.get("color_space")) == (
         "h264", "High", "yuv420p", "bt709",
     )  # fmt: skip
-    assert [s["codec_type"] for s in info.raw["streams"]] == ["video"]  # no audio
+    kinds = [s["codec_type"] for s in info.raw["streams"]]
+    assert kinds == ["video", "subtitle", "data"]  # no audio; captions and the chapter track
     atoms = _atoms(web)
     assert atoms.index("moov") < atoms.index("mdat")  # faststart
     assert info.duration_s == pytest.approx(probe(main).duration_s, abs=1e-6)

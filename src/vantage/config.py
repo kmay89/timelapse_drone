@@ -249,6 +249,10 @@ class FilmSettings(Model):
         1.6, ge=1.0, le=3.0, description="Output px per master px never exceeds this in a push."
     )
     web: bool = Field(True, description="Also write <name>-web.mp4, a copy of at most 25 MiB for websites.")
+    tracks: bool = Field(
+        True,
+        description="Captions (.vtt, .srt), chapters and a timed transcript (.txt) per film, also embedded in the MP4.",
+    )
 
 
 class OutputSettings(Model):

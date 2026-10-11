@@ -221,10 +221,9 @@ def test_plan_only_writes_no_mp4(tmp_path, monkeypatch):
     written = render_film(project, out, plan_only=True)
     assert [p.name for p in written] == ["tiny-site-16x9.plan.json", "tiny-site-9x16.plan.json"]
     assert sorted(p.name for p in out.iterdir()) == [
-        "tiny-site-16x9.plan.json",
-        "tiny-site-16x9.storyboard.jpg",
-        "tiny-site-9x16.plan.json",
-        "tiny-site-9x16.storyboard.jpg",
+        f"tiny-site-{fid}{suffix}"
+        for fid in ("16x9", "9x16")
+        for suffix in (".chapters.vtt", ".plan.json", ".srt", ".storyboard.jpg", ".txt", ".vtt")
     ]
     assert all(FilmPlan.load(p).render is None for p in written)
 

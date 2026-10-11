@@ -5,6 +5,7 @@
     <out>/<slug>-<id>.jpg               poster
     <out>/<slug>-<id>.plan.json         its FilmPlan (film/plan.py) and the render record
     <out>/<slug>-<id>.storyboard.jpg    one tile per key frame (film/storyboard.py)
+    <out>/<slug>-<id>.vtt .srt .chapters.vtt .txt   captions, chapters, transcript (film/tracks.py)
     <out>/usb/<slug>-<id>-<H>h.mp4      a loop film repeated for H hours (film/loop.py; never packaged)
 
 A film is a title card, one section per vantage (the main vantage first; the
@@ -15,7 +16,8 @@ and a calendar rail whose ticks sit at the real flight dates. Cards dissolve int
 and out of the imagery while the camera keeps moving.
 
 Story plans are rendered by `film/cut.py` (`_Cut`); `renderer` picks the one for a plan's cut, and
-every film goes through `encode_frames` and the luminance meter of `film/safety.py`.
+every film goes through `encode_frames` and the luminance meter of `film/safety.py`; then
+`tracks.embed` remuxes its MP4s by stream copy to add the captions and chapters of the plan.
 `render_film` renders several films side by side in worker processes (`film_jobs`;
 VANTAGE_FILM_JOBS=1 renders them one after another, with the same bytes) and renames their
 *.part outputs only once every film has succeeded.
@@ -65,6 +67,7 @@ from vantage.film.plan import (
 from vantage.film.plan import capture_labels as capture_labels
 from vantage.film.safety import LumaMeter, check_plan
 from vantage.film.storyboard import write_storyboard
+from vantage.film.tracks import SUFFIXES, embed, track_texts
 from vantage.media.ffmpeg import FrameWriter, ffmpeg_version
 from vantage.models import FilmPlan
 from vantage.site.build import ReleaseError
@@ -759,6 +762,10 @@ def _render_parts(
                 web=(part(web_mp4), web) if web else None, gop=plan.encode.get("gop"),
             )  # fmt: skip
             meter.check(f"film {plan.id}")
+            if plan.encode.get("tracks"):  # captions and chapters, by stream copy (video unchanged)
+                embed(parts[mp4], plan)
+                if web:
+                    embed(parts[web_mp4], plan)
             part(poster).write_bytes(film.poster())
 
             def record(path: Path) -> dict[str, Any]:
@@ -770,6 +777,8 @@ def _render_parts(
                 "flash": meter.result(),
                 "ffmpeg": ffmpeg_version(),
             }
+        for suffix, text in track_texts(plan).items():
+            part(out_dir / f"{stem}{suffix}").write_text(text, encoding="utf-8", newline="\n")
         write_storyboard(plan, film.frame_at, plan.facts, part(board))
         plan.save(part(plan_path))
     except BaseException:
@@ -937,6 +946,9 @@ def render_film(
     for plan in reuse:
         outputs.append(_final(project, plan, out_dir, plan_only=False))
     for plan in done.values():
+        if not track_texts(plan):  # tracks turned off (or a loop film): no stale sidecars
+            for suffix in SUFFIXES:
+                (out_dir / f"{project.slug}-{plan.id}{suffix}").unlink(missing_ok=True)
         out = _final(project, plan, out_dir, plan_only=plan_only)
         p = plan.plan
         sections = sum(s["kind"] in ("section", "capture") for s in p["shots"])

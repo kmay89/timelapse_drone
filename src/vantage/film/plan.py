@@ -31,6 +31,7 @@ import yaml
 from vantage import log
 from vantage.config import FILM_ID_RE, BrandKit, FilmSettings, FontSpec, Project, ScrubChapter
 from vantage.film.layout import layout
+from vantage.film.tracks import Tracks, iso639_2, sentence, track_facts
 from vantage.models import FilmPlan, MastersIndex
 from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
@@ -43,6 +44,10 @@ WEB_MAXRATE_CAP = 6_000_000  # bit/s
 PLAN_SUFFIX = ".plan.json"
 STORYBOARD_SUFFIX = ".storyboard.jpg"
 SIMULATED_NOTE = "Simulated imagery for demonstration; not actual aerial footage."
+HONESTY = {
+    "photo": "Every frame is made from real aerial photographs. No in-between images are invented.",
+    "simulated": "Every frame is made from the simulated flights. No in-between images are invented.",
+}
 Role = Literal["display", "text", "numeric"]
 ROLES: tuple[Role, ...] = ("display", "text", "numeric")
 
@@ -73,6 +78,11 @@ def _plain(project: Project, text: str | None) -> str | None:
     return FactNotes(project.facts.facts).plain(text)
 
 
+def honesty_line(provenance: Sequence[str]) -> str:
+    """The end card's (and the transcript's) honesty line, derived from the plan's provenance."""
+    return HONESTY["simulated" if "simulated" in provenance else "photo"]
+
+
 def capture_labels(project: Project, dates: Sequence[str]) -> dict[str, str]:
     """Visit labels exactly as the site shows them: story.yaml's label, else 'June 2025'
     ('June 14, 2025' when the vantage has two visits that month)."""
@@ -98,7 +108,9 @@ class _Printer:
         notes = FactNotes(self.project.facts.facts)
         printed = notes.plain(text)
         if any(self.project.facts.facts[f].status == "do-not-print" for f in notes.order):
-            self.warnings.append(f"{where}: left out of the films (it uses a do-not-print fact)")
+            warning = f"{where}: left out of the films (it uses a do-not-print fact)"
+            if warning not in self.warnings:
+                self.warnings.append(warning)
             return None
         self.add(notes.order)
         return printed
@@ -337,19 +349,39 @@ def web_maxrate(duration_s: float) -> int:
     return min(WEB_MAXRATE_CAP, rate // 1000 * 1000)
 
 
+def has_tracks(film: FilmDef, settings: FilmSettings) -> bool:
+    """Whether a film gets captions, chapters and a transcript: output.film.tracks, never a loop film."""
+    return settings.tracks and not film.loop
+
+
 def encode_settings(
-    film: FilmDef, settings: FilmSettings, frames: int, fps: int, *, fast: bool, fpb: int | None = None
+    film: FilmDef,
+    settings: FilmSettings,
+    frames: int,
+    fps: int,
+    *,
+    fast: bool,
+    fpb: int | None = None,
+    lang: str = "und",
 ) -> dict:
     """plan.json `encode` (not hashed: it changes bytes, not frames). `web` is the -web.mp4 encode:
     crf 23 under a VBV cap, null for loop films and when output.film.web is false. `gop` is a loop
-    film's closed GOP in frames (2 beats of `fpb`), else null."""
+    film's closed GOP in frames (2 beats of `fpb`), else null. `tracks`: the MP4s embed the captions
+    and chapters (film/tracks.py), whose subtitle track is tagged `lang` (ISO 639-2)."""
     preset = "veryfast" if fast else "slow"
     web = None
     if settings.web and not film.loop:
         rate = web_maxrate(frames / fps)
         web = {"crf": 23, "preset": preset, "maxrate": rate, "bufsize": 2 * rate}
     gop = GOP_BEATS * fpb if film.loop and fpb else None
-    return {"crf": 20 if fast else 18, "preset": preset, "web": web, "gop": gop, "tracks": False}
+    return {
+        "crf": 20 if fast else 18,
+        "preset": preset,
+        "web": web,
+        "gop": gop,
+        "tracks": has_tracks(film, settings),
+        "lang": lang,
+    }
 
 
 def _check_timing(project: Project) -> None:
@@ -585,20 +617,89 @@ def _classic(
         },
         "camera": [],
         "shots": shots,
-        "captions": [],
-        "chapters": [],
+        **_classic_tracks(project, film, sections, shots, frames, kicker, warnings),
         "hold_s": hold,
         "fade_s": fade,
         "seconds_total": total,
         "poster_seconds": poster,
     }
-    used = sorted({f for shot in shots for f in shot["facts"]})
+    used = sorted({f for shot in shots for f in shot["facts"]} | set(track_facts(plan)))
     return FilmPlan(
         id=film.id,
         plan=plan,
         facts=fact_snapshot(project, used),
         warnings=warnings,
-        encode=encode_settings(film, settings, frames, fps, fast=fast),
+        encode=encode_settings(film, settings, frames, fps, fast=fast, lang=iso639_2(cfg.lang)),
+    )
+
+
+def said(project: Project, raw: str | None, where: str, warnings: list[str]) -> tuple[str | None, list[str]]:
+    """(text as printed through the facts, the fact ids it prints); (None, []) for a text that uses
+    a do-not-print fact (with a warning)."""
+    say = _Printer(project, warnings)
+    text = say(raw, where)
+    return text, list(say.facts) if text is not None else []
+
+
+def _classic_tracks(
+    project: Project,
+    film: FilmDef,
+    sections: list[_Section],
+    shots: list[dict[str, Any]],
+    frames: int,
+    kicker: str,
+    warnings: list[str],
+) -> dict[str, Any]:
+    """The classic cut's captions (title, each capture's label and, when it fits, its note, section
+    cards, the credit line), chapters (one per section, then Credits) and transcript lines."""
+    cfg, brand, settings = project.config, project.brand, project.config.output.film
+    fps, step = settings.fps, settings.hold_s + settings.fade_s
+    tracks = Tracks(fps, enabled=has_tracks(film, settings))
+    title, title_facts = said(project, cfg.title, "project.yaml title", warnings)
+    subtitle, subtitle_facts = said(project, cfg.subtitle, "project.yaml subtitle", warnings)
+    _, kicker_facts = said(project, cfg.kicker, "project.yaml kicker", warnings)
+    credit, credit_facts = said(project, brand.credit_line, "brand.yaml credit_line", warnings)
+    by_vantage = {s.vantage: s for s in sections}
+    for shot in shots:
+        sec = shot["seconds"]
+        if shot["kind"] == "card" and shot["role"] == "title":
+            tracks.cue(0, title or kicker, title_facts if title else kicker_facts)
+            tracks.line(0, f"Title card: {sentence(kicker, title)}", [*kicker_facts, *title_facts])
+        elif shot["kind"] == "card" and shot["role"] == "section":
+            section = by_vantage[next(s["vantage"] for s in shots if s["id"] == shot["next"])]
+            start = _frame(sec["start"] + sec["dissolve"] / 2, fps)
+            tracks.chapter(shot["f0"], section.name, section.facts)
+            tracks.cue(start, section.name, section.facts)
+            tracks.line(start, f"Chapter card: {section.name}", section.facts)
+        elif shot["kind"] == "section":
+            section = by_vantage[shot["vantage"]]
+            if section is sections[0]:
+                tracks.chapter(shot["f0"], section.name, section.facts)
+            for j, cap in enumerate(section.shots):
+                start = _frame(sec["start"] + j * step - (settings.fade_s / 2 if j else 0), fps)
+                with_note = sentence(cap.label, cap.note) if cap.note else None
+                tracks.cue(
+                    start,
+                    cap.label,
+                    cap.label_facts,
+                    (with_note, [*cap.label_facts, *cap.note_facts]) if with_note else None,
+                )
+                lead = f"Aerial view ({section.name}), {cap.label}" if j == 0 else f"Same view, {cap.label}"
+                facts = [*cap.label_facts, *cap.note_facts, *(section.facts if j == 0 else ())]
+                tracks.line(start, f"{lead}: {cap.note}" if cap.note else f"{lead}.", facts)
+        elif shot["kind"] == "card":  # the end card
+            start = _frame(sec["start"] + sec["dissolve"] / 2, fps)
+            tracks.chapter(shot["f0"], "Credits")
+            tracks.cue(start, credit or brand.name, credit_facts)
+            lines = " / ".join(t["text"] for t in shot["text"])
+            tracks.line(start, f"End card: {lines}", shot["facts"])
+    provenance = ["simulated" if cfg.simulated else "photo"]
+    return tracks.record(
+        frames,
+        title=title,
+        subtitle=subtitle,
+        honesty=honesty_line(provenance),
+        facts=[*title_facts, *subtitle_facts],
     )
 
 
@@ -734,6 +835,7 @@ def check_films(project: Project, film_dir: Path) -> list[str]:
 __all__ = [
     "FILM_RENDERER",
     "GOP_BEATS",
+    "HONESTY",
     "LOOP_BEATS",
     "PRESETS",
     "FilmDef",
@@ -742,7 +844,10 @@ __all__ = [
     "encode_settings",
     "film_records",
     "film_size",
+    "has_tracks",
+    "honesty_line",
     "plan_films",
     "resolve_films",
+    "said",
     "web_maxrate",
 ]

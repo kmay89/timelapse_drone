@@ -68,6 +68,8 @@ src/vantage/
     render.py            renders plans to MP4 + web copy + poster (classic `_Film`, shared drawing code, the
                          encode, ink checks, films side by side in worker processes)
     storyboard.py        one contact-sheet tile per key frame of a plan, with fact status chips
+    tracks.py            captions (.vtt, .srt), chapters and the timed transcript from a plan; embeds
+                         them into the MP4 by stream copy (mov_text, off by default, and named chapters)
     loop.py              --hours: a loop film repeated by stream copy into film/usb/ (FAT32 size guard)
   llm/claude.py          optional Claude vision helpers (captions, alt text, milestones)
   demo/synth.py          procedural "drone footage" of a fictional site changing over time
@@ -118,7 +120,7 @@ placeholder logos), a README and an empty `footage/` from `src/vantage/templates
 | `vantage align <project>` | register, crop, grade → masters/ + review sheets |
 | `vantage process <project>` | ingest → select → align |
 | `vantage build <project> [--out DIR]` | build the interactive site from masters + YAML; `--out` replaces only an earlier Vantage build, and refuses any other non-empty folder or one under version control |
-| `vantage film <project> [--film ID]… [--plan-only] [--release] [--hours H]` | plan and render the `auto` films, or the named ones (including on-demand ones such as `screen`). `--plan-only` writes plan.json and the storyboard without encoding. `--release` refuses drafts and non-releasable facts before planning. `--hours H` (with `--film` naming a loop film) repeats it into `film/usb/` without re-encoding. |
+| `vantage film <project> [--film ID]… [--plan-only] [--release] [--hours H]` | plan and render the `auto` films, or the named ones (including on-demand ones such as `screen`). `--plan-only` writes plan.json, the storyboard and the tracks without encoding. `--release` refuses drafts and non-releasable facts before planning. `--hours H` (with `--film` naming a loop film) repeats it into `film/usb/` without re-encoding. |
 | `vantage package <project> [--release]` | single-file HTML + offline zip; checks the films against their plans (`--release` refuses any problem, see "Films") |
 | `vantage all <project> [--release]` | process → build → film → package; `--release` reaches the film step too |
 | `vantage preview <project> [--port 8000]` | serve dist site locally |
@@ -461,7 +463,10 @@ A film has one of two cuts:
 
 A **loop film** (`preset: screen`, or any story FilmSpec with `loop: true`) is a seamless cycle for an
 event screen: it rises from pure night and dips back to it, so frame N equals frame 0 (see "Loop
-films"). Not yet built: tracks (captions, chapters, transcript).
+films").
+
+Every film except a loop film also gets **tracks** made from its plan: captions, chapters and a
+timed transcript as sidecar files, and the captions and chapters embedded in its MP4s (see "Tracks").
 
 Rendering: when more than one film is rendered and `os.cpu_count()` ≥ 4, each film renders in its
 own worker process (`ProcessPoolExecutor`, spawn context, `cv2.setNumThreads(1)` inside), one per
@@ -473,16 +478,20 @@ when one fails. Parallel and sequential renders give the same bytes.
 
 ```
 <slug>-<id>.mp4              H.264 High, yuv420p, BT.709 tags, +faststart, bitexact, no audio stream;
+                             mov_text captions (off by default) and named chapters (see "Tracks");
                              crf 18 slow (VANTAGE_FAST: crf 20 veryfast)
 <slug>-<id>-web.mp4          web copy ≤ 25 MiB: the same frames, crf 23 under a VBV cap (see "Web encode");
                              not for loop films, nor with output.film.web: false
 <slug>-<id>.jpg              poster (classic: the main vantage's final hold; story: the last frame of the last capture)
 <slug>-<id>.plan.json        the FilmPlan plus its render record
 <slug>-<id>.storyboard.jpg   one tile per key frame
+<slug>-<id>.vtt  .srt        captions (WebVTT; SubRip for social uploads)
+<slug>-<id>.chapters.vtt     chapters
+<slug>-<id>.txt              timed text transcript (the film's text alternative, WCAG 1.2.1)
 usb/<slug>-<id>-<H>h.mp4     --hours: a loop film repeated H hours by stream copy (never packaged, hosted or released)
 ```
 
-A loop film's MP4 has closed GOPs of 2 beats (`encode.gop`) and no web copy.
+A loop film's MP4 has closed GOPs of 2 beats (`encode.gop`), no web copy and no tracks.
 
 - Film ids match `[a-z0-9][a-z0-9-]{0,31}` and never end in `-web`. The film set is `16x9`, plus
   `9x16` when `output.film.vertical`; those ids keep the file names films had before plans.
@@ -490,8 +499,8 @@ A loop film's MP4 has closed GOPs of 2 beats (`encode.gop`) and no web copy.
   last). Packaging ships only finished `*.mp4` files.
 - A full `vantage film` run (no `--film`) deletes `<slug>-*` files whose id is no longer in the film
   set, and stray `*.part` files.
-- `--plan-only` writes plan.json (with `render: null`) and the storyboard, but no MP4 or poster, so a
-  cut can be approved in seconds. A plan that has not changed keeps the render record of the MP4
+- `--plan-only` writes plan.json (with `render: null`), the storyboard and the track sidecars, but no
+  MP4 or poster, so a cut can be approved in seconds. A plan that has not changed keeps the render record of the MP4
   next to it.
 
 `output.film.require_approval` (default false): `package --release` needs each film's plan hash in
@@ -507,6 +516,7 @@ cut: story            # story | classic: the cut of the derived films
 bpm: 100              # 60–160; the beat grid of story cuts
 max_upscale: 1.6      # 1.0–3.0; output px per master px never exceeds this in a push
 web: true             # write <name>-web.mp4
+tracks: true          # captions, chapters and transcript (sidecars, and embedded in the MP4s)
 require_approval: false
 ```
 
@@ -740,7 +750,7 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
 { "version": 1,
   "id": "16x9",
   "hash": "<sha256 hex of canonical(plan)>",           // people quote the first 12 characters
-  "plan": {                                            // hashed: everything that decides frames
+  "plan": {                                            // hashed: everything that decides frames and tracks
     "slug": "demo-lakeside", "cut": "classic", "preset": null, "renderer": 1,   // renderer: bumped when frames change for an equal plan
                                                                                 // (classic 1; story 2: rails inset by their knob)
     "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
@@ -758,16 +768,21 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
                 "text": {…}, "numeric": {…}},          // "pillow:default" (sha256 null) when a brand has no font file
       "colors": {"night": "#…", "paper": "#…", "ink": "#…", "accent": "#…"} },
     "camera": [],                                      // story: [{"a": 0, "b": 162, "x": 0.5, "y": 0.5, "zoom": 1.0}, …]
-    "captions": [], "chapters": [],
+    "captions": [{"f0": 36, "f1": 90, "text": "April 2025. Before.", "facts": []}],   // see "Tracks"; [] for loop films
+    "chapters": [{"f0": 0, "title": "Eighteen months, one frame", "facts": []}],
+    "transcript": {"title": "…", "subtitle": "…", "honesty": "…", "facts": [],
+                   "lines": [{"f0": 0, "text": "Title over the April 2025 view: …", "facts": []}]} | null,
     "shots": [ /* see below */ ],
     "hold_s": 1.0, "fade_s": 0.8, "seconds_total": 47.0, "poster_seconds": 23.65 },   // classic timing
     // story instead: "poster": <frame> (the last frame of the last capture shot, else of the last curtain)
-  "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed
+  "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed;
+                                                       // every fact the shots and the tracks print
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
   "checks": {"safe": [96, 54, 1824, 1026], "ink": [{"shot": "T1", "layer": "stack", "box": [598, 330, 724, 420]}],
              "outside": []},                           // NOT hashed: written by the renderer (see Layout presets)
   "encode": {"crf": 18, "preset": "slow", "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
-             "bufsize": 8030000} | null, "gop": null | 48, "tracks": false},  // NOT hashed: bytes, not frames
+             "bufsize": 8030000} | null, "gop": null | 48, "tracks": true, "lang": "eng"},  // NOT hashed: bytes, not frames
+                                                       // tracks: embed captions and chapters; lang: ISO 639-2
                                                        // gop: a loop film's closed GOP, 2B frames
   "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": {"bytes": 0, "sha256": ""} | null,
              "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0467, "frame": 384},
@@ -848,6 +863,61 @@ date, a vantage name to the masters' name) and a warning is recorded.
   (check `<slug> film <stem>-web.mp4`). Main MP4s and `film/usb/` are not budgeted; a dist without
   `film/` (`--no-film`) has no film checks.
 
+### Tracks (film/tracks.py)
+
+Captions, chapters and the transcript are filled at plan time into the hashed `captions`,
+`chapters` and `transcript` (story cuts: film/story.py; classic: film/plan.py `_classic_tracks`),
+with every fact already printed through facts.yaml. So they cannot drift from the picture, and every
+fact they print is in the plan's `facts` and goes through the release gate, even one that appears only
+in a caption or the transcript (a capture's note, a step's full text). A text that uses a
+do-not-print fact is left out of the tracks (the cue keeps its shorter form) with a warning. Loop films and
+`output.film.tracks: false` have no tracks (`captions: []`, `chapters: []`, `transcript: null`,
+`encode.tracks: false`) and no sidecars; a stale sidecar is deleted when its film is re-rendered.
+
+- **Captions**: one cue per text-bearing shot, from the midpoint of its dissolve or dip (its first frame
+  without one) to the next cue's start, the last to the film's end; sorted, never overlapping;
+  consecutive cues with the same text merge.
+  - title → the title (else the kicker); card → the chapter title;
+  - capture → "<label>. <words>" ("April 2025. Before."); its note is appended only when the whole
+    cue stays at or under 17 characters per second of the cue's length (`tracks.CPS`);
+  - curtain → one cue per step, from the entry (first step) or the sweep start: "<before> / <after>:
+    <step text, plain>" under the same 17 characters/s rule, else "<before> / <after>";
+  - stat → "<value> <unit> <label>"; end → the credit line (else the brand name).
+  - Classic cuts: the title, each capture's label (+ note under the same rule) from the middle of
+    its incoming crossfade, each section card's name and the credit line.
+- **Chapters**: each series (the scrub title, else the vantage name), each curtain (the compare
+  title, else "<before> / <after>"), the stats (the stats title, else its kicker, else "Figures") and
+  "Credits"; a chapter starts with the card that introduces it. The title shot belongs to the first
+  chapter, which starts at frame 0. Classic: one chapter per section, then "Credits".
+- **Transcript** (`.txt`): the project title and subtitle, then "<m:ss> film, no sound. <honesty
+  line>" (from `provenance`, for classic cuts too), a blank line, then one `[m:ss] …` line per shot:
+  - title: "Title over the <label> view: <kicker>. <title>";
+  - capture: "Aerial view (<vantage name>), <label>: <step text, plain, else the note>" for a series'
+    first capture, "Same view, <label>: …" after it;
+  - card: "Chapter card: <kicker>. <title>";
+  - curtain: "Split screen (<vantage name>), <before> left and <after> right. The line moves to
+    <split>%: <step text>. Then to <split>%: …";
+  - stat: "Figure: <value> <unit> <label> (source: <source>).";
+  - end: "End card: " and the end card's lines joined by " / ".
+  It reads only the plan (`to_transcript(plan)`), so it never prints a fact the gate has not seen.
+- **Formats**: WebVTT `WEBVTT` with `hh:mm:ss.mmm` (cue text escapes `&`, `<`, `>`); SRT numbered
+  with `hh:mm:ss,mmm`; times are frames converted to whole milliseconds, rounded half up (frame 36
+  at 30 fps → 00:00:01.200). UTF-8, LF line ends.
+- **Embedding** (`tracks.embed`, before the `.part` rename, for the MP4 and its -web.mp4 when
+  `encode.tracks`): a stream-copy remux
+  `-i film -f ffmetadata -i chapters -i captions.srt -map 0:v -map 2:s -map_chapters 1
+  -map_metadata 1 -c:v copy -c:s mov_text -metadata:s:s:0 language=<encode.lang> -disposition:s:0 0
+  -fflags +bitexact -flags:v +bitexact -movflags +faststart`. The ffmetadata file carries the film's
+  title and the chapters in milliseconds. `encode.lang` is project.yaml `lang` as ISO 639-2 (en →
+  eng, fr → fra, es → spa, de → deu, else und).
+  - **Never `-map_metadata -1` here**: chapter titles are metadata, and it blanks them
+    (`test_embedded_tracks` guards it).
+  - The mp4 muxer always enables the first subtitle track, so `embed` then clears the `enabled` bit
+    of that track's `tkhd` (`disable_subtitles`, one bit): players offer the captions but do not
+    show them until asked (ffprobe: disposition default 0).
+  - The H.264 elementary stream is copied bit for bit (the classic 16:9 film's video stream is the
+    step-3 one); the same plan gives the same bytes. The render record hashes the files as shipped.
+
 ### Loop encode and --hours (film/render.py, film/loop.py)
 
 - Loop films are encoded with `-g 2B -keyint_min 2B -sc_threshold 0 -x264-params open-gop=0
@@ -880,7 +950,8 @@ date, a vantage name to the masters' name) and a warning is recorded.
 4. `plan.draft` is true.
 5. The MP4 (or its -web.mp4) sha256 differs from the `render` record, `render` is null, or a plan
    has no MP4.
-6. A fact it prints (as re-planned) is not releasable under the current facts.yaml.
+6. A fact it prints (as re-planned, on screen or in its tracks) is not releasable under the current
+   facts.yaml.
 7. `render.flash.pass` is false (every cut is metered; a failing film is never written).
 8. `require_approval` is on and neither the hash nor its first 12 characters is listed in any
    `approvals.yaml` `approvals[].films`.
@@ -898,8 +969,10 @@ refuses a film with text outside its safe zone (`checks.outside`).
           "frames": 1410, "fresh": true, "draft": false, "facts": [], "unreleasable": [], "problems": []}}
 ```
 
-`files` and SHA256SUMS list every top-level `film/` deliverable: each MP4 and -web.mp4, plan.json and
-storyboard, never `film/usb/`. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy
+`files` and SHA256SUMS list every top-level `film/` deliverable: each MP4 and -web.mp4, plan.json,
+storyboard and tracks (`.vtt`, `.srt`, `.chapters.vtt`, `.txt`), never `film/usb/`. release.yml
+uploads `film/*.mp4 film/*.vtt film/*.srt film/*.txt`. HOW-TO-VIEW.txt adds "Captions (.srt, .vtt)
+and a timed text transcript (.txt) come with each film" when there are tracks. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy
 for websites and uploads (under 25 MB)" and a loop film as "silent loop for an event screen; for a
 TV's USB player use film/usb/<name>-<H>h.mp4".
 
@@ -916,6 +989,11 @@ vantage.film.render.render_film(project, out_dir, *, only=None, release=False, p
 vantage.film.loop.concat_hours(mp4: Path, hours: float, out_dir: Path) -> Path   # stream copy; FAT32 guard
 vantage.film.render.check_seam(plan, film) -> None                          # loop: frame(N) == frame(0)
 vantage.film.render.film_jobs(n: int) -> int                                # worker processes for n films (VANTAGE_FILM_JOBS)
+vantage.film.tracks.write_tracks(plan: FilmPlan, stem: Path) -> list[Path]   # <stem>.vtt .srt .chapters.vtt .txt
+vantage.film.tracks.to_vtt(plan) / to_srt(plan) / to_chapters_vtt(plan) / to_ffmetadata(plan) / to_transcript(plan) -> str
+vantage.film.tracks.embed(mp4: Path, plan: FilmPlan) -> None                # stream-copy remux in place (mov_text + chapters)
+vantage.film.tracks.Tracks(fps, enabled=True)                               # plan time: .cue / .chapter / .line → .record(frames, …)
+vantage.film.tracks.iso639_2(lang) -> str                                   # 'en' → 'eng', else 'und'
 vantage.film.storyboard.write_storyboard(plan: FilmPlan, frame_fn: Callable[[int], ndarray],
                                          facts: Mapping[str, Mapping], out: Path) -> Path
 vantage.film.plan.resolve_films(project: Project) -> dict[str, FilmDef]     # enabled films, settings merged

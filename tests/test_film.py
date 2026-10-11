@@ -154,10 +154,14 @@ def test_render_film_without_vertical_removes_stale_cut(tmp_path, monkeypatch):
     assert [f.name for f in render_film(project, out)] == ["tiny-site-16x9.mp4"]
     assert sorted(p.name for p in out.iterdir()) == [
         "tiny-site-16x9-web.mp4",
+        "tiny-site-16x9.chapters.vtt",
         "tiny-site-16x9.jpg",
         "tiny-site-16x9.mp4",
         "tiny-site-16x9.plan.json",
+        "tiny-site-16x9.srt",
         "tiny-site-16x9.storyboard.jpg",
+        "tiny-site-16x9.txt",
+        "tiny-site-16x9.vtt",
     ]
 
 
@@ -175,13 +179,17 @@ def test_render_film_is_reproducible_and_never_leaves_partial_mp4s(tmp_path, mon
     # Packaging ships every film/*.mp4: only finished films may match, and they are byte-identical.
     assert sorted(p.name for p in second.iterdir()) == [
         "tiny-site-16x9-web.mp4",
+        "tiny-site-16x9.chapters.vtt",
         "tiny-site-16x9.jpg",
         "tiny-site-16x9.mp4",
         "tiny-site-16x9.plan.json",
+        "tiny-site-16x9.srt",
         "tiny-site-16x9.storyboard.jpg",
+        "tiny-site-16x9.txt",
+        "tiny-site-16x9.vtt",
     ]
-    for name in ("tiny-site-16x9.mp4", "tiny-site-16x9-web.mp4", "tiny-site-16x9.jpg"):
-        assert (first / name).read_bytes() == (second / name).read_bytes()
+    for path in sorted(first.iterdir()):  # films (with their embedded tracks), sidecars, plan, storyboard
+        assert path.read_bytes() == (second / path.name).read_bytes(), path.name
 
 
 @pytest.mark.parametrize(

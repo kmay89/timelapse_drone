@@ -11,8 +11,8 @@ dist/<slug>/HOW-TO-VIEW.txt  SHA256SUMS  build.json
 Films already rendered into dist/<slug>/film are checked against the plans the current YAML, masters
 and facts would make (film/plan.py `film_records`): a release refuses any problem, a draft package
 logs them (a film's -web.mp4 is checked against its render record like the film itself).
-build.json records every film plan; SHA256SUMS lists each film and its -web.mp4 with its plan.json
-and storyboard. Only the top level of film/ ships: film/usb/ (a loop film repeated for a TV's USB
+build.json records every film plan; SHA256SUMS lists each film and its -web.mp4 with its plan.json,
+storyboard and tracks (.vtt, .srt, .chapters.vtt, .txt). Only the top level of film/ ships: film/usb/ (a loop film repeated for a TV's USB
 player, film/loop.py) is never packaged, listed or hosted.
 """
 
@@ -310,9 +310,16 @@ def _offline_zip(project: Project, site: Path, story: dict[str, Any], theme: str
 
 
 def _how_to_view(
-    story: dict[str, Any], files: dict[str, Path], films: list[Path], out: Path, loops: Collection[str] = ()
+    story: dict[str, Any],
+    files: dict[str, Path],
+    films: list[Path],
+    out: Path,
+    loops: Collection[str] = (),
+    *,
+    tracks: bool = False,
 ) -> Path:
-    """Plain-language instructions that travel with the files (`loops`: the file names of loop films)."""
+    """Plain-language instructions that travel with the files (`loops`: the file names of loop films;
+    `tracks`: the films come with caption, chapter and transcript files)."""
     meta = story["meta"]
 
     def size(p: Path) -> str:
@@ -359,9 +366,14 @@ def _how_to_view(
             lines += ["", heading]
             section = heading
         lines.append(f"  {name:<{width}}  {sizes[name]:>8}  {what}")
-    if "lite" in files:
+        if "lite" in files and name == files["lite"].name:  # the note belongs to the lite edition
+            lines.append(
+                "  (On an iPhone the file opens as a preview: scroll to read; the link above is the full story.)"
+            )
+    if tracks:
         lines.append(
-            "  (On an iPhone the file opens as a preview: scroll to read; the link above is the full story.)"
+            "  Captions (.srt, .vtt) and a timed text transcript (.txt) come with each film; the films have "
+            "no sound."
         )
     lines += [
         "",
@@ -426,8 +438,11 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
         loops = set()
     if not films and project.config.output.film.enabled:
         log.warn(f"no films in {film_dir}; run `vantage film {project.slug}` to add them")
-    ledger = sorted([*film_dir.glob(f"*{PLAN_SUFFIX}"), *film_dir.glob(f"*{STORYBOARD_SUFFIX}")])
-    files["how_to_view"] = _how_to_view(story, files, films, dist_dir / "HOW-TO-VIEW.txt", loops)
+    tracks = sorted(p for pattern in ("*.vtt", "*.srt", "*.txt") for p in film_dir.glob(pattern))
+    ledger = sorted([*film_dir.glob(f"*{PLAN_SUFFIX}"), *film_dir.glob(f"*{STORYBOARD_SUFFIX}"), *tracks])
+    files["how_to_view"] = _how_to_view(
+        story, files, films, dist_dir / "HOW-TO-VIEW.txt", loops, tracks=bool(tracks)
+    )
     site_files = [p for p in site.rglob("*") if p.is_file()]
     for p in site_files:
         if p.stat().st_size > HOSTED_FILE_LIMIT:

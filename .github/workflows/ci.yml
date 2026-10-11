@@ -64,6 +64,7 @@ jobs:
                    film/demo-lakeside-16x9-web.mp4 film/demo-lakeside-9x16-web.mp4 \
                    film/demo-lakeside-16x9.plan.json film/demo-lakeside-9x16.plan.json \
                    film/demo-lakeside-16x9.storyboard.jpg film/demo-lakeside-9x16.storyboard.jpg \
+                   film/demo-lakeside-16x9.vtt film/demo-lakeside-16x9.txt \
                    HOW-TO-VIEW.txt build.json SHA256SUMS; do
             test -s "$f" || { echo "::error::missing dist/demo-lakeside/$f"; exit 1; }
           done

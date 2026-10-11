@@ -55,6 +55,7 @@ from vantage.film.layout import Layout, layout
 from vantage.film.plan import (
     FILM_RENDERER,
     GOP_BEATS,
+    HONESTY,
     LOOP_BEATS,
     SIMULATED_NOTE,
     FilmDef,
@@ -63,26 +64,21 @@ from vantage.film.plan import (
     encode_settings,
     fact_snapshot,
     film_size,
+    has_tracks,
+    honesty_line,
+    said,
 )
 from vantage.film.safety import IMAGES, check_plan, surface_dip
+from vantage.film.tracks import Tracks, iso639_2, plain_markdown, sentence, track_facts
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
 from vantage.site.render import capture_label as date_label
 
-HONESTY = {
-    "photo": "Every frame is made from real aerial photographs. No in-between images are invented.",
-    "simulated": "Every frame is made from the simulated flights. No in-between images are invented.",
-}
 LEAD_RE = re.compile(r"^\s*\*\*(.+?)\*\*", re.S)
 MARGIN = 0.06  # subject margin, as a share of the crop width
 SOFT = 1.25  # output px per master px beyond which a push is "soft"
 MIN_ZOOM, MIN_SHIFT = 1.08, 0.03  # below both, a clamped push becomes a still step
 Cam = tuple[float, float, float]
-
-
-def honesty_line(provenance: Sequence[str]) -> str:
-    """The end card's honesty line, derived from the plan's provenance."""
-    return HONESTY["simulated" if "simulated" in provenance else "photo"]
 
 
 def lead_words(step: Step) -> tuple[str | None, str | None]:
@@ -172,6 +168,8 @@ class _Capture:
     label: str
     label_facts: list[str]
     index: int  # in the vantage's (non-excluded) captures
+    note: str | None = None  # captures[].note as printed (tracks only: captions and transcript)
+    note_facts: list[str] = field(default_factory=list)
     step: Step | None = None
     step_index: int | None = None
     subjects: list[Hotspot] = field(default_factory=list)
@@ -236,10 +234,13 @@ class _Captures:
         out = []
         for i, c in enumerate(caps):
             say = _Printer(self.project, self.warnings)
-            note = self.notes.get(c.date)
-            label = say(note.label if note else None, f"captures {c.date} label")
+            entry = self.notes.get(c.date)
+            label = say(entry.label if entry else None, f"captures {c.date} label")
             label = label or date_label(c.date, day=months[c.date[:7]] > 1)
-            out.append(_Capture(c.date, c.file, label, list(say.facts), i))
+            note, note_facts = said(
+                self.project, entry.note if entry else None, f"captures {c.date} note", self.warnings
+            )
+            out.append(_Capture(c.date, c.file, label, list(say.facts), i, note, note_facts))
         return out
 
 
@@ -453,9 +454,19 @@ class _Builder:
     shots: list[dict[str, Any]] = field(default_factory=list)
     f: int = 0  # the next shot's first frame (always on the grid)
     camera: _Camera = field(default_factory=_Camera)
+    tracks: Tracks = field(default_factory=lambda: Tracks(1, enabled=False))
 
     def say(self) -> _Printer:
         return _Printer(self.project, self.warnings)
+
+    def said(self, raw: str | None, where: str) -> tuple[str | None, list[str]]:
+        """(raw text printed through the facts, its fact ids), or (None, []) without it."""
+        return said(self.project, raw, where, self.warnings) if raw else (None, [])
+
+    def step_text(self, step: Step | None, where: str) -> tuple[str | None, list[str]]:
+        """A step's full text as plain text (tracks only), printed through the facts."""
+        text, facts = self.said(step.text if step else None, f"{where} text")
+        return (plain_markdown(text) or None, facts) if text else (None, [])
 
     def add(self, shot: dict[str, Any], beats: int) -> dict[str, Any]:
         shot["f0"], shot["f1"] = self.f, self.f + beats * self.grid.fpb
@@ -501,15 +512,19 @@ class _Builder:
 def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> dict[str, Any]:
     project, cfg = b.project, b.project.config
     hero = next((ch for ch in project.story.chapters if isinstance(ch, HeroChapter)), None)
-    say = b.say()
-    kicker = say(hero.kicker, "hero kicker") if hero and hero.kicker else None
-    kicker = kicker or say(cfg.kicker, "project.yaml kicker")
+    kicker, kicker_facts = b.said(hero.kicker if hero else None, "hero kicker")
+    if not kicker:
+        kicker, kicker_facts = b.said(cfg.kicker, "project.yaml kicker")
     if not kicker:
         place = cfg.location.name if cfg.location else None
         years = "–".join(dict.fromkeys((dates[0][:4], dates[-1][:4])))
         kicker = " · ".join(filter(None, (place, years)))
-    title = say(hero.title, "hero title") if hero and hero.title else None
-    title = title or say(cfg.title, "project.yaml title") or ""
+    title, title_facts = b.said(hero.title if hero else None, "hero title")
+    if not title:
+        title, title_facts = b.said(cfg.title, "project.yaml title")
+    title = title or ""
+    say = b.say()
+    say.add([*kicker_facts, *title_facts])
     B, third = b.grid.fpb, b.grid.third
     f0 = b.f  # 0, or the end of a loop's rise
     shot = {
@@ -527,6 +542,12 @@ def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> di
     }
     b.add(shot, b.film.title_beats)
     shot["key"] = min(shot["f1"] - third - 1, f0 + 2 * B + third)
+    b.tracks.cue(f0, title or kicker, title_facts if title else kicker_facts)
+    b.tracks.line(
+        f0,
+        f"Title over the {cap.label} view: {sentence(kicker, title)}",
+        [*kicker_facts, *title_facts, *cap.label_facts],
+    )
     return shot
 
 
@@ -602,9 +623,13 @@ def _push(
 
 
 def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, name: str, vid: str):
+    k, k_facts = b.said(kicker, f"chapter {chapter!r} kicker")
+    t, t_facts = b.said(title, f"chapter {chapter!r} title")
+    if not t:
+        t, t_facts = b.said(name, f"vantage {vid} name")
+    t = t or name
     say = b.say()
-    k = say(kicker, f"chapter {chapter!r} kicker") if kicker else None
-    t = (say(title, f"chapter {chapter!r} title") if title else None) or name
+    say.add([*k_facts, *t_facts])
     n = sum(s["kind"] == "card" for s in b.shots) + 1
     dip = b.dip("night")
     card = b.add(
@@ -620,6 +645,9 @@ def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | Non
         4,
     )
     card["key"] = card["f0"] + 2 * b.grid.fpb
+    start = card["f0"] + dip // 2
+    b.tracks.cue(start, t, t_facts)
+    b.tracks.line(start, f"Chapter card: {sentence(k, t)}", [*k_facts, *t_facts])
     return card
 
 
@@ -701,7 +729,12 @@ def derive_cut(
                 else []
             )
             if items:
-                parts.append(("stats", (ids[i], ch.surface or "paper", items)))
+                heading, heading_facts = said(project, ch.title, f"chapter {ids[i]!r} title", warnings)
+                if not heading:
+                    heading, heading_facts = said(project, ch.kicker, f"chapter {ids[i]!r} kicker", warnings)
+                parts.append(
+                    ("stats", (ids[i], ch.surface or "paper", items, heading or "Figures", heading_facts))
+                )
 
     # Degrade on the main vantage's captures (after exclusions).
     main = main_vantage(project, index)
@@ -736,6 +769,7 @@ def derive_cut(
     total_images = sum(len(p.captures) if isinstance(p, _Series) else 1 for p in images)
 
     b = _Builder(project, film, grid, lay, warnings, paper_dip)
+    b.tracks = Tracks(fps, enabled=has_tracks(film, settings))
     for part in images:
         geo = part.geometry
         if geo.s0 > film.max_upscale + 1e-9:
@@ -760,6 +794,7 @@ def derive_cut(
     pushed: Cam | None = None  # the previous capture's push target, still held
     last_vantage = first.vantage
     for kind, part in parts:
+        part_f0 = b.f  # the chapter (in the tracks) starts with the card that introduces it
         if kind in ("series", "curtain") and part.vantage != last_vantage:
             if b.prev is not None and b.prev["kind"] in IMAGES:
                 cam.until(b.f + b.dip("night"))
@@ -770,6 +805,10 @@ def derive_cut(
             series_no += 1
             rest = b.rest(s)
             zmax = s.geometry.zmax(film.max_upscale)
+            vname, vname_facts = b.said(s.name, f"vantage {s.vantage} name")
+            vname = vname or caps.index.vantages[s.vantage].name
+            heading, heading_facts = b.said(s.title, f"chapter {s.chapter!r} title")
+            b.tracks.chapter(part_f0, heading or vname, heading_facts if heading else vname_facts)
             for cap in s.captures:
                 n += 1
                 f0 = b.f
@@ -828,12 +867,14 @@ def derive_cut(
                     shot["key"] = f1 - 1
                 if cap.file not in hashes:
                     hashes[cap.file] = _sha256(project.masters_dir / cap.file)
+                _capture_tracks(b, shot, cap, s, vname, vname_facts, first=cap is s.captures[0])
             last_vantage = s.vantage
         elif kind == "curtain":
-            pushed = _curtain_shot(b, part, fonts, hashes)
+            pushed = _curtain_shot(b, part, fonts, hashes, part_f0)
             last_vantage = part.vantage
         else:
-            cid, surface, items = part
+            cid, surface, items, heading, heading_facts = part
+            b.tracks.chapter(part_f0, heading, heading_facts)
             for item in items:
                 dip = b.dip(surface)
                 if b.prev is not None and b.prev["kind"] in IMAGES:
@@ -861,6 +902,13 @@ def derive_cut(
                     4,
                 )
                 shot["key"] = shot["f0"] + 3 * B
+                start = shot["f0"] + dip // 2
+                b.tracks.cue(
+                    start, " ".join(filter(None, (item["value"], item["unit"], item["label"]))), item["facts"]
+                )
+                figure = " ".join(filter(None, (item["value"], item["unit"])))
+                source = f" (source: {item['source']})" if item["source"] else ""
+                b.tracks.line(start, f"Figure: {figure} {item['label']}{source}.", item["facts"])
             pushed = None
 
     # End card.
@@ -907,11 +955,17 @@ def derive_cut(
         end_beats,
     )
     end["key"] = min(end["f1"] - 1, end["f0"] + dip + 2 * B)
+    credit, credit_facts = b.said(brand.credit_line, "brand.yaml credit_line")
+    b.tracks.chapter(end["f0"], "Credits")
+    b.tracks.cue(end["f0"] + dip // 2, credit or brand.name, credit_facts)
+    b.tracks.line(end["f0"] + dip // 2, "End card: " + " / ".join(t["text"] for t in lines), say.facts)
     if film.loop:  # back to pure night: frame N is frame 0
         back = b.add({"id": "D1", "kind": "dip", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["dip"])
         back["key"] = back["f0"] + B
     frames = b.f
     cam.until(frames)
+    head, head_facts = b.said(cfg.title, "project.yaml title")
+    subtitle, subtitle_facts = b.said(cfg.subtitle, "project.yaml subtitle")
 
     masters: dict[str, Any] = {}
     for shot in b.shots:
@@ -952,22 +1006,56 @@ def derive_cut(
         },
         "camera": cam.windows,
         "shots": b.shots,
-        "captions": [],
-        "chapters": [],
+        **b.tracks.record(
+            frames, title=head, subtitle=subtitle, honesty=honesty, facts=[*head_facts, *subtitle_facts]
+        ),
         "poster": poster_shot["f1"] - 1 if poster_shot else b.shots[0]["key"],
     }
     check_plan(plan)
-    used = sorted({f for shot in b.shots for f in shot["facts"]})
+    used = sorted({f for shot in b.shots for f in shot["facts"]} | set(track_facts(plan)))
     return FilmPlan(
         id=film.id,
         plan=plan,
         facts=fact_snapshot(project, used),
         warnings=warnings,
-        encode=encode_settings(film, settings, frames, fps, fast=fast, fpb=B),
+        encode=encode_settings(film, settings, frames, fps, fast=fast, fpb=B, lang=iso639_2(cfg.lang)),
     )
 
 
-def _curtain_shot(b: _Builder, c: _Curtain, fonts: dict[str, Any], hashes: dict[str, str]) -> Cam | None:
+def _capture_tracks(
+    b: _Builder,
+    shot: dict[str, Any],
+    cap: _Capture,
+    s: _Series,
+    vname: str,
+    vname_facts: Sequence[str],
+    *,
+    first: bool,
+) -> None:
+    """A capture's caption cue ('<label>. <words>', plus its note when that still reads at 17
+    characters per second) and transcript line (the step's full text, else the note)."""
+    d = shot["dissolve"]
+    start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
+    step = shot["step"]
+    words = step["words"] if step else None
+    words_facts: list[str] = []
+    if words and cap.step is not None:
+        raw, _ = lead_words(cap.step)
+        _, words_facts = b.said(raw, f"chapter {s.chapter!r} step {cap.step_index} film words")
+    base = sentence(cap.label, words)
+    base_facts = [*cap.label_facts, *words_facts]
+    more = (sentence(base, cap.note), [*base_facts, *cap.note_facts]) if cap.note else None
+    b.tracks.cue(start, base, base_facts, more)
+    text, text_facts = b.step_text(cap.step, f"chapter {s.chapter!r} step {cap.step_index}")
+    body, body_facts = (text, text_facts) if text else (cap.note, cap.note_facts)
+    lead = f"Aerial view ({vname}), {cap.label}" if first else f"Same view, {cap.label}"
+    facts = [*cap.label_facts, *body_facts, *(vname_facts if first else ())]
+    b.tracks.line(start, f"{lead}: {body}" if body else f"{lead}.", facts)
+
+
+def _curtain_shot(
+    b: _Builder, c: _Curtain, fonts: dict[str, Any], hashes: dict[str, str], part_f0: int | None = None
+) -> Cam | None:
     """The curtain of a compare chapter: an entry beat at split 0, then 2 beats of sweep and 2 of hold
     per step with a split. Before is left of the rule, after right of it. Returns the camera target
     it ends on when that is not the rest camera."""
@@ -997,6 +1085,7 @@ def _curtain_shot(b: _Builder, c: _Curtain, fonts: dict[str, Any], hashes: dict[
             say.add(cap.label_facts)
         labels.append(label)
     before_label, after_label = labels
+    label_facts = list(say.facts)
     zmax = c.geometry.zmax(film.max_upscale)
     keys: list[dict[str, Any]] = [{"a": f0, "b": f0 + B, "split": 0.0}]
     steps: list[dict[str, Any]] = []
@@ -1068,10 +1157,38 @@ def _curtain_shot(b: _Builder, c: _Curtain, fonts: dict[str, Any], hashes: dict[
     )
     best = min(range(len(steps)), key=lambda s: abs(steps[s]["split"] - 0.5))
     shot["key"] = keys[best + 1]["a"] + B
+    _curtain_tracks(b, c, shot, label_facts, f0 if part_f0 is None else part_f0)
     for file in (c.before.file, c.after.file):
         if file not in hashes:
             hashes[file] = _sha256(project.masters_dir / file)
     return None if target == rest else target
+
+
+def _curtain_tracks(
+    b: _Builder, c: _Curtain, shot: dict[str, Any], label_facts: Sequence[str], part_f0: int
+) -> None:
+    """A curtain's chapter (the compare title), one caption cue per step ('<before> / <after>: <step
+    text>' when that reads at 17 characters per second, else '<before> / <after>') and one
+    transcript line describing the split and where the line moves."""
+    before, after = shot["labels"]
+    d = shot["dissolve"]
+    start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
+    where = f"chapter {c.chapter!r}"
+    vname, vname_facts = b.said(c.name, f"vantage {c.vantage} name")
+    vname = vname or c.name
+    heading, heading_facts = b.said(c.title, f"{where} title")
+    b.tracks.chapter(part_f0, heading or f"{before} / {after}", heading_facts if heading else label_facts)
+    pair = f"{before} / {after}"
+    describe = f"Split screen ({vname}), {before} left and {after} right."
+    facts = [*vname_facts, *label_facts]
+    for k, ((j, step, split), record) in enumerate(zip(c.steps, shot["steps"], strict=True)):
+        text, text_facts = b.step_text(step, f"{where} step {j}")
+        more = (f"{pair}: {text}", [*label_facts, *text_facts]) if text else None
+        b.tracks.cue(start if k == 0 else record["f0"], pair, label_facts, more)
+        moves = "The line moves to" if k == 0 else "Then to"
+        describe += f" {moves} {round(split * 100)}%" + (f": {text}" if text else ".")
+        facts += text_facts
+    b.tracks.line(start, describe, facts)
 
 
 __all__ = [
