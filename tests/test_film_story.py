@@ -960,7 +960,7 @@ def test_gate_hints_at_vantage_fast(tmp_path, monkeypatch):
 
 @pytest.mark.slow
 def test_demo_story_cut(tmp_path):
-    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 62 beats,
+    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 90 beats,
     the Demolition push frames the slide tower in 16:9 and keeps its reach in 9:16, and the stats
     print exactly the three figures the cut chooses."""
     import shutil
@@ -991,7 +991,7 @@ def test_demo_story_cut(tmp_path):
     assert tower.id == "slide-tower"
     for fid, plan in plans.items():
         p = plan.plan
-        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 62, "9x16": 60}[fid], (fid, p["grid"])
+        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 90, "9x16": 88}[fid], (fid, p["grid"])
         check_plan(p)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
         step = shot["step"]

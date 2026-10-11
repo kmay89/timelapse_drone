@@ -582,7 +582,7 @@ Shots come from the chapters in scope, in story order: the first hero → title;
 a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots; then
 the end card. Gallery, explore, text, timeline and video chapters are not used. A film with no scrub
 or compare chapter in scope plays the main vantage's captures as one quiet series. For the demo
-the 16:9 cut is 62 beats (37.2 s at 100 bpm) and the 9:16 cut 60 beats (its narrower crop clamps
+the 16:9 cut is 90 beats (54 s at 100 bpm) and the 9:16 cut 88 beats (its narrower crop clamps
 two pushes), with or without VANTAGE_FAST.
 
 - **title** (at least `title_beats`, 4): the first image (the first series capture, else the first
