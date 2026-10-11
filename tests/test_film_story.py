@@ -586,7 +586,11 @@ def _split(shot: dict[str, Any], f: int) -> float:
 
 
 def test_curtain_split_halves(tmp_path):
-    project = tiny(tmp_path / "p", chapters=[COMPARE], simulated=True)
+    quiet = {
+        **COMPARE,
+        "steps": [{"text": "Half and half, and a sentence too long for the screen.", "split": 0.5}],
+    }
+    project = tiny(tmp_path / "p", chapters=[quiet], simulated=True)
     plan = _plan(project)
     shots = plan.plan["shots"]
     assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "curtain", "end", "end"]
@@ -616,6 +620,25 @@ def test_curtain_split_halves(tmp_path):
             if k not in shown[side]:
                 assert cut._reveal(curtain, side, k) == 0.0
     assert min(shown[0]) > curtain["keys"][0]["b"]  # before is hidden at split 0, then revealed
+
+
+def test_curtain_words_fall_back_like_scrub_steps(tmp_path):
+    """A compare step puts words on screen without film.line: its **bold** lead, else its first
+    sentence when that prints at most 40 characters; a longer one stays off screen."""
+    steps = [
+        {"text": "**Then.** The lot, all of it.", "split": 0.8},
+        {"text": "The pool is the beach now. It kept its outline.", "split": 0.5},
+        {"text": "A first sentence far too long to put on the screen of a phone.", "split": 0.2},
+        {"text": "Half and half.", "split": 0.4, "film": {"line": "Our words."}},
+    ]
+    p = _plan(tiny(tmp_path / "p", chapters=[{**COMPARE, "steps": steps}])).plan
+    curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
+    assert [(s["words"], s["words_from"]) for s in curtain["steps"]] == [
+        ("Then.", "lead"),
+        ("The pool is the beach now.", "sentence"),
+        (None, None),
+        ("Our words.", "film.line"),
+    ]
 
 
 def test_curtain_entry_without_jump(tmp_path):

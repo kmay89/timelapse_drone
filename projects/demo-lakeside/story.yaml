@@ -145,6 +145,7 @@ chapters:
         split: 0.85
       - text: The fan of the wave pool survives as the outline of the beach.
         split: 0.5
+        film: { line: The pool became the beach. }
         focus: [0.44, 0.46, 1.7]
       - text: The new park, in its first late summer.
         split: 0.12

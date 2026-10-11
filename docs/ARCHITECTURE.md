@@ -624,8 +624,9 @@ two pushes), with or without VANTAGE_FAST.
     0.5): 2 beats of smoothstep sweep to the split, then 2 beats of hold. `keys` holds the hold
     windows in frames, eased by `keyed` exactly like the camera. A step's focus is clamped like a push
     (no subject recentring) and eases in over the sweep.
-  - Words: only `film.line` goes on screen (landing on the sweep's downbeat, out at the next sweep);
-    the full step text is for the tracks.
+  - Words (landing on the sweep's downbeat, out at the next sweep): `film.line`, else the step's
+    `**bold**` lead, else its first sentence when that prints at most 40 characters
+    (`story.curtain_words`), so the centrepiece is not silent; the full step text is for the tracks.
   - Labels: `before_label` / `after_label` (else the capture labels) at the top-left and top-right,
     44 units, shrunk (`label_scale`) so each fits between its text edge and a rule at the centre, and
     set under the tag when the tag is top-right (`label_top`). `label_ink` holds the inner ink edges
@@ -886,7 +887,7 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
   [before, after], `label_scale`, `label_top` (cap-top px), `label_ink` [right edge of the before
   label, left edge of the after label] (px), `reveal` [[[f0, f1], …] per label], `dissolve` (as a
   capture's, or null), `from_after`, `keys` [{a, b, split}], `steps` [{index, split, f0 (sweep start),
-  words, words_from: film.line | null, land, focus_requested, and when focused: focus, target,
+  words, words_from: film.line | lead | sentence | null, land, focus_requested, and when focused: focus, target,
   subjects, z_eff, upscale, push, reason}]. Text roles `before`, `after`, `words`.
 - `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper), `dip`, `land` (the
   frame the figure starts to slide in), `text_in` (the frame unit, label and source fade in). Text roles

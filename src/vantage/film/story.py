@@ -35,7 +35,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -71,6 +71,7 @@ from vantage.film.safety import IMAGES, check_plan, surface_dip
 from vantage.film.tracks import Tracks, cue_frames, iso639_2, plain_markdown, sentence, track_facts
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
+from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
 
 LEAD_RE = re.compile(r"^\s*\*\*(.+?)\*\*", re.S)
@@ -85,6 +86,23 @@ def lead_words(step: Step) -> tuple[str | None, str | None]:
         return step.film.line, "film.line"
     m = LEAD_RE.match(step.text)
     return (m.group(1).strip(), "lead") if m else (None, None)
+
+
+FIRST_SENTENCE_RE = re.compile(r"^\s*([^.!?]+[.!?])(?:\s|$)")
+CURTAIN_SENTENCE_MAX = 40  # characters: a compare step's first sentence goes on screen up to this
+
+
+def curtain_words(step: Step, measure: Callable[[str], int] = len) -> tuple[str | None, str | None]:
+    """(raw words, 'film.line' | 'lead' | 'sentence') a compare step puts on screen: film.line,
+    else its **bold** lead, else its first sentence when that prints at most 40 characters
+    (`measure`: the printed length of a raw text, its facts resolved)."""
+    raw, source = lead_words(step)
+    if raw:
+        return raw, source
+    m = FIRST_SENTENCE_RE.match(step.text.replace("\n", " "))
+    if m and measure(m.group(1)) <= CURTAIN_SENTENCE_MAX and "**" not in m.group(1):
+        return m.group(1).strip(), "sentence"
+    return None, None
 
 
 # --------------------------------------------------------------------------- #
@@ -1237,10 +1255,12 @@ def _curtain_shot(
         record: dict[str, Any] = {"index": j, "split": split, "f0": t, "words": None, "words_from": None}
         target = rest
         if step is not None:
-            line = step.film.line if step.film and step.film.line else None
+            line, line_from = curtain_words(
+                step, lambda t: len(FactNotes(project.facts.facts).plain(t) or "")
+            )
             words = say(line, f"{where} step {j} film words") if line else None
             if words:
-                record.update(words=words, words_from="film.line", land=t)
+                record.update(words=words, words_from=line_from, land=t)
             requested = step.film.focus if step.film and step.film.focus else step.focus
             record["focus_requested"] = list(requested) if requested else None
             if requested:
