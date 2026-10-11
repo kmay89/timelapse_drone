@@ -38,7 +38,7 @@ from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
 
-FILM_RENDERER = {"classic": 1, "story": 5}  # bumped when frame(i) changes for an equal plan
+FILM_RENDERER = {"classic": 1, "story": 6}  # bumped when frame(i) changes for an equal plan
 FAST_LONG_EDGE = 960
 WEB_LIMIT = 25 * 1024 * 1024  # bytes: the largest file static hosts serve (Cloudflare Pages)
 WEB_MAXRATE_CAP = 6_000_000  # bit/s
@@ -299,7 +299,7 @@ class FilmDef:
     bpm: float = 100.0
     chapters: str | tuple[str, ...] = "all"  # all | main | chapter ids
     stats: int = 3
-    stats_surface: Literal["night", "paper"] = "night"
+    stats_surface: Literal["night", "paper"] | None = None  # None: over a picture (the chapter tints)
     title_beats: int = 4
     end_beats: int = 6
     safe: tuple[float, float, float, float] | None = None  # None: the layout preset's

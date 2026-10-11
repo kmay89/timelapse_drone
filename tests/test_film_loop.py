@@ -245,8 +245,8 @@ def test_screen_prints_only_releasable_facts(tmp_path, monkeypatch):
 
 
 def test_loop_discloses_on_every_shot(tmp_path):
-    """A simulated loop keeps its 'Simulated imagery' tag on stats (paper) and the end card (night):
-    it has no end-card disclaimer and no tracks."""
+    """A simulated loop keeps its 'Simulated imagery' tag on stats (over a picture, like every image)
+    and the end card (night): it has no end-card disclaimer and no tracks."""
     root = tmp_path / "p"
     stats = {**STATS, "items": [STATS["items"][2]]}
     tiny(root, films=SCREEN, chapters=[stats], simulated=True)
@@ -257,7 +257,7 @@ def test_loop_discloses_on_every_shot(tmp_path):
     keys = {s["kind"]: s["key"] for s in plan.plan["shots"] if s["kind"] in ("stat", "end")}
     assert set(keys) == {"stat", "end"}
     tagged = {kind: cut.frame_at(k) for kind, k in keys.items()}
-    cut.tag_on_paper = None  # what the stat and end card looked like before
+    cut.tag = cut.tag_on_paper = None  # the same frames without the tag
     for kind, k in keys.items():
         diff = np.abs(tagged[kind].astype(int) - cut.frame_at(k).astype(int)).sum(axis=2)
         ys, xs = np.nonzero(diff > 30)

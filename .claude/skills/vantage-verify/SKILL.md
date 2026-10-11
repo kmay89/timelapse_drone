@@ -74,8 +74,9 @@ with the Read tool and judge:
   `plan.json` warnings name clamped or soft pushes.
 - **Safe zones**: on 9:16 every word and the rail sit between 14 % and 72 % of the height, clear of the
   right edge; curtain labels never sit under the rule or the tag.
-- **Honesty**: the end card's honesty line matches the project (simulated or photographs), and the
-  stats print the fact text exactly, with a source.
+- **Honesty**: the honesty line (on the end card, or riding under the stats when the card would run
+  over 6 s) matches the project (simulated or photographs), and the stats print the fact text
+  exactly, with a source, over a picture whose panel keeps the words readable.
 
 For motion, extract a few frames from the MP4 (curtain sweep, stat entry, end dip) and look at them too.
 

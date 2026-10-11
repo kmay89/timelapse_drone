@@ -13,10 +13,13 @@ Every typeset layer's ink box (with its rise travel) is kept in `ink` for plan.j
 
 Curtains split two warps of the same camera at the rule (before left, after right) under a 3-unit
 accent rule and grip; their labels are clipped to their own side and shown only inside the plan's
-reveal intervals. Stats set the plan's figure on a fixed digit advance, one layer per glyph sliding
-into a mask. Cards, stats and the end card dip to and from their surface in display gamma, like the
-classic cut. Every image pixel is a crop, a dissolve, a curtain split or a dip of registered masters;
-text, scrims and the rail are overlays.
+reveal intervals. A run of stats is set once (`stat_run`, shared with film/story.py): each figure on
+a fixed digit advance, one layer per glyph sliding into a mask, over a picture under one panel in
+the run's tint whose opacity is measured so the text keeps STAT_CONTRAST over the picture along the
+camera path (`scrims`, for plan.json `checks`); consecutive stats crossfade their text only. Cards,
+plain stat cards and the end card dip to and from their surface in display gamma, like the classic
+cut. Every image pixel is a crop, a dissolve, a curtain split or a dip of registered masters; text,
+scrims, panels and the rail are overlays.
 
 Loop films rise from pure night (frame 0 is a night fill) onto the title's image while the first
 series' rail sweeps its knob back to tick 0 (the rail then stays through the title into the first
@@ -62,9 +65,17 @@ HONESTY = _Style("text", 38, 400, alpha=0.92, leading=1.35)
 FINE = _Style("text", 27, 400, alpha=0.62, leading=1.4)
 CURTAIN_LABEL = _Style("numeric", 44, 600, tracking=0.06, upper=True)
 STAT_VALUE = _Style("numeric", 220, 500, "ink")
-STAT_UNIT = _Style("text", 220 * 0.35, 500, "ink", alpha=0.8)
-STAT_LABEL = _Style("text", 44, 400, "ink", alpha=0.92, leading=1.3)
-STAT_SOURCE = _Style("text", 26, 400, "ink", alpha=0.62)
+STAT_UNIT = _Style("text", 220 * 0.35, 500, "ink")
+# A stat's label, its source and the honesty line riding under a stat run, in units, by the film's
+# orientation: a portrait film is read on a phone in the hand, so its words are half as large again
+# (a 9:16 label's x-height is 44 px at 1080 wide, its source's 30 px). All fully opaque: their
+# contrast over the panel is measured, not left to an alpha.
+STAT_TYPE = {"landscape": (52.0, 34.0, 30.0), "portrait": (86.0, 58.0, 38.0)}
+STAT_LABEL = _Style("text", 52, 400, "ink", leading=1.22)
+STAT_SOURCE = _Style("text", 34, 400, "ink")
+RIDE = _Style("text", 30, 400, "ink", leading=1.3)
+STAT_CONTRAST = 7.0  # WCAG 1.4.3 asks 4.5:1 of small text (7:1 at AAA): the panel is measured to this
+PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 sigma clear of the ink
 END_STYLES = {
     "brand": BRAND, "credit": CREDIT, "role": ROLE, "partner": PARTNER, "link": LINK, "url": URL,
     "honesty": HONESTY, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
@@ -74,6 +85,193 @@ KNOB = 8.5  # units: the rail knob's radius with its ring (the rail's ends are i
 LRU = 4  # masters kept decoded (a dissolve needs two)
 
 Items = Sequence[tuple[float, float, str, _Style, str]]  # x, baseline y, text, style, align (l|r|c)
+
+
+# --------------------------------------------------------------------------- #
+# Stat runs: where a run of stats sets its text (shared with film/story.py, which frames its pushes
+# clear of it)
+# --------------------------------------------------------------------------- #
+
+
+Box4 = tuple[float, float, float, float]  # x0, y0, x1, y1 in px
+
+
+@dataclasses.dataclass(frozen=True)
+class StatSet:
+    """One stat's text as set in a run: styles, baselines (px) and its ink box."""
+
+    value: _Style
+    unit: _Style
+    label: _Style
+    source: _Style
+    base: float  # the figure's baseline
+    label_lines: tuple[str, ...]
+    label_bases: tuple[float, ...]
+    source_text: str | None
+    source_base: float
+    box: Box4
+
+
+@dataclasses.dataclass(frozen=True)
+class StatRun:
+    """A run of stats in one place ('low': resting on the safe bottom, or above the tag in 9:16;
+    'high': hanging from the label line, or under a top-right tag), with the honesty line under
+    the stats when it rides along (`ride`). `box` holds every ink of the run, `blocks` the stats'."""
+
+    place: str
+    sets: tuple[StatSet, ...]
+    ride: _Style
+    ride_lines: tuple[str, ...]
+    ride_bases: tuple[float, ...]
+    box: Box4
+    blocks: Box4
+
+
+def stat_type(lay: Layout) -> tuple[float, float, float]:
+    """(label, source, ride) sizes in units for a layout's orientation."""
+    return STAT_TYPE["portrait" if lay.height > lay.width else "landscape"]
+
+
+def stat_values(
+    t: _Type, lay: Layout, value: str, unit: str | None, scale: float = 1.0
+) -> tuple[_Style, _Style]:
+    """The figure's and unit's styles, shrunk so figure + unit fit between the margins."""
+    value_s = dataclasses.replace(STAT_VALUE, size=STAT_VALUE.size * scale)
+    unit_s = dataclasses.replace(STAT_UNIT, size=STAT_UNIT.size * scale)
+    total = sum(stat_advances(t, value_s, value))
+    if unit:
+        total += 0.18 * value_s.size * t.unit + t.width(unit, unit_s)
+    if total > lay.text_width:
+        k = lay.text_width / total * 0.98
+        value_s = dataclasses.replace(value_s, size=value_s.size * k)
+        unit_s = dataclasses.replace(unit_s, size=unit_s.size * k)
+    return value_s, unit_s
+
+
+def stat_advances(t: _Type, style: _Style, value: str) -> list[float]:
+    """A fixed advance per digit (the widest digit's: tabular figures without raqm)."""
+    font = t.font(style)
+    digit = max(font.getlength(d) for d in "0123456789")
+    return [digit if c.isdigit() else font.getlength(c) for c in value]
+
+
+def _ink_y(t: _Type, style: _Style, text: str) -> tuple[float, float]:
+    """(top, bottom) of a line's ink relative to its baseline."""
+    box = t.font(style).getbbox(text.upper() if style.upper else text, anchor="ls")
+    return float(box[1]), float(box[3])
+
+
+def _cap_of(t: _Type, style: _Style) -> float:
+    return -t.font(style).getbbox("H", anchor="ls")[1]
+
+
+def stat_run(
+    t: _Type,
+    lay: Layout,
+    items: Sequence[dict[str, Any]],
+    honesty: str | None,
+    place: str,
+    tagged: bool,
+) -> StatRun:
+    """Where each stat of a run (items with value, unit, label, source) and the riding honesty line
+    sit. Every stat's block is aligned on the run's edge ('low': their bottoms on the line above the
+    honesty line; 'high': their figures' cap tops on one line), so one panel holds them all. Shrunk
+    (all sizes together) until the run fits between the safe top and bottom."""
+    u = t.unit
+    size_l, size_s, size_r = stat_type(lay)
+    top_y, bottom_y = float(lay.top), float(lay.bottom)
+    tag_cap = _cap_of(t, TAG)
+    if tagged and lay.tag == "rail-right":  # the 9:16 tag sits right above the rail: stay above it
+        bottom_y = min(bottom_y, lay.rail_y - 18 * u - tag_cap - 26 * u)
+    if tagged and lay.tag == "top-right":  # like the curtain labels: under the tag
+        top_y = max(top_y, lay.label_top + tag_cap + 18 * u)
+    elif place == "high":
+        top_y = max(top_y, float(lay.label_top))
+    scale = 1.0
+    for _attempt in range(5):
+        label_s = dataclasses.replace(STAT_LABEL, size=size_l * scale)
+        source_s = dataclasses.replace(STAT_SOURCE, size=size_s * scale)
+        ride_s = dataclasses.replace(RIDE, size=size_r * scale)
+        rel: list[tuple[_Style, _Style, float, list[str], list[float], str | None, float, float, float]] = []
+        for item in items:
+            value_s, unit_s = stat_values(t, lay, item["value"], item.get("unit"), scale)
+            cap_v = _cap_of(t, value_s)
+            lines = t.wrap(item["label"], label_s, lay.text_width, balanced=True)
+            step = label_s.size * u * label_s.leading
+            first = 0.26 * value_s.size * u + _cap_of(t, label_s)
+            bases = [first + k * step for k in range(len(lines))]
+            bottom = bases[-1] + _ink_y(t, label_s, lines[-1])[1]
+            source = f"Source: {item['source']}" if item.get("source") else None
+            sbase = bases[-1]
+            if source:
+                sbase = bases[-1] + 0.8 * source_s.size * u + _cap_of(t, source_s)
+                bottom = sbase + _ink_y(t, source_s, source)[1]
+            rel.append((value_s, unit_s, cap_v, lines, bases, source, sbase, -cap_v, bottom))
+        ride_lines = t.wrap(honesty, ride_s, lay.text_width, balanced=True) if honesty else []
+        ride_step = ride_s.size * u * ride_s.leading
+        ride_cap = _cap_of(t, ride_s)
+        gap = max(30 * u, 1.1 * ride_s.size * u)
+        ride_h = (
+            (ride_cap + (len(ride_lines) - 1) * ride_step + _ink_y(t, ride_s, ride_lines[-1])[1])
+            if ride_lines
+            else 0.0
+        )
+        shifts: list[float] = []
+        if place == "low":
+            ride_top = bottom_y - ride_h
+            edge = ride_top - gap if ride_lines else bottom_y
+            shifts = [edge - r[8] for r in rel]
+        else:
+            shifts = [top_y + r[2] for r in rel]
+            ride_top = max(s + r[8] for s, r in zip(shifts, rel, strict=True)) + gap
+        tops = [s + r[7] for s, r in zip(shifts, rel, strict=True)]
+        bottoms = [s + r[8] for s, r in zip(shifts, rel, strict=True)]
+        run_top, run_bottom = min(tops), max(bottoms)
+        if ride_lines:
+            run_bottom = max(run_bottom, ride_top + ride_h)
+        over = max(0.0, top_y - run_top) + max(0.0, run_bottom - bottom_y)
+        if over <= 0.5 or _attempt == 4:
+            break
+        scale *= (run_bottom - run_top - over) / (run_bottom - run_top) * 0.98
+    sets = []
+    x0 = float(lay.margin)
+    right = x0
+    for (value_s, unit_s, _cap_v, lines, bases, source, sbase, rtop, rbottom), shift, item in zip(
+        rel, shifts, items, strict=True
+    ):
+        widths = [t.width(line, label_s) for line in lines]
+        fig = sum(stat_advances(t, value_s, item["value"]))
+        if item.get("unit"):
+            fig += 0.18 * value_s.size * u + t.width(item["unit"], unit_s)
+        if source:
+            widths.append(t.width(source, source_s))
+        x1 = x0 + max([fig, *widths])
+        right = max(right, x1)
+        box = (x0, shift + rtop, x1, shift + rbottom)
+        lines_at = tuple(b + shift for b in bases)
+        sets.append(
+            StatSet(
+                value_s, unit_s, label_s, source_s, shift, tuple(lines), lines_at, source, sbase + shift, box
+            )
+        )
+    ride_bases = tuple(ride_top + ride_cap + k * ride_step for k in range(len(ride_lines)))
+    blocks = (x0, min(s.box[1] for s in sets), right, max(s.box[3] for s in sets))
+    box = blocks
+    if ride_lines:
+        rw = max(t.width(line, ride_s) for line in ride_lines)
+        box = (x0, min(blocks[1], ride_top), max(right, x0 + rw), max(blocks[3], ride_top + ride_h))
+    return StatRun(place, tuple(sets), ride_s, tuple(ride_lines), ride_bases, box, blocks)
+
+
+def stat_subject_box(lay: Layout, run: StatRun) -> tuple[float, float, float, float]:
+    """Where a stat's push may put its hotspot (u0, u1, v0, v1 as frame fractions): inside the safe
+    zone and clear of the run's panel (above it when the run is low, below it when high)."""
+    W, H, u = lay.width, lay.height, lay.unit
+    pad = (PANEL_PAD + 24) * u
+    u0, u1 = lay.margin / W + 0.01, lay.right / W - 0.01
+    if run.place == "low":
+        return u0, u1, lay.top / H + 0.01, (run.box[1] - pad) / H
+    return u0, u1, (run.box[3] + pad) / H, lay.bottom / H - 0.01
 
 
 def _bar(frame: np.ndarray, x0: float, y0: float, x1: float, y1: float, color: Sequence[int], opacity=1.0):
@@ -234,11 +432,21 @@ class _Cut:
             self._note(note[0], note[1], bbox, rise)
         return _Layer.of(canvas, shadow=shadow, blur=blur * self.u), bbox
 
-    def _scrim(self, bbox: Sequence[float], alpha: float, rise: float = 0.0) -> _Layer:
-        """A feathered night box behind an ink box (grown by `rise` px downward for rising text)."""
+    def _scrim(
+        self,
+        bbox: Sequence[float],
+        alpha: float,
+        rise: float = 0.0,
+        *,
+        color: np.ndarray | None = None,
+        pad: tuple[float, float] = (26.0, 18.0),
+        sigma: float = 14.0,
+    ) -> _Layer:
+        """A feathered box (night, or `color`) behind an ink box (grown by `rise` px downward for
+        rising text); `pad` and `sigma` in units."""
         u = self.u
-        sigma = 14 * u
-        pad_x, pad_y = 26 * u, 18 * u
+        sigma = sigma * u
+        pad_x, pad_y = pad[0] * u, pad[1] * u
         x0, y0 = bbox[0] - pad_x, bbox[1] - pad_y
         x1, y1 = bbox[2] + pad_x, bbox[3] + pad_y + rise
         edge = math.ceil(3 * sigma)
@@ -248,7 +456,8 @@ class _Cut:
         mask[round(y0) - Y0 : round(y1) - Y0, round(x0) - X0 : round(x1) - X0] = 1.0
         mask = cv2.GaussianBlur(mask, (0, 0), sigma) * alpha
         a = np.ascontiguousarray(mask[..., None])
-        return _Layer(X0, Y0, np.ascontiguousarray(self.night * a), a)
+        tint = self.night if color is None else color
+        return _Layer(X0, Y0, np.ascontiguousarray(tint * a), a)
 
     def _tag(self, words: Sequence[str], tag: _Style = TAG, *, scrim: bool = True) -> _Layer | None:
         if not words:
@@ -311,7 +520,9 @@ class _Cut:
         self.curtain_words: dict[str, dict[int, int]] = {}
         self.curtain_keys: dict[str, tuple[list[Window], list[float]]] = {}
         self.stat_mask: dict[str, tuple[int, int]] = {}
-        for shot in self.shots:
+        self.stat_runs: dict[str, dict[str, Any]] = {}  # shot id → its run's panel and honesty line
+        self.scrims: list[dict[str, Any]] = []  # measured stat panels, for plan.json checks
+        for i, shot in enumerate(self.shots):
             sid, kind = shot["id"], shot["kind"]
             text = {item["role"]: item["text"] for item in shot["text"]}
             if kind == "title":
@@ -328,8 +539,13 @@ class _Cut:
                 self.layers[sid] = {"stack": self._stack(shot["text"], sid)}
             elif kind == "curtain":
                 self._typeset_curtain(shot)
-            elif kind == "stat":
-                self._typeset_stat(shot)
+            elif kind == "stat" and (i == 0 or self.shots[i - 1]["kind"] != "stat"):
+                run = [shot]
+                for nxt in self.shots[i + 1 :]:
+                    if nxt["kind"] != "stat":
+                        break
+                    run.append(nxt)
+                self._typeset_stats(run)
         # Rails: one per series, ticks at the real dates.
         self.rails: dict[int, list[int]] = {}
         for shot in self.shots:
@@ -393,79 +609,114 @@ class _Cut:
             [k["split"] for k in shot["keys"]],
         )
 
-    def _typeset_stat(self, shot: dict[str, Any]) -> None:
-        """A stat: the value on a fixed advance per digit (tabular, so Pillow needs no raqm), each
-        glyph its own layer for the slide into its mask; the unit after it; label and source below."""
+    def _typeset_stats(self, run: list[dict[str, Any]]) -> None:
+        """A run of stats (film/story.py places it: `place`): each figure on a fixed advance per
+        digit, one layer per glyph for the slide into its mask, the unit after it, label and source
+        below; the riding honesty line under the run; and, over a picture, one panel in the run's tint
+        behind all of it, its opacity measured so every text keeps STAT_CONTRAST over the picture."""
         lay, u, t = self.lay, self.u, self.type
-        color = "ink" if shot["surface"] == "paper" else "paper"
-        value_s, unit_s = (dataclasses.replace(s, color=color) for s in (STAT_VALUE, STAT_UNIT))
-        label_s, source_s = (dataclasses.replace(s, color=color) for s in (STAT_LABEL, STAT_SOURCE))
-        value, unit = shot["value"], shot.get("unit")
-
-        def advances(style: _Style) -> list[float]:
-            font = t.font(style)
-            digit = max(font.getlength(d) for d in "0123456789")
-            return [digit if c.isdigit() else font.getlength(c) for c in value]
-
-        def total(style: _Style, ustyle: _Style) -> float:
-            w = sum(advances(style))
+        first = run[0]
+        surface = first["surface"]
+        color = "ink" if surface == "paper" else "paper"
+        tagged = bool(self.p.get("tag"))
+        honesty = first.get("honesty")
+        geo = stat_run(t, lay, run, honesty, first.get("place", "low"), tagged)
+        for shot, st in zip(run, geo.sets, strict=True):
+            sid, value, unit = shot["id"], shot["value"], shot.get("unit")
+            value_s, unit_s, label_s, source_s = (
+                dataclasses.replace(x, color=color) for x in (st.value, st.unit, st.label, st.source)
+            )
+            base = st.base
+            # Digits sit centred on a tabular advance; the first glyph's ink starts on the text column.
+            adv = stat_advances(t, value_s, value)
+            lsb = t.font(value_s).getbbox(value[0], anchor="ls")[0] if value.strip() else 0
+            x = float(lay.margin) - (adv[0] - t.width(value[0], value_s)) / 2 - lsb
+            glyphs = []
+            ink_bottom = base
+            for c, a in zip(value, adv, strict=True):
+                if not c.isspace():
+                    w = t.width(c, value_s)
+                    layer, box = self._ink(
+                        [(x + (a - w) / 2, base, c, value_s, "l")], shadow=0.0, note=(sid, f"value {c}")
+                    )  # its slide stays inside the mask, so the box is where it lands
+                    glyphs.append(layer)
+                    ink_bottom = max(ink_bottom, box[3])
+                x += a
+            rest = []
             if unit:
-                w += 0.18 * style.size * u + t.width(unit, ustyle)
-            return w
-
-        scale = 1.0
-        if total(value_s, unit_s) > lay.text_width:
-            scale = lay.text_width / total(value_s, unit_s) * 0.98
-            value_s = dataclasses.replace(value_s, size=value_s.size * scale)
-            unit_s = dataclasses.replace(unit_s, size=unit_s.size * scale)
-        cap_v = self._cap(value_s)
-        lines = t.wrap(shot["label"], label_s, lay.text_width, balanced=True)
-        step = label_s.size * u * label_s.leading
-        source = f"Source: {shot['source']}" if shot.get("source") else None
-        height = cap_v + 56 * u + self._cap(label_s) + (len(lines) - 1) * step
-        if source:
-            height += 30 * u + self._cap(source_s)
-        base = lay.top + (lay.bottom - lay.top - height) / 2 + cap_v
-        # Digits sit centred on a tabular advance; the first glyph's ink starts on the text column.
-        adv0 = advances(value_s)[0]
-        lsb = t.font(value_s).getbbox(value[0], anchor="ls")[0] if value.strip() else 0
-        x = float(lay.margin) - (adv0 - t.width(value[0], value_s)) / 2 - lsb
-        glyphs = []
-        ink_bottom = base
-        sid = shot["id"]
-        for c, adv in zip(value, advances(value_s), strict=True):
-            if not c.isspace():
-                w = t.width(c, value_s)
-                layer, box = self._ink(
-                    [(x + (adv - w) / 2, base, c, value_s, "l")], shadow=0.0, note=(sid, f"value {c}")
-                )  # its slide stays inside the mask, so the box is where it lands
-                glyphs.append(layer)
-                ink_bottom = max(ink_bottom, box[3])
-            x += adv
-        rest = []
-        if unit:
-            layer, _ = self._ink(
-                [(x + 0.18 * value_s.size * u, base, unit, unit_s, "l")], shadow=0.0, note=(sid, "unit")
-            )
-            rest.append(layer)
-        y = base + 56 * u + self._cap(label_s)
-        for k, line in enumerate(lines):
-            layer, _ = self._ink(
-                [(lay.margin, y + k * step, line, label_s, "l")], shadow=0.0, note=(sid, "label")
-            )
-            rest.append(layer)
-        y += (len(lines) - 1) * step
-        if source:
-            layer, _ = self._ink(
-                [(lay.margin, y + 30 * u + self._cap(source_s), source, source_s, "l")], shadow=0.0,
-                note=(sid, "source"),
+                layer, _ = self._ink(
+                    [(x + 0.18 * value_s.size * u, base, unit, unit_s, "l")], shadow=0.0, note=(sid, "unit")
+                )
+                rest.append(layer)
+            for line, y in zip(st.label_lines, st.label_bases, strict=True):
+                layer, _ = self._ink([(lay.margin, y, line, label_s, "l")], shadow=0.0, note=(sid, "label"))
+                rest.append(layer)
+            if st.source_text:
+                layer, _ = self._ink(
+                    [(lay.margin, st.source_base, st.source_text, source_s, "l")], shadow=0.0,
+                    note=(sid, "source"),
+                )  # fmt: skip
+                rest.append(layer)
+            # The slide is clipped at the figure's own ink (its baseline, or a comma's tail), never
+            # lower, so rising glyphs never show in the band above the label.
+            top = math.floor(base - self._cap(value_s) - 0.12 * value_s.size * u)
+            self.layers[sid] = {"glyphs": glyphs, "rest": rest}
+            self.stat_mask[sid] = (top, math.ceil(ink_bottom) + 1)
+        ride = None
+        if geo.ride_lines:
+            ride_s = dataclasses.replace(geo.ride, color=color)
+            items = [
+                (lay.margin, y, line, ride_s, "l")
+                for line, y in zip(geo.ride_lines, geo.ride_bases, strict=True)
+            ]
+            ride, _ = self._ink(items, shadow=0.0, note=(first["id"], "honesty"))
+        panel = None
+        if first.get("file"):
+            tint = np.array(self.paper if surface == "paper" else self.night, np.float32)
+            alpha, contrast = self._measure_panel(run, geo.box, tint, color)
+            panel = self._scrim(geo.box, alpha, color=tint, pad=(PANEL_PAD, PANEL_PAD), sigma=PANEL_SIGMA)
+            self.scrims.append(
+                {"shots": [s["id"] for s in run], "tint": surface, "alpha": round(alpha, 3),
+                 "contrast": round(contrast, 2), "box": ink_box(*geo.box)}
             )  # fmt: skip
-            rest.append(layer)
-        # The slide is clipped at the figure's own ink (its baseline, or a comma's tail), never lower,
-        # so rising glyphs never show in the band above the label.
-        top, bottom = math.floor(base - cap_v - 0.12 * value_s.size * u), math.ceil(ink_bottom) + 1
-        self.layers[shot["id"]] = {"glyphs": glyphs, "rest": rest}
-        self.stat_mask[shot["id"]] = (top, bottom)
+        entry = {"panel": panel, "ride": ride, "first": first["id"]}
+        for shot in run:
+            self.stat_runs[shot["id"]] = entry
+
+    def _measure_panel(
+        self, run: Sequence[dict[str, Any]], box: Sequence[float], tint: np.ndarray, color: str
+    ) -> tuple[float, float]:
+        """(alpha, contrast): the least panel opacity (0.30 to 0.95) at which the text colour keeps
+        STAT_CONTRAST over the 99.5th-worst percentile of the picture under the run's ink, sampled on
+        every beat of the run along its camera path (the luminance of what the panel leaves showing,
+        in display gamma as `_put` mixes it); and the contrast it gives."""
+        from vantage.film.safety import _BGR_WEIGHTS, _SRGB_TO_LINEAR
+
+        x0, y0 = max(0, math.floor(box[0])), max(0, math.floor(box[1]))
+        x1, y1 = min(self.width, math.ceil(box[2])), min(self.height, math.ceil(box[3]))
+        file = run[0]["file"]
+        f0, f1 = run[0]["f0"], run[-1]["f1"]
+        samples = [
+            self._warp(file, self.camera(f))[y0:y1:2, x0:x1:2].reshape(-1, 3)
+            for f in [*range(f0, f1, self.fpb), f1 - 1]
+        ]
+        px = np.concatenate(samples).astype(np.float32)
+        weights = _BGR_WEIGHTS.astype(np.float64)
+        text = np.array(_hex(self.p["inputs"]["colors"][color])[::-1], np.uint8)
+        lt = float(_SRGB_TO_LINEAR[text] @ weights)
+        dark_text = color == "ink"
+
+        def ratio(alpha: float) -> float:
+            mixed = np.clip(px * (1 - alpha) + tint * alpha + 0.5, 0, 255).astype(np.uint8)
+            lum = _SRGB_TO_LINEAR[mixed] @ weights
+            worst = float(np.quantile(lum, 0.005 if dark_text else 0.995))
+            hi, lo = max(lt, worst), min(lt, worst)
+            return (hi + 0.05) / (lo + 0.05)
+
+        for k in range(30, 96):
+            if (c := ratio(k / 100)) >= STAT_CONTRAST:
+                return k / 100, c
+        return 0.95, ratio(0.95)
 
     def _typeset_title(self, shot: dict[str, Any], text: dict[str, str]) -> None:
         lay, u, t = self.lay, self.u, self.type
@@ -678,6 +929,8 @@ class _Cut:
         cam = self.camera(f)
         if shot["kind"] == "curtain":
             return self._composite(shot, cam, self._split_at(shot, f))
+        if shot["kind"] == "stat" and not shot.get("file"):
+            return self.surfaces[shot["surface"]].copy()
         return self._warp(shot["file"], cam)
 
     def _reveal(self, shot: dict[str, Any], side: int, f: int) -> float:
@@ -710,6 +963,11 @@ class _Cut:
         elif shot["kind"] == "curtain":
             x = self._split_at(shot, last) * self.width
             self._curtain_overlays(frame, j, last, x, opacity)
+        elif shot["kind"] == "stat":
+            run = self.stat_runs[shot["id"]]
+            _put(frame, run["panel"], opacity)
+            self._stat_text(frame, j, last, opacity, landed=True)
+            _put(frame, run["ride"], opacity)
 
     def _grip(self, frame: np.ndarray, x: float, opacity: float) -> None:
         """The curtain rule (3 units, accent) and its grip (44 units at 0.56H) at x."""
@@ -762,7 +1020,7 @@ class _Cut:
         n = d["f1"] - d["f0"] if mixed and d is not None else 2 * self.third
         half = max(1, n // 2)
         fade = ramp(f, shot["f0"] + half, n - half) if mixed or d is None else 1.0
-        if prev is not None and prev["kind"] in ("capture", "curtain") and (mixed or d is None):
+        if prev is not None and prev["kind"] in ("capture", "curtain", "stat") and (mixed or d is None):
             self._ghost(frame, i - 1, 1 - ramp(f, shot["f0"], half))
         x = split * self.width
         edge = min(1.0, max(0.0, min(x, self.width - x) / (24 * self.u)))
@@ -773,32 +1031,87 @@ class _Cut:
             frame = cv2.addWeighted(self.surfaces[d["from"]], 1 - w, frame, w, 0)
         return frame
 
-    def _stat(self, i: int, f: int) -> np.ndarray:
-        """A stat on its surface: once its dip is over (`land`), glyphs slide up into their mask
-        (2-frame stagger, half a beat each), already the true figure; unit, label and source fade in
-        on the beat after it lands (`text_in`); all of it fades out over the last B/3 frames, so the
-        next shot starts on a clean surface."""
-        shot, L = self.shots[i], self.layers[self.shots[i]["id"]]
-        f0, f1, B, third = shot["f0"], shot["f1"], self.fpb, self.third
-        frame = self.surfaces[shot["surface"]].copy()
-        nxt = self.shots[i + 1] if i + 1 < len(self.shots) else None
-        out = 1 - ramp(f, f1 - third, third) if nxt is not None else 1.0
+    def _stat_text(
+        self, frame: np.ndarray, j: int, f: int, opacity: float = 1.0, *, landed: bool = False
+    ) -> None:
+        """Stat j's figure and words at frame f: glyphs slide up into their mask (2-frame stagger,
+        half a beat each) from `land`, already the true figure; unit, label and source fade in over
+        B/3 from `text_in`. `landed` draws them all in place (a stat being crossfaded out)."""
+        if opacity <= 0.002:
+            return
+        shot, L = self.shots[j], self.layers[self.shots[j]["id"]]
         top, bottom = self.stat_mask[shot["id"]]
         dist = bottom - top
-        half = max(1, round(B / 2))
-        land = shot.get("land", f0)
+        half = max(1, round(self.fpb / 2))
+        land = shot.get("land", shot["f0"])
         for k, glyph in enumerate(L["glyphs"]):
-            e = ramp(f, land + 2 * k, half)
-            _put(frame, glyph, out, dist * (1 - e), clip=(0, top, self.width, bottom))
-        e = ramp(f, shot.get("text_in", f0 + B), third)
+            e = 1.0 if landed else ramp(f, land + 2 * k, half)
+            _put(frame, glyph, opacity, dist * (1 - e), clip=(0, top, self.width, bottom))
+        e = 1.0 if landed else ramp(f, shot.get("text_in", shot["f0"] + self.fpb), self.third)
         for layer in L["rest"]:
-            _put(frame, layer, e * out)
-        self._surface_tag(frame, shot["surface"])
+            _put(frame, layer, e * opacity)
+
+    def _stat_overlays(
+        self, frame: np.ndarray, i: int, f: int, intro: float = 1.0, panel: float | None = None
+    ) -> None:
+        """A stat's panel (over a picture), the previous stat's text crossfading out over the first
+        B/3 frames, its own text, and the riding honesty line, which stays on through the run."""
+        shot = self.shots[i]
+        run = self.stat_runs[shot["id"]]
         prev = self.shots[i - 1] if i else None
-        dip = shot.get("dip", self.d)
-        if prev is not None and f < f0 + dip:
-            w = ramp(f, f0, dip)
-            frame = cv2.addWeighted(self._shot(i - 1, f), 1 - w, frame, w, 0)
+        within = prev is not None and prev["kind"] == "stat"
+        _put(frame, run["panel"], 1.0 if within else intro if panel is None else panel)
+        if within:
+            self._stat_text(frame, i - 1, f, (1 - ramp(f, shot["f0"], self.third)) * intro, landed=True)
+        self._stat_text(frame, i, f, intro)
+        if run["ride"] is not None:
+            seen = 1.0 if within else ramp(f, shot.get("text_in", shot["f0"]), self.third)
+            _put(frame, run["ride"], seen * intro)
+
+    def _stat(self, i: int, f: int) -> np.ndarray:
+        """A stat over its picture (`file`: the camera keeps moving through the run) or on a plain
+        surface. The first of a run dissolves in from the image before it (whose overlays leave over
+        the first half while the panel arrives over the second) or dips from a surface; the next
+        stat of the run starts on the beat with no dip: only the text crossfades. Its text holds to
+        the shot's last frame; what follows the run dissolves or dips from it as it is."""
+        shot = self.shots[i]
+        f0, f1 = shot["f0"], shot["f1"]
+        prev = self.shots[i - 1] if i else None
+        nxt = self.shots[i + 1] if i + 1 < len(self.shots) else None
+        if not shot.get("file"):
+            frame = self.surfaces[shot["surface"]].copy()
+            # Before an image, a plain stat's text fades out over its last B/3 frames: the image
+            # dips in from the bare surface.
+            out = 1.0
+            if nxt is not None and nxt["kind"] in ("title", "capture", "curtain"):
+                out = 1 - ramp(f, f1 - self.third, self.third)
+            self._stat_overlays(frame, i, f, out)
+            self._surface_tag(frame, shot["surface"])
+            dip = shot.get("dip", 0)
+            if prev is not None and dip and f < f0 + dip:
+                w = ramp(f, f0, dip)
+                frame = cv2.addWeighted(self._shot(i - 1, f), 1 - w, frame, w, 0)
+            return frame
+        frame = self._warp(shot["file"], self.camera(f))
+        d = shot.get("dissolve")
+        w = ramp(f, d["f0"], d["f1"] - d["f0"]) if d else 1.0
+        mixed = d is not None and d["from"] not in SURFACES
+        intro = 1.0
+        if mixed and d is not None:
+            if w < 1:
+                frame = _mix(self._bare(i - 1, f), frame, w)
+            half = max(1, (d["f1"] - d["f0"]) // 2)
+            if prev is not None and prev["kind"] in ("capture", "curtain", "stat"):
+                self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
+            intro = ramp(f, d["f0"] + half, d["f1"] - d["f0"] - half)
+        # The panel arrives over the rest of the entry beat, whole as the figure lands.
+        a = d["f0"] + (d["f1"] - d["f0"]) // 2 if mixed and d is not None else f0
+        land = shot.get("land", f0)
+        panel = ramp(f, a, max(1, land - a)) if land > a else intro
+        self._stat_overlays(frame, i, f, intro, panel)
+        self._put_tag(frame)
+        if d is not None and not mixed and w < 1:
+            frame = cv2.addWeighted(self.surfaces[d["from"]], 1 - w, frame, w, 0)
         return frame
 
     def _held_rail(self, frame: np.ndarray, pos: float) -> None:
@@ -865,7 +1178,7 @@ class _Cut:
             frame = _mix(self._bare(i - 1, f), frame, w)
         within = mixed and prev is not None and prev["kind"] == "capture"
         intro = None
-        if mixed and d is not None and prev is not None and prev["kind"] == "curtain":
+        if mixed and d is not None and prev is not None and prev["kind"] in ("curtain", "stat"):
             half = max(1, (d["f1"] - d["f0"]) // 2)
             self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
             intro = ramp(f, d["f0"] + half, d["f1"] - d["f0"] - half)

@@ -603,8 +603,8 @@ class FilmSpec(Model):
     stats: int | None = Field(None, ge=0, le=6, description="Stats shown (default 3).")
     stats_surface: Literal["night", "paper"] | None = Field(
         None,
-        description="The surface of the film's stat shots (default night: a paper card between dark aerials "
-        "is a glare block; the stats chapter's web `surface` is not used).",
+        description="Set it to put the film's stats on a plain card of this surface. By default they sit "
+        "over the main vantage's latest picture, under a panel tinted by the stats chapter's `surface`.",
     )
     title_beats: int | None = Field(
         None, ge=3, le=16, description="At least 3: the title's words rise on beat 1."

@@ -11,11 +11,16 @@
     curtain  one per compare chapter: an entry beat at split 0 (a dissolve to `after` unless it is
              already on screen), then 2 beats of sweep and 2 of hold per step with a split; the
              labels show only while the rule is 8 px clear of their ink (`reveal`)
-    stat     up to `stats` items of the first stats chapter whose value is a {fact:} token, 4 beats
-             each on the chapter's surface; the figure is the fact's text and never counts
+    stat     up to `stats` items of the first stats chapter whose value is a {fact:} token, at least
+             4 beats each, over the main vantage's latest picture (the one the curtain ends on) under
+             a panel tinted by the chapter's surface; the first dissolves in, the next start on the
+             beat and only their text crossfades; a stat whose fact a hotspot prints pushes toward
+             it. The figure is the fact's text and never counts. (`stats_surface`: a plain card.)
     card     between consecutive images of different vantages: the chapter's kicker and title on
              night, dipped in and out
-    end      a dip to night, then the brand, credits, URL, fine print and the honesty line
+    end      one card: a dip to night, then the brand, credits, URL, the honesty line and fine
+             print, at most END_MAX_S with its dip when it reads in that time; else the honesty
+             line rides under the stats
 
 A loop film (the `screen` preset) opens with a `rise` from pure night onto the title's image (the
 rail's knob sweeping back to its first tick) and closes with a `dip` back to pure night, so frame N
@@ -67,7 +72,7 @@ from vantage.film.plan import (
     honesty_line,
     said,
 )
-from vantage.film.safety import IMAGES, check_plan, surface_dip
+from vantage.film.safety import check_plan, is_image, surface_dip
 from vantage.film.tracks import Tracks, cue_frames, iso639_2, plain_markdown, sentence, track_facts
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
@@ -575,7 +580,7 @@ class _Builder:
         assert prev is not None
         if prev["kind"] in ("card", "end"):
             return {"from": "night", "f0": f0, "f1": f0 + D}
-        if prev["kind"] == "stat":
+        if prev["kind"] == "stat" and not prev.get("file"):
             n = self.paper_dip if prev["surface"] == "paper" else D
             return {"from": prev["surface"], "f0": f0, "f1": f0 + n}
         return {
@@ -590,7 +595,7 @@ class _Builder:
         theirs = None
         if prev is not None and prev["kind"] in ("card", "end"):
             theirs = "night"
-        elif prev is not None and prev["kind"] == "stat":
+        elif prev is not None and prev["kind"] == "stat" and not prev.get("file"):
             theirs = prev["surface"]
         return self.paper_dip if "paper" in (surface, theirs) and surface != theirs else self.grid.dissolve
 
@@ -800,6 +805,289 @@ def _intervals(flags: Sequence[bool], f0: int) -> list[list[int]]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Stats and the end card
+# --------------------------------------------------------------------------- #
+
+STAT_ZOOM = 1.6  # the zoom a stat's push asks for (clamped by max_upscale, lowered to frame its hotspot)
+DRIFT = 1.04  # a stat without a hotspot to push to drifts in this much over its shot
+STAT_MIN_BEATS = 4
+END_MAX_S = 6.0  # the end card, its dip included, is at most this long when its text allows it
+
+
+@dataclass(frozen=True)
+class _StatsOn:
+    """The picture a run of stats sits on: the main vantage's latest capture (the picture the
+    curtain ends on), its geometry and portrait focus, and its hotspots that print a fact."""
+
+    vantage: str
+    capture: _Capture
+    geometry: Geometry
+    portrait_focus: tuple[float, float]
+    hotspots: list[tuple[Hotspot, frozenset[str]]]
+
+
+def _stat_hotspots(
+    project: Project, caps: _Captures, vid: str, cap: _Capture
+) -> list[tuple[Hotspot, frozenset[str]]]:
+    """The hotspots of the scrub and compare chapters on `vid` that are shown at `cap` and print a
+    fact in their label or body, with those fact ids (the first of each id, in story order)."""
+    dates = [c.date for c in caps.of(vid)]
+    at, last = dates.index(cap.date), len(dates) - 1
+    seen: set[str] = set()
+    out: list[tuple[Hotspot, frozenset[str]]] = []
+    for ch in project.story.chapters:
+        if not isinstance(ch, ScrubChapter | CompareChapter) or ch.vantage != vid:
+            continue
+        for h in ch.hotspots:
+            lo = resolve_capture_ref(h.from_, dates, default=0)
+            hi = resolve_capture_ref(h.to, dates, default=last)
+            ids = frozenset(FACT_TOKEN_RE.findall(f"{h.label} {h.body or ''}"))
+            if h.id in seen or not ids or not lo <= at <= hi:
+                continue
+            seen.add(h.id)
+            out.append((h, ids))
+    return out
+
+
+def _stat_type(project: Project, fonts: dict[str, Any], lay: Layout) -> Any:
+    """The brand's type at this film's unit (film/render._Type), to set stat runs as film/cut.py does."""
+    from vantage.film.plan import font_path
+    from vantage.film.render import _Type
+
+    files = {role: font_path(fonts[role]["file"], project.brand) for role in ("display", "text", "numeric")}
+    c = project.brand.colors
+    return _Type(files, {"paper": c.paper, "accent": c.accent, "ink": c.ink}, lay.unit)  # type: ignore[arg-type]
+
+
+def _stats(
+    b: _Builder,
+    cid: str,
+    tint: str,
+    items: list[dict[str, Any]],
+    *,
+    plain: bool,
+    on: _StatsOn,
+    fonts: dict[str, Any],
+    hashes: dict[str, str],
+    honesty: str | None,
+) -> Cam | None:
+    """A run of stat shots. Over a picture (`on`) unless `plain`: the first dissolves in from the
+    image before it, and the run is placed low (default) or high, whichever frames more of its
+    stats' hotspots clear of the panel. A stat whose facts a hotspot prints pushes slowly toward it
+    (`aim`, clamped like a step's push); any other stat drifts in by DRIFT, or holds. Consecutive
+    stats start on the beat with no dip and only the text crossfades. Returns the camera the run
+    ends on when that is not the rest view (what follows eases back from it)."""
+    from vantage.film.cut import stat_run, stat_subject_box
+
+    project, film, lay = b.project, b.film, b.layout
+    B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
+    cam = b.camera
+    geo = on.geometry
+    rest: Cam = (*on.portrait_focus, 1.0) if lay.width < lay.height else (0.5, 0.5, 1.0)
+    zmax = geo.zmax(film.max_upscale * b.px)
+    subjects = [
+        None if plain else next((h for h, ids in on.hotspots if ids & set(item["facts"])), None)
+        for item in items
+    ]
+    tagged = project.config.simulated or project.config.draft
+    t = _stat_type(project, fonts, lay)
+    best: tuple[int, str, list[tuple[Cam | None, str] | None]] | None = None
+    for place in ("low", "high"):
+        box = stat_subject_box(lay, stat_run(t, lay, items, honesty, place, tagged))
+        aims: list[tuple[Cam | None, str] | None] = []
+        for h in subjects:
+            if h is None:
+                aims.append(None)
+                continue
+            target, how = aim(geo, (h.x, h.y, STAT_ZOOM), zmax, [h], explicit=False, rest=rest, box=box)
+            a, c = geo.centre(*rest), geo.centre(*target)
+            moves = not (target[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
+            framed = how.startswith("focus+subject") and moves
+            aims.append((target, how) if framed else (None, f"drift, subject off-frame:{h.id}"))
+        score = sum(1 for x in aims if x is not None and x[0] is not None)
+        if best is None or score > best[0]:
+            best = (score, place, aims)
+    assert best is not None
+    _, place, aims = best
+    first_text_in = 0
+    for k, item in enumerate(items):
+        f0 = b.f
+        dissolve: dict[str, Any] | None = None
+        dip = 0
+        if k == 0 and plain:
+            dip = b.dip(tint)
+            if is_image(b.prev):
+                cam.until(f0 + dip)
+        elif k == 0:
+            dissolve = b.entry()
+        entry = dissolve["f1"] - dissolve["f0"] if dissolve else dip
+        # The first figure lands on the first beat after its entry; the next ones on their first
+        # frame, as the text before them crossfades out. Label and source fade in with the figure
+        # and stay until the shot's end, long enough to read at 17 characters a second.
+        land = f0 + -(-entry // B) * B if k == 0 else f0
+        if k == 0:
+            first_text_in = land
+        read = " ".join(filter(None, (item["label"], item["source"])))
+        need = land - f0 + third + cue_frames(read, fps)
+        if honesty and k == len(items) - 1:  # the riding honesty line reads in full by the run's end
+            need = max(need, first_text_in + third + cue_frames(honesty, fps) - f0)
+        beats = max(STAT_MIN_BEATS, -(-need // B))
+        f1 = f0 + beats * B
+        move: dict[str, Any] | None = None
+        if not plain:
+            start = land
+            current = cam.windows[-1]
+            if k == 0 and (current["x"], current["y"], current["zoom"]) != rest:
+                cam.until(f0)  # a push before eases back to the rest view first
+                cam.hold(f0 + b.ease, rest)
+                start = max(start, f0 + b.ease)
+            current = cam.windows[-1]
+            now: Cam = (current["x"], current["y"], current["zoom"])
+            target, how = aims[k] or (None, "drift")
+            if target is None:
+                z = min(now[2] * DRIFT, zmax)
+                off = how.split("drift", 1)[1]  # ", subject off-frame:<id>" or ""
+                target, how = ((now[0], now[1], z), how) if z > now[2] + 1e-6 else (None, f"hold{off}")
+            reach = max(start + b.ease, f1 - third)
+            if target is not None and target != now and reach <= f1:
+                cam.until(start)
+                cam.hold(reach, target, f1)
+            else:
+                target, start, reach = None, f0, f0
+                how = how if how.startswith("hold") else "hold"
+                cam.until(f1)
+            h = subjects[k]
+            move = {
+                "how": how,
+                "subjects": [h.id] if h is not None and how.startswith("focus+subject") else [],
+                "focus": list(target) if target is not None else None,
+                "upscale": geo.s0 * target[2] if target is not None else None,
+                "f0": start,
+                "f1": reach,
+            }
+            if move["subjects"] and geo.s0 * target[2] / b.px > SOFT + 1e-9:  # type: ignore[index]
+                b.warnings.append(
+                    f"chapter {cid!r} stat {k}: soft push, {geo.s0 * target[2] / b.px:.2f} output px "
+                    f"per master px ({film.id})"
+                )
+        n = sum(s["kind"] == "stat" for s in b.shots) + 1
+        text = [
+            {"role": role, "text": item[role]} for role in ("value", "unit", "label", "source") if item[role]
+        ]
+        if honesty:
+            text.append({"role": "honesty", "text": honesty})
+        shot = b.add(
+            {
+                "id": f"N{n}",
+                "kind": "stat",
+                "chapter": cid,
+                "text": text,
+                "facts": item["facts"],
+                "value": item["value"],
+                "unit": item["unit"],
+                "label": item["label"],
+                "source": item["source"],
+                "surface": tint,
+                "backdrop": "plain" if plain else "picture",
+                **(
+                    {}
+                    if plain
+                    else {"vantage": on.vantage, "capture": on.capture.date, "file": on.capture.file}
+                ),
+                "place": place,
+                "dissolve": dissolve,
+                "dip": dip,
+                "land": land,
+                "text_in": land,
+                "honesty": honesty,
+                "move": move,
+            },
+            beats,
+        )
+        shot["key"] = min(shot["f1"] - 1, land + B)
+        if not plain and on.capture.file not in hashes:
+            hashes[on.capture.file] = _sha256(project.masters_dir / on.capture.file)
+        start_cue = f0 + entry // 2
+        b.tracks.cue(
+            start_cue, " ".join(filter(None, (item["value"], item["unit"], item["label"]))), item["facts"]
+        )
+        figure = " ".join(filter(None, (item["value"], item["unit"])))
+        source = f" (source: {item['source']})" if item["source"] else ""
+        line, facts = f"Figure: {figure} {item['label']}{source}.", list(item["facts"])
+        if move is not None and move["subjects"]:
+            spot = subjects[k]
+            assert spot is not None
+            label, label_facts = b.said(spot.label, f"hotspot {spot.id} label")
+            if label:
+                line = sentence(line, f"The camera moves in on {plain_markdown(label)}.")
+                facts += label_facts
+        b.tracks.line(start_cue, line, facts)
+    last = cam.windows[-1]
+    held = (last["x"], last["y"], last["zoom"])
+    return None if plain or held == rest else held
+
+
+def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, Any]) -> dict[str, Any]:
+    """The end card's text and length. A loop's: the brand and the short URL, `end_beats`. Any other
+    film's: the brand, credit line, partners and link, then the honesty line and the copyright and
+    disclaimer as fine print (read at a glance, as legal text is). The card takes as long as its
+    words take to read at 17 characters a second after its dip (the partners a beat to scan), plus
+    the last beat its text fades out over, and at least `end_beats`; when that is over END_MAX_S
+    and the film has stats, the honesty line rides along under the stats instead (`ride`), then the
+    partners are left out (a warning) when that makes it fit. Returns {text, facts, ride, beats(dip)}."""
+    project, film = b.project, b.film
+    brand, cfg = project.brand, project.config
+    B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
+    say = b.say()
+    lines: list[dict[str, Any]] = [{"role": "brand", "text": brand.name}]
+    short_url = cfg.output.base_url.split("://")[-1].rstrip("/") if cfg.output.base_url else None
+    if film.loop:  # a loop's end card: the brand and the URL in large type, nothing else
+        if short_url:
+            lines.append({"role": "url", "text": short_url})
+        return {"text": lines, "facts": list(say.facts), "ride": None, "beats": lambda dip: film.end_beats}
+    credit = say(brand.credit_line, "brand.yaml credit_line") if brand.credit_line else None
+    if credit:
+        lines.append({"role": "credit", "text": credit})
+    partners = [
+        item for partner in brand.partners
+        for item in ({"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name})
+    ]  # fmt: skip
+    link = [{"role": "link", "text": short_url}] if short_url else []
+    fine = [
+        {"role": "fine", "text": t}
+        for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer"))
+        if text_ and (t := say(text_, f"brand.yaml {where}"))
+    ]
+    reading = " ".join(filter(None, (credit, short_url)))
+    # The dip into the end card: from paper after a plain paper stat card, else D frames.
+    paper_last = last_part[0] == "stats" and last_part[1][5] and last_part[1][1] == "paper"
+    dip0 = b.paper_dip if paper_last else b.grid.dissolve
+
+    def need(read: str, scan: bool, dip: int) -> int:
+        return max(film.end_beats, -(-(dip + third + cue_frames(read, fps) + (B if scan else 0) + B) // B))
+
+    most = int(END_MAX_S * fps // B)
+    ride = None
+    if has_stats and need(sentence(reading, honesty), bool(partners), dip0) > most:
+        ride = honesty
+    read = reading if ride else sentence(reading, honesty)
+    if partners and need(read, True, dip0) > most >= need(read, False, dip0):
+        b.warnings.append(
+            f"end card: the partners are left out of film {film.id} (with them it would run over "
+            f"{END_MAX_S:g} s)"
+        )
+        partners = []
+    honest = [] if ride else [{"role": "honesty", "text": honesty}]
+    scan = bool(partners)
+    return {
+        "text": [*lines, *partners, *link, *honest, *fine],
+        "facts": list(say.facts),
+        "ride": ride,
+        "beats": lambda dip: need(read, scan, dip),
+    }
+
+
 def derive_cut(
     project: Project,
     film: FilmDef,
@@ -816,7 +1104,7 @@ def derive_cut(
     if fps <= 0:
         raise ValueError("output.film needs fps > 0")
     grid = beat_grid(fps, film.bpm)
-    B, D, third = grid.fpb, grid.dissolve, grid.third
+    B, D = grid.fpb, grid.dissolve
     width, height = film_size(settings, film.aspect, fast=fast)
     preset = "screen" if film.preset == "screen" and film.aspect == "16x9" else f"story-{film.aspect}"
     lay = layout(preset, width, height, safe=film.safe, type_scale=film.type_scale)
@@ -853,9 +1141,11 @@ def derive_cut(
                     heading, heading_facts = said(
                         project, ch.kicker, f"chapter {ids[i]!r} kicker", warnings, releasable_only=strict
                     )
-                parts.append(
-                    ("stats", (ids[i], film.stats_surface, items, heading or "Figures", heading_facts))
-                )
+                # Over a picture by default, under a panel in the chapter's surface (the web's
+                # default for stats: paper); a FilmSpec `stats_surface` asks for a plain card instead.
+                tint = film.stats_surface or ch.surface or "paper"
+                plain = film.stats_surface is not None
+                parts.append(("stats", (ids[i], tint, items, heading or "Figures", heading_facts, plain)))
 
     # Degrade on the main vantage's captures (after exclusions).
     main = main_vantage(project, index)
@@ -905,6 +1195,11 @@ def derive_cut(
                 warnings.append(text)
     first = images[0]
     first_cap = first.captures[0] if isinstance(first, _Series) else first.before
+    provenance = ["simulated" if cfg.simulated else "photo"]
+    honesty = honesty_line(provenance)
+    end = _end_text(b, honesty, any(k == "stats" for k, _ in parts), parts[-1])
+    stats_on = _StatsOn(main, every[-1], _geometry(project, index, main, width, height),
+                        _vantage_info(project, caps, main)[1], _stat_hotspots(project, caps, main, every[-1]))  # fmt: skip
     if film.loop:  # from pure night onto the title's image
         rise = b.add(
             {"id": "R1", "kind": "rise", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["rise"]
@@ -920,7 +1215,7 @@ def derive_cut(
     for kind, part in parts:
         part_f0 = b.f  # the chapter (in the tracks) starts with the card that introduces it
         if kind in ("series", "curtain") and part.vantage != last_vantage:
-            if b.prev is not None and b.prev["kind"] in IMAGES:
+            if is_image(b.prev):
                 cam.until(b.f + b.dip("night"))
             _card(b, part.chapter, part.kicker, part.title, part)
             pushed = None
@@ -946,7 +1241,7 @@ def derive_cut(
                 if total_images == 1 or id(cap) in still:
                     beats = max(beats, stepped)
                 dissolve = None if n == 1 and b.prev and b.prev["kind"] == "title" else b.entry()
-                if b.prev is not None and b.prev["kind"] not in IMAGES:
+                if b.prev is not None and not is_image(b.prev):
                     cam.hold(f0, rest)
                 if pushed is not None and target is None:  # the previous push eases back from the
                     cam.until(f0)  # dissolve on, as slowly as it went in (b.ease frames)
@@ -998,124 +1293,41 @@ def derive_cut(
             pushed = _curtain_shot(b, part, fonts, hashes, part_f0)
             last_vantage = part.vantage
         else:
-            cid, surface, items, heading, heading_facts = part
+            cid, tint, items, heading, heading_facts, plain = part
             b.tracks.chapter(part_f0, heading, heading_facts)
-            for item in items:
-                dip = b.dip(surface)
-                if b.prev is not None and b.prev["kind"] in IMAGES:
-                    cam.until(b.f + dip)
-                k = sum(s["kind"] == "stat" for s in b.shots) + 1
-                # The figure lands once the dip is over, on a clean surface; the label and source
-                # fade in on the next beat and stay long enough to read at 17 characters a second.
-                land = dip if b.prev is not None else 0
-                text_in = -(-(land + round(B / 2)) // B) * B
-                read = " ".join(filter(None, (item["label"], item["source"])))  # the figure: at a glance
-                beats = max(4, -(-(text_in + 2 * third + cue_frames(read, fps)) // B))
-                text = [
-                    {"role": role, "text": item[role]}
-                    for role in ("value", "unit", "label", "source")
-                    if item[role]
-                ]
-                shot = b.add(
-                    {
-                        "id": f"N{k}",
-                        "kind": "stat",
-                        "chapter": cid,
-                        "text": text,
-                        "facts": item["facts"],
-                        "value": item["value"],
-                        "unit": item["unit"],
-                        "label": item["label"],
-                        "source": item["source"],
-                        "surface": surface,
-                        "dip": dip,
-                        "land": b.f + land,
-                        "text_in": b.f + text_in,
-                    },
-                    beats,
-                )
-                shot["key"] = min(shot["f1"] - third - 1, shot["text_in"] + third + B)
-                start = shot["f0"] + dip // 2
-                b.tracks.cue(
-                    start, " ".join(filter(None, (item["value"], item["unit"], item["label"]))), item["facts"]
-                )
-                figure = " ".join(filter(None, (item["value"], item["unit"])))
-                source = f" (source: {item['source']})" if item["source"] else ""
-                b.tracks.line(start, f"Figure: {figure} {item['label']}{source}.", item["facts"])
-            pushed = None
+            pushed = _stats(
+                b, cid, tint, items, plain=plain, on=stats_on, fonts=fonts, hashes=hashes,
+                honesty=end["ride"],
+            )  # fmt: skip
 
-    # End cards: the credits (E1), then, except in a loop, the honesty line and fine print (E2).
-    brand = project.brand
-    say = b.say()
-    provenance = ["simulated" if cfg.simulated else "photo"]
-    honesty = honesty_line(provenance)
-    lines: list[dict[str, Any]] = [{"role": "brand", "text": brand.name}]
-    short_url = cfg.output.base_url.split("://")[-1].rstrip("/") if cfg.output.base_url else None
-    if film.loop and short_url:  # a loop's end card: the brand and the URL in large type, nothing else
-        lines.append({"role": "url", "text": short_url})
-    if not film.loop and brand.credit_line and (t := say(brand.credit_line, "brand.yaml credit_line")):
-        lines.append({"role": "credit", "text": t})
-    fine_say = b.say()
-    fine: list[dict[str, Any]] = []
-    if not film.loop:
-        for partner in brand.partners:
-            lines += [{"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name}]
-        if short_url:
-            lines.append({"role": "link", "text": short_url})
-        # The honesty line already says "simulated" when it is: no SIMULATED_NOTE on top of it.
-        fine.append({"role": "honesty", "text": honesty})
-        for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer")):
-            if text_ and (t := fine_say(text_, f"brand.yaml {where}")):
-                fine.append({"role": "fine", "text": t})
+    # The end card (E1): a dip to night, then the brand, credits and fine print (a loop: the brand
+    # and the short URL), at most END_MAX_S long with its dip (see `_end_text`).
     dip = b.dip("night")
-    if b.prev is not None and b.prev["kind"] in IMAGES:  # a push holds while the image dips out
+    if is_image(b.prev):  # a push holds while the image dips out
         cam.until(b.f + dip)
-
-    def card_beats(d: int, read: str, extra: int) -> int:
-        """Beats for an end card whose `read` text is fully on screen for as long as it takes to
-        read at 17 characters a second (it fades in over B/3 after its dip), plus `extra` frames."""
-        return -(-(d + third + cue_frames(read, fps) + extra) // B)
-
-    credit_read = " ".join(t["text"] for t in lines if t["role"] in ("credit", "link"))
-    end_beats = film.end_beats
-    if not film.loop:  # partners are scanned, the credit line and link read; then a fade
-        end_beats = max(end_beats, card_beats(dip, credit_read, third + (B if brand.partners else 0)))
+    end_beats = end["beats"](dip)
     if film.loop:  # a whole number of GOPs: lengthen the end card
         end_beats += -(b.f // B + end_beats + LOOP_BEATS["dip"]) % GOP_BEATS
-    end = b.add(
+    card = b.add(
         {
             "id": "E1",
             "kind": "end",
             "chapter": None,
-            "text": lines,
-            "facts": list(say.facts),
+            "text": end["text"],
+            "facts": end["facts"],
             "dip": dip,
             "honesty": honesty,
+            "ride": end["ride"] is not None,
         },
         end_beats,
     )
-    end["key"] = min(end["f1"] - 1, end["f0"] + dip + 2 * B)
-    credit, credit_facts = b.said(brand.credit_line, "brand.yaml credit_line")
-    b.tracks.chapter(end["f0"], "Credits")
-    b.tracks.cue(end["f0"] + dip // 2, credit or brand.name, credit_facts)
-    b.tracks.line(end["f0"] + dip // 2, "End card: " + " / ".join(t["text"] for t in lines), say.facts)
-    if fine:  # the honesty line read in full, the fine print shown with it; the film ends on night
-        d2 = b.dip("night")
-        e2 = b.add(
-            {
-                "id": "E2",
-                "kind": "end",
-                "chapter": None,
-                "text": fine,
-                "facts": list(fine_say.facts),
-                "dip": d2,
-                "honesty": honesty,
-            },
-            max(4, card_beats(d2, honesty, B)),
-        )
-        e2["key"] = min(e2["f1"] - B - 1, e2["f0"] + d2 + 2 * B)
-        b.tracks.cue(e2["f0"] + d2 // 2, honesty)
-        b.tracks.line(e2["f0"] + d2 // 2, "End card: " + " / ".join(t["text"] for t in fine), fine_say.facts)
+    card["key"] = min(card["f1"] - 1, card["f0"] + dip + 2 * B)
+    credit, credit_facts = b.said(project.brand.credit_line, "brand.yaml credit_line")
+    b.tracks.chapter(card["f0"], "Credits")
+    b.tracks.cue(card["f0"] + dip // 2, credit or project.brand.name, credit_facts)
+    b.tracks.line(
+        card["f0"] + dip // 2, "End card: " + " / ".join(t["text"] for t in end["text"]), end["facts"]
+    )
     if film.loop:  # back to pure night: frame N is frame 0
         back = b.add({"id": "D1", "kind": "dip", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["dip"])
         back["key"] = back["f0"] + B
@@ -1253,12 +1465,12 @@ def _curtain_shot(
     prev = b.prev
     same = (
         prev is not None
-        and prev["kind"] in ("title", "capture")
+        and prev["kind"] in ("title", "capture", "stat")
         and prev.get("vantage") == c.vantage
         and prev.get("capture") == c.after.date
     )
     dissolve = None if same else b.entry()
-    if prev is not None and prev["kind"] in IMAGES:  # a push before eases back as slowly as it went in
+    if is_image(prev):  # a push before eases back as slowly as it went in
         cam.until(f0)
         cam.hold(f0 + b.ease, rest)
     else:

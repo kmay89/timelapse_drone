@@ -87,8 +87,16 @@ IMAGES = frozenset({"title", "capture", "curtain"})
 SURFACES = frozenset({"night", "paper"})
 
 
+def is_image(shot: dict[str, Any] | None) -> bool:
+    """A shot that shows a picture: a title, capture or curtain, or a stat over a picture (`file`)."""
+    if shot is None:
+        return False
+    return shot["kind"] in IMAGES or (shot["kind"] == "stat" and bool(shot.get("file")))
+
+
 def check_plan(plan: dict[str, Any]) -> None:
-    """Raise PlanError when a story plan cuts between images, dissolves faster than 0.34 s, sweeps a
+    """Raise PlanError when a story plan cuts between images (a stat over a picture is one; the next
+    stat of its run shows the same picture and needs no dissolve), dissolves faster than 0.34 s, sweeps a
     curtain in under 2 beats, dips into or out of paper faster than `surface_dip`, ends its title
     before its words are all in, or dips into a card, stat or end card for so long that less than
     a beat of the shot is left for its text.
@@ -111,7 +119,7 @@ def check_plan(plan: dict[str, Any]) -> None:
             return None
         if shot["kind"] in ("card", "end", "dip"):
             return "night"
-        return shot.get("surface") if shot["kind"] == "stat" else None
+        return shot.get("surface") if shot["kind"] == "stat" and not shot.get("file") else None
 
     shots = plan["shots"]
     if plan.get("loop"):
@@ -127,14 +135,17 @@ def check_plan(plan: dict[str, Any]) -> None:
             problems.append(
                 f"{sid}: a {shot['f1'] - shot['f0']}-frame {kind} is shorter than {shortest} frames"
             )
-        if kind in ("capture", "curtain"):
+        plain_stat = kind == "stat" and not shot.get("file")
+        if is_image(shot) and kind != "title":
             d = shot.get("dissolve")
             same = prev is not None and prev["kind"] == "title" and prev.get("capture") == shot.get("capture")
             if kind == "curtain":
                 same = shot.get("from_after", False)
-            if prev is not None and prev["kind"] in IMAGES and d is None and not same:
+            if kind == "stat":  # the next stat of a run: the same picture, only the text crossfades
+                same = prev is not None and prev["kind"] == "stat" and prev.get("file") == shot["file"]
+            if prev is not None and is_image(prev) and d is None and not same:
                 problems.append(f"{sid}: a hard cut from {prev['id']} (every image change dissolves)")
-            if prev is not None and prev["kind"] not in IMAGES and d is None:
+            if prev is not None and not is_image(prev) and d is None:
                 problems.append(f"{sid}: a hard cut from {prev['id']} (images dip in from a surface)")
             if d is not None:
                 n = d["f1"] - d["f0"]
@@ -155,16 +166,16 @@ def check_plan(plan: dict[str, Any]) -> None:
             third = max(1, round(fpb / 3))  # beat.Grid.third
             if shot["groups"][-1] + third > shot["f1"] - fpb:  # all in before the last beat's fade
                 problems.append(f"{sid}: its words are never all on screen (title_beats too short)")
-        if kind in ("card", "end", "stat") and shot.get("dip", 0) > shot["f1"] - shot["f0"] - fpb:
+        if (kind in ("card", "end") or plain_stat) and shot.get("dip", 0) > shot["f1"] - shot["f0"] - fpb:
             problems.append(
                 f"{sid}: a {shot.get('dip', 0)}-frame dip leaves under a beat of its "
                 f"{shot['f1'] - shot['f0']} frames for its text (end_beats too short?)"
             )
-        if kind in ("card", "end", "stat") and prev is not None:
+        if (kind in ("card", "end") or plain_stat) and prev is not None:
             n = shot.get("dip", 0)
             mine, theirs = surface(shot), surface(prev)
             need = paper if "paper" in (mine, theirs) and mine != theirs else shortest
-            if (prev["kind"] in IMAGES or mine != theirs) and n < need:
+            if (is_image(prev) or mine != theirs) and n < need:
                 problems.append(f"{sid}: a {n}-frame dip is shorter than {need} frames")
         prev = shot
     third = max(1, round(fpb / 3))  # beat.Grid.third
@@ -375,6 +386,7 @@ __all__ = [
     "PlanError",
     "cells",
     "check_plan",
+    "is_image",
     "regions",
     "surface_dip",
 ]

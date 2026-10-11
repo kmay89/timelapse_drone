@@ -198,9 +198,9 @@ def test_film_specs_are_validated(tmp_path, films, match):
 def test_derive_cut_shapes_and_grid(tmp_path):
     plan = _plan(tiny(tmp_path / "p")).plan
     shots = plan["shots"]
-    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "end", "end"]
+    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "end"]
     assert plan["grid"] == {"bpm": 90.0, "fpb": B, "dissolve": D, "beats": plan["frames"] // B}
-    caps = shots[1:-2]
+    caps = shots[1:-1]
     assert [(s["f1"] - s["f0"]) // B for s in caps] == [3, 1, 4, 1, 3]  # step, quiet, push, quiet, step
     assert caps[0]["dissolve"] is None and all(
         s["dissolve"]["f1"] - s["dissolve"]["f0"] == D for s in caps[1:]
@@ -244,7 +244,7 @@ def test_cards_between_vantages_and_chapter_scope(tmp_path):
     project = load_project(root)
     wide, tall = _plan(project).plan, _plan(project, "9x16").plan
     kinds = [s["kind"] for s in wide["shots"]]
-    assert kinds == ["title", *["capture"] * 5, "card", *["capture"] * 3, "end", "end"]
+    assert kinds == ["title", *["capture"] * 5, "card", *["capture"] * 3, "end"]
     card = wide["shots"][6]
     assert card["text"] == [{"role": "title", "text": "The overview"}] and card["vantage"] == "overview"
     assert wide["shots"][7]["dissolve"]["from"] == "night"
@@ -347,8 +347,8 @@ def test_bare_numbers():
 def test_honesty_line(tmp_path):
     def end_text(project: Project) -> str:
         ends = [s for s in _plan(project).plan["shots"] if s["kind"] == "end"]
-        assert [s["id"] for s in ends] == ["E1", "E2"]  # the credits, then the honesty card
-        return "\n".join(t["text"] for t in ends[1]["text"])
+        assert [s["id"] for s in ends] == ["E1"]  # one closing card (no stats: the honesty line is on it)
+        return "\n".join(t["text"] for t in ends[0]["text"])
 
     simulated = end_text(tiny(tmp_path / "a", simulated=True))
     assert HONESTY["simulated"] in simulated and SIMULATED_NOTE not in simulated  # said once
@@ -469,24 +469,41 @@ def test_flash_meter_regions_and_red():
     assert meter.max_delta < 0.10 and not meter.passed
 
 
-def test_end_cards_are_long_enough_to_read(tmp_path):
-    """end_beats 2 after a paper stat: the end cards are lengthened until their text reads at 17
-    characters a second after the 18-frame dip from paper; a dip that leaves under a beat for the
-    text is refused; transcript lines never start past the film's last frame."""
-    root = tmp_path / "p"
-    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 2}})
-    plan = _plan(_facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]}))
-    p = plan.plan
-    e1, e2 = (s for s in p["shots"] if s["kind"] == "end")
+def test_end_card_is_short_and_the_honesty_line_rides_the_stats(tmp_path):
+    """One closing card on night. Without stats it carries the honesty line and is as long as its
+    text takes to read at 17 characters a second after its dip (the partners a beat to scan), plus
+    the beat its text fades out over. With stats, a card that would run over END_MAX_S puts the
+    honesty line under the stat run instead, where it reads in full; the card then fits in 6 s.
+    Transcript lines never start past the film's last frame."""
+    from vantage.film.story import END_MAX_S
+    from vantage.film.tracks import cue_frames
+
     third = round(B / 3)
-    assert e1["f1"] - e1["f0"] - e1["dip"] - 2 * third >= math.ceil(len("Made for testing.") * 12 / 17)
-    assert e2["f1"] - e2["f0"] - e2["dip"] - third - B >= math.ceil(len(HONESTY["photo"]) * 12 / 17)
-    assert e2["f1"] == p["frames"]
+    root = tmp_path / "p"
+    plan = _plan(tiny(root, films={"16x9": {"end_beats": 2}})).plan
+    (end,) = (s for s in plan["shots"] if s["kind"] == "end")
+    assert {"role": "honesty", "text": HONESTY["photo"]} in end["text"] and not end["ride"]
+    read = f"Made for testing. {HONESTY['photo']}"
+    assert end["f1"] - end["f0"] - end["dip"] - third - 2 * B >= cue_frames(read, 12)
+    assert end["f1"] == plan["frames"]
+
+    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 2}})
+    p = _plan(_facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})).plan
+    (end,) = (s for s in p["shots"] if s["kind"] == "end")
+    (stat,) = (s for s in p["shots"] if s["kind"] == "stat")
+    assert end["ride"] and all(t["role"] != "honesty" for t in end["text"])
+    assert [t["role"] for t in end["text"]] == ["brand", "credit", "role", "partner"]
+    assert end["f1"] - end["f0"] <= END_MAX_S * 12  # its dip included
+    assert end["f1"] - end["f0"] - end["dip"] - third - 2 * B >= cue_frames("Made for testing.", 12)
+    assert (
+        stat["honesty"] == HONESTY["photo"] and {"role": "honesty", "text": HONESTY["photo"]} in stat["text"]
+    )
+    assert stat["f1"] - (stat["text_in"] + third) >= cue_frames(HONESTY["photo"], 12)
     assert all(line["f0"] < p["frames"] for line in p["transcript"]["lines"])
-    assert p["captions"][-1]["text"] == HONESTY["photo"]  # the honesty card's cue survives
+    assert p["captions"][-1]["text"] == "Made for testing."  # the end card's cue
     short = json.loads(json.dumps(p))
-    end = next(s for s in short["shots"] if s["id"] == "E1")
-    end["dip"] = end["f1"] - end["f0"] - B + 1
+    e1 = next(s for s in short["shots"] if s["id"] == "E1")
+    e1["dip"] = e1["f1"] - e1["f0"] - B + 1
     with pytest.raises(PlanError, match=r"E1: a .*-frame dip leaves under a beat"):
         check_plan(short)
 
@@ -593,7 +610,7 @@ def test_curtain_split_halves(tmp_path):
     project = tiny(tmp_path / "p", chapters=[quiet], simulated=True)
     plan = _plan(project)
     shots = plan.plan["shots"]
-    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "curtain", "end", "end"]
+    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "curtain", "end"]
     curtain = shots[6]
     assert (curtain["before"], curtain["after"], curtain["labels"]) == (DATES[0], DATES[4], ["Then", "Now"])
     assert curtain["f1"] - curtain["f0"] == (1 + 4) * B  # entry beat, then 2 + 2 beats per split
@@ -691,7 +708,7 @@ def test_do_not_print_vantage_name_falls_back_to_the_masters_name(tmp_path):
 
 def test_stats_are_facts_only(tmp_path):
     root = tmp_path / "p"
-    tiny(root, chapters=[STATS], films={"16x9": {"stats_surface": "paper"}})  # night is the default
+    tiny(root, chapters=[STATS], films={"16x9": {"stats_surface": "paper"}})  # the plain card
     project = _facts(
         root,
         area={"text": "13,100", "status": "verified", "sources": ["plan"]},
@@ -704,12 +721,12 @@ def test_stats_are_facts_only(tmp_path):
     assert (stat["value"], stat["unit"], stat["label"], stat["source"]) == (
         "13,100", "sq ft", "of old pool", "Site plan",
     )  # fmt: skip
-    assert stat["facts"] == ["area"] and stat["surface"] == "paper"
-    # The figure lands once the dip from the image is over; label and source fade in on the next
-    # beat and stay readable at 17 characters a second, so the shot is longer than 4 beats here.
+    assert stat["facts"] == ["area"] and stat["surface"] == "paper" and stat["backdrop"] == "plain"
+    # The figure lands on the first beat after the dip from the image, with its label and source,
+    # which then stay readable at 17 characters a second, so the shot is longer than 4 beats here.
     third = round(B / 3)
-    assert stat["land"] == stat["f0"] + stat["dip"] and (stat["text_in"] - stat["f0"]) % B == 0
-    visible = stat["f1"] - third - (stat["text_in"] + third)
+    assert stat["land"] == stat["text_in"] == stat["f0"] + -(-stat["dip"] // B) * B
+    visible = stat["f1"] - (stat["text_in"] + third)
     assert visible >= math.ceil(len("of old pool Site plan") * 12 / 17) and stat["f1"] - stat["f0"] >= 4 * B
     assert any("'42' is not a {fact:} token" in w for w in plan.warnings), plan.warnings
     assert any("stat 1" in w and "do-not-print" in w for w in plan.warnings), plan.warnings
@@ -717,7 +734,7 @@ def test_stats_are_facts_only(tmp_path):
     # The renderer sets one layer per glyph of the plan's value: it never draws another number.
     cut = _Cut(project, plan)
     assert len(cut.layers[stat["id"]]["glyphs"]) == len("13,100")
-    first = cut.frame_at(stat["f0"] + 1).astype(np.float32)
+    first = cut.frame_at(stat["land"] + 1).astype(np.float32)
     landed = cut.frame_at(stat["key"]).astype(np.float32)
     assert np.abs(first - landed).mean() > 1  # the figure slides in, then holds
     # The value's first ink starts on the text column, like the label under it.
@@ -727,25 +744,190 @@ def test_stats_are_facts_only(tmp_path):
     blocks = np.split(rows, np.flatnonzero(np.diff(rows) > 2) + 1)
     lefts = [int(np.flatnonzero(dark[blk[0] : blk[-1] + 1].any(axis=0)).min()) for blk in blocks]
     assert len(lefts) >= 2 and abs(lefts[0] - lefts[1]) <= 2, lefts  # value, label
-    # Two stats in a row: the first fades out before the second's dip, so no two figures overlap.
+    # Two plain stats in a row: the second starts on the beat with no dip; only the text crossfades.
     two = {**STATS, "items": [STATS["items"][2], {**STATS["items"][2], "label": "of new lawn"}]}
     tiny(root, chapters=[two], films={"16x9": {"stats_surface": "paper"}})
     project2 = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
-    plan2 = _plan(project2)
-    n1, n2 = (s for s in plan2.plan["shots"] if s["kind"] == "stat")
-    cut2 = _Cut(project2, plan2)
-    bare = cut2.surfaces["paper"]
-    for f in range(n1["f1"], n2["land"]):  # from N1's end to the moment N2's figure starts
-        assert np.abs(cut2.frame_at(f).astype(int) - bare).max() <= 2, f
-    # Films put stats on night unless a FilmSpec asks for paper (the chapter's web surface is not used).
-    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}])
+    n1, n2 = (s for s in _plan(project2).plan["shots"] if s["kind"] == "stat")
+    assert (n2["f0"], n2["dip"], n2["land"], n2["text_in"]) == (n1["f1"], 0, n2["f0"], n2["f0"])
+    # By default stats sit over a picture, under a panel in the chapter's surface (else paper).
+    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]], "surface": "night"}])
     night = _plan(_facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]}))
-    assert {s["surface"] for s in night.plan["shots"] if s["kind"] == "stat"} == {"night"}
+    (shot,) = (s for s in night.plan["shots"] if s["kind"] == "stat")
+    assert (shot["surface"], shot["backdrop"], shot["file"]) == ("night", "picture", f"site/{DATES[-1]}.jpg")
     # No more than `stats` items.
     many = {**STATS, "items": [STATS["items"][2]] * 5}
     project = tiny(root, chapters=[many], films={"16x9": {"stats": 2}})
     project = _facts(root, area={"text": "13,100", "status": "verified"})
     assert sum(s["kind"] == "stat" for s in _plan(project).plan["shots"]) == 2
+
+
+AREA = {"text": "13,100", "status": "verified", "sources": ["plan"]}
+TREES = {"text": "78", "status": "verified", "sources": ["plan"]}
+RUN = {
+    "type": "stats",
+    "id": "numbers",
+    "title": "What changed",
+    "items": [
+        {"value": "{fact:trees}", "label": "young trees planted along the paths", "source": "Planting plan"},
+        {"value": "{fact:area}", "unit": "sq ft", "label": "of old pool, now a beach", "source": "Site plan"},
+    ],
+}
+POOL = {"id": "pool", "x": 0.35, "y": 0.62, "label": "The pool", "body": "{fact:area} square feet of sand."}
+
+
+def _big(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str | None = None) -> Project:
+    """The tiny project at 640×360 (and 360×640) over 1280×800 masters, with a curtain, a run of two
+    stats (the second's fact printed by a hotspot) and its facts releasable."""
+    import test_film
+
+    big = (1280, 800)
+    monkeypatch.setattr(test_film, "SIZE", big)
+    monkeypatch.setitem(globals(), "SIZE", big)
+    run = {**RUN, **({"surface": surface} if surface else {})}
+    root = tmp_path / f"big-{surface}"
+    tiny(
+        root, chapters=[COMPARE, run], hotspots=[POOL], simulated=True,
+        film={"width": 640, "height": 360, "vertical": True},
+    )  # fmt: skip
+    return _facts(root, area=AREA, trees=TREES)
+
+
+class _NoText:
+    """Renders a stat run's frames without its text (the picture and panel only)."""
+
+    def __init__(self, cut: _Cut) -> None:
+        self.cut = cut
+
+    def __enter__(self) -> None:
+        cut = self.cut
+        self.saved = {sid: dict(cut.layers[sid]) for sid in cut.stat_runs}
+        self.rides = {id(r): (r, r["ride"]) for r in cut.stat_runs.values()}
+        for sid in cut.stat_runs:
+            cut.layers[sid].update(glyphs=[], rest=[])
+        for r, _ in self.rides.values():
+            r["ride"] = None
+
+    def __exit__(self, *exc: object) -> None:
+        for sid, layers in self.saved.items():
+            self.cut.layers[sid].update(layers)
+        for r, ride in self.rides.values():
+            r["ride"] = ride
+
+
+def _cores(layers: list[Any], w: int, h: int) -> tuple[np.ndarray, np.ndarray]:
+    """(ys, xs) of the fully covered pixels of text layers (their glyphs' insides)."""
+    ys, xs = [], []
+    for layer in layers:
+        y, x = np.nonzero(layer.alpha[..., 0] >= 0.98)
+        y, x = y + layer.y, x + layer.x
+        keep = (y >= 0) & (y < h) & (x >= 0) & (x < w)
+        ys.append(y[keep])
+        xs.append(x[keep])
+    return np.concatenate(ys), np.concatenate(xs)
+
+
+def _lum(px: np.ndarray) -> np.ndarray:
+    from vantage.film.safety import _BGR_WEIGHTS, _SRGB_TO_LINEAR
+
+    return _SRGB_TO_LINEAR[px.astype(np.uint8)] @ _BGR_WEIGHTS.astype(np.float64)
+
+
+@pytest.mark.parametrize("surface", [None, "night"])
+@pytest.mark.parametrize("fid", ["16x9", "9x16"])
+def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
+    """A run of stats sits over the main vantage's latest picture (the one the curtain ends on): the
+    first dissolves in from the curtain, the next starts on the beat with no dip and only the text
+    crossfades. The stat whose fact the pool hotspot prints pushes toward it and frames it clear of
+    the panel (16:9); the other drifts or holds. Every frame from a stat's text_in to its end shows
+    its words, every frame of the run from the first landing shows a figure (no blank frame), and
+    each text keeps 4.5:1 over what is under it, measured on rendered frames."""
+    project = _big(tmp_path, monkeypatch, surface)
+    plan = _plan(project, fid)
+    p = plan.plan
+    check_plan(p)
+    shots = p["shots"]
+    assert [s["kind"] for s in shots][-4:] == ["curtain", "stat", "stat", "end"]
+    curtain, n1, n2, end = shots[-4:]
+    assert end["ride"] and n2["honesty"] == HONESTY["simulated"]  # the end card alone would run over 6 s
+    assert n1["file"] == n2["file"] == curtain["after_file"] and n1["surface"] == (surface or "paper")
+    d = n1["dissolve"]
+    assert (d["from"], d["f0"], d["f1"]) == ("C1", n1["f0"], n1["f0"] + D) and n1["land"] == n1["f0"] + B
+    assert n2["dissolve"] is None and n2["f0"] == n1["f1"] and n2["land"] == n2["text_in"] == n2["f0"]
+    assert n1["move"]["subjects"] == [] and n1["move"]["how"] in ("drift", "hold")
+    if fid == "16x9":
+        move = n2["move"]
+        assert move["subjects"] == ["pool"] and move["how"] == "focus+subject:pool", move
+        x, y, z = move["focus"]
+        mv = MastersIndex.load(project.masters_dir / "index.json").vantages["site"]
+        geo = Geometry(p["width"], p["height"], mv.width, mv.height)
+        cx, cy = geo.centre(x, y, z)
+        hw, hh = geo.half(z)
+        v = (POOL["y"] - (cy - hh)) / (2 * hh) * p["height"]
+        assert z > 1.08 and 0 <= (POOL["x"] - (cx - hw)) / (2 * hw) <= 1
+        cut = _Cut(project, plan)
+        top, bottom = cut.scrims[0]["box"][1], sum(cut.scrims[0]["box"][1::2])
+        assert v < top or v > bottom, (v, top, bottom)  # the hotspot is not under the panel's ink
+    said = any("The camera moves in on The pool." in line["text"] for line in p["transcript"]["lines"])
+    assert said == (n2["move"]["subjects"] == ["pool"])
+    cut = _Cut(project, plan)
+    (scrim,) = cut.scrims
+    assert scrim["shots"] == ["N1", "N2"] and scrim["tint"] == (surface or "paper")
+    w, h = cut.width, cut.height
+    half = round(B / 2)
+    for stat in (n1, n2):
+        L = cut.layers[stat["id"]]
+        words = _cores(L["rest"], w, h)
+        figure = _cores(L["glyphs"], w, h)
+        fully = stat["land"] + 2 * (len(L["glyphs"]) - 1) + half
+        for f in range(stat["text_in"], stat["f1"]):
+            frame = cut.frame_at(f).astype(np.int16)
+            with _NoText(cut):
+                bare = cut.frame_at(f).astype(np.int16)
+            seen = np.abs(frame[words] - bare[words]).max(axis=1).mean()
+            assert seen > 12, (stat["id"], f, seen)  # its words are on screen
+            if f >= fully:
+                assert np.abs(frame[figure] - bare[figure]).max(axis=1).mean() > 12, (stat["id"], f)
+            if f in (max(stat["key"], fully), stat["f1"] - 1):  # every text's contrast over what is under it
+                for layers in ([*L["glyphs"]], L["rest"], [cut.stat_runs[stat["id"]]["ride"]]):
+                    ys, xs = _cores(layers, w, h)
+                    ink = np.median(_lum(frame[ys, xs]))
+                    under = _lum(bare[ys, xs])
+                    ratio = (np.maximum(ink, under) + 0.05) / (np.minimum(ink, under) + 0.05)
+                    assert np.quantile(ratio, 0.05) >= 4.5, (stat["id"], f, np.quantile(ratio, 0.05))
+    # No blank frame: from N1's figure landing to the run's end, some figure is on screen.
+    figures = [_cores(cut.layers[s["id"]]["glyphs"], w, h) for s in (n1, n2)]
+    for f in range(n1["land"] + 2 * len(cut.layers["N1"]["glyphs"]) + half, n2["f1"]):
+        frame = cut.frame_at(f).astype(np.int16)
+        with _NoText(cut):
+            bare = cut.frame_at(f).astype(np.int16)
+        assert max(np.abs(frame[c] - bare[c]).max(axis=1).mean() for c in figures) > 12, f
+
+
+def test_stat_type_reads_on_a_phone(tmp_path, monkeypatch):
+    """In 9:16 at 1080 wide a stat label's x-height is at least 44 px and its source's 30, and the
+    whole run, honesty line included, stays inside the safe zone, above the tag."""
+    from vantage.film.cut import stat_run
+    from vantage.film.render import check_ink
+
+    project = _big(tmp_path, monkeypatch)
+    root = project.root
+    data = yaml.safe_load((root / "project.yaml").read_text())
+    data["output"]["film"].update(width=1920, height=1080)
+    (root / "project.yaml").write_text(yaml.safe_dump(data))
+    project = load_project(root)
+    plan = _plan(project, "9x16")
+    cut = _Cut(project, plan)
+    assert cut.width == 1080
+    stats = [s for s in plan.plan["shots"] if s["kind"] == "stat"]
+    run = stat_run(cut.type, cut.lay, stats, stats[0]["honesty"], stats[0]["place"], True)
+    for st in run.sets:
+        x_label = -cut.type.font(st.label).getbbox("x", anchor="ls")[1]
+        x_source = -cut.type.font(st.source).getbbox("x", anchor="ls")[1]
+        assert x_label >= 44 and x_source >= 30, (x_label, x_source)
+    assert check_ink(plan, cut) == []
+    tag = next(i["box"] for i in cut.ink if i["layer"] == "tag")
+    assert run.box[3] < tag[1], (run.box, tag)
 
 
 def test_degrade(tmp_path):
@@ -757,21 +939,16 @@ def test_degrade(tmp_path):
         return plan["shots"]
 
     one = kinds(1)
-    assert [s["kind"] for s in one] == ["title", "capture", "end", "end"]
+    assert [s["kind"] for s in one] == ["title", "capture", "end"]
     assert one[1]["f1"] - one[1]["f0"] == 3 * B and one[1]["dissolve"] is None
     unsourced = {**STATS, "items": [STATS["items"][0]]}
-    assert [s["kind"] for s in kinds(1, [unsourced])] == [
-        "title",
-        "capture",
-        "end",
-        "end",
-    ]  # no fact, no stat
+    assert [s["kind"] for s in kinds(1, [unsourced])] == ["title", "capture", "end"]  # no fact, no stat
     two = kinds(2)
-    assert [s["kind"] for s in two] == ["title", "capture", "curtain", "end", "end"]
+    assert [s["kind"] for s in two] == ["title", "capture", "curtain", "end"]
     assert two[1]["f1"] - two[1]["f0"] == 3 * B
     assert (two[2]["before"], two[2]["after"]) == (DATES[0], DATES[1])
     assert [k["split"] for k in two[2]["keys"]] == [0.0, 0.5]
-    assert [s["kind"] for s in kinds(3)] == ["title", "capture", "capture", "capture", "end", "end"]
+    assert [s["kind"] for s in kinds(3)] == ["title", "capture", "capture", "capture", "end"]
 
 
 def test_push_target_shows_subject(tmp_path):
@@ -960,7 +1137,8 @@ def test_gate_hints_at_vantage_fast(tmp_path, monkeypatch):
 
 @pytest.mark.slow
 def test_demo_story_cut(tmp_path):
-    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 90 beats,
+    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 74 beats,
+    the 9:16 72 (the fast masters clamp a push the full-size ones make),
     the Demolition push frames the slide tower in 16:9 and keeps its reach in 9:16, and the stats
     print exactly the three figures the cut chooses."""
     import shutil
@@ -991,7 +1169,7 @@ def test_demo_story_cut(tmp_path):
     assert tower.id == "slide-tower"
     for fid, plan in plans.items():
         p = plan.plan
-        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 90, "9x16": 88}[fid], (fid, p["grid"])
+        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 74, "9x16": 72}[fid], (fid, p["grid"])
         check_plan(p)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
         step = shot["step"]
@@ -1007,3 +1185,13 @@ def test_demo_story_cut(tmp_path):
         stats = [s for s in p["shots"] if s["kind"] == "stat"]
         assert [f for s in stats for f in s["facts"]] == ["flights", "stalls-to-meadow", "wave-pool-area"]
         assert stats[2]["value"] == "13,100"
+        # Over the curtain's last picture; in 16:9 the beach figure pushes toward the hotspot that
+        # prints it. The fast masters leave the 9:16 cut no zoom to spare, and the meadow sits on the
+        # master's bottom edge (only the full-size 16:9 film zooms in far enough to lift it clear of
+        # the panel), so those figures drift or hold, saying which hotspot they could not frame.
+        assert {s["file"] for s in stats} == {p["shots"][-5]["after_file"]}
+        hows = [s["move"]["how"] for s in stats]
+        assert hows[1].endswith("off-frame:meadow") and hows[2].endswith("beach"), hows
+        assert hows[2] == "focus+subject:beach" or fid == "9x16", hows
+        end = p["shots"][-1]
+        assert end["ride"] and end["f1"] - end["f0"] <= 6 * p["fps"] and end["f1"] == p["frames"]

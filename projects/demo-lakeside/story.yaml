@@ -111,7 +111,7 @@ chapters:
         x: 0.441
         y: 0.417
         label: The wave pool, then the beach
-        body: The same fan-shaped footprint, backfilled and topped with sand.
+        body: "The same fan-shaped footprint, {fact:wave-pool-area} square feet of it, backfilled and topped with sand."
       - id: gatehouse-east
         x: 0.550
         y: 0.851

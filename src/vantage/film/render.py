@@ -742,6 +742,8 @@ def check_ink(plan: FilmPlan, film: Renderable) -> list[str]:
     rect = list(film.lay.rect)
     bad = [k for k, item in enumerate(film.ink) if outside(item["box"], rect, INK_TOLERANCE)]
     plan.checks = {"safe": rect, "ink": film.ink, "outside": bad}
+    if scrims := getattr(film, "scrims", None):  # story cuts: the measured panels behind stat runs
+        plan.checks["scrims"] = scrims
     problems = []
     for k in bad:
         item = film.ink[k]
