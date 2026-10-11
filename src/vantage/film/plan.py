@@ -299,6 +299,7 @@ class FilmDef:
     bpm: float = 100.0
     chapters: str | tuple[str, ...] = "all"  # all | main | chapter ids
     stats: int = 3
+    stats_surface: Literal["night", "paper"] = "night"
     title_beats: int = 4
     end_beats: int = 6
     safe: tuple[float, float, float, float] | None = None  # None: the layout preset's

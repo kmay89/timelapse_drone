@@ -826,7 +826,7 @@ def derive_cut(
                         project, ch.kicker, f"chapter {ids[i]!r} kicker", warnings, releasable_only=strict
                     )
                 parts.append(
-                    ("stats", (ids[i], ch.surface or "paper", items, heading or "Figures", heading_facts))
+                    ("stats", (ids[i], film.stats_surface, items, heading or "Figures", heading_facts))
                 )
 
     # Degrade on the main vantage's captures (after exclusions).

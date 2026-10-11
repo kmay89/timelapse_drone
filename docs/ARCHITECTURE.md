@@ -531,7 +531,7 @@ films:                       # optional; id → FilmSpec; merged over the derive
   9x16: {chapters: main}     # derived when output.film.vertical (aspect from the id)
   screen: {preset: screen}   # the event loop (auto: false) → render it with --film screen
 # FilmSpec fields (all optional): preset (screen) · cut · aspect (16x9|9x16) · bpm · chapters (all | main | [chapter ids])
-#   · stats (0–6, default 3) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
+#   · stats (0–6, default 3) · stats_surface (night | paper; default night) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
 #   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
 #   · enabled (true) · hours (loop films)
 steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare steps
@@ -637,7 +637,9 @@ two pushes), with or without VANTAGE_FAST.
 - **stat** (`N1…`, at least 4 beats each, at most `stats`, default 3): items of the first stats chapter in
   scope, in order, whose value contains a `{fact:}` token. Any other item, and any item whose value,
   unit, label or source uses a do-not-print fact, is left out with a plan warning.
-  - Background: the chapter's `surface` (default paper), entered by a dip (`dip`).
+  - Background: the FilmSpec's `stats_surface` (default night; the chapter's web `surface` is not
+    used: a paper card between dark aerials and a night end card reads as a glare block), entered
+    by a dip (`dip`).
   - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
     (tabular figures without raqm; other glyphs keep their own advance), shifted so the first
     glyph's ink starts on the text column with the label. Each glyph slides up into a mask over B/2

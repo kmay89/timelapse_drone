@@ -691,7 +691,7 @@ def test_do_not_print_vantage_name_falls_back_to_the_masters_name(tmp_path):
 
 def test_stats_are_facts_only(tmp_path):
     root = tmp_path / "p"
-    tiny(root, chapters=[STATS])
+    tiny(root, chapters=[STATS], films={"16x9": {"stats_surface": "paper"}})  # night is the default
     project = _facts(
         root,
         area={"text": "13,100", "status": "verified", "sources": ["plan"]},
@@ -729,7 +729,7 @@ def test_stats_are_facts_only(tmp_path):
     assert len(lefts) >= 2 and abs(lefts[0] - lefts[1]) <= 2, lefts  # value, label
     # Two stats in a row: the first fades out before the second's dip, so no two figures overlap.
     two = {**STATS, "items": [STATS["items"][2], {**STATS["items"][2], "label": "of new lawn"}]}
-    tiny(root, chapters=[two])
+    tiny(root, chapters=[two], films={"16x9": {"stats_surface": "paper"}})
     project2 = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
     plan2 = _plan(project2)
     n1, n2 = (s for s in plan2.plan["shots"] if s["kind"] == "stat")
@@ -737,6 +737,10 @@ def test_stats_are_facts_only(tmp_path):
     bare = cut2.surfaces["paper"]
     for f in range(n1["f1"], n2["land"]):  # from N1's end to the moment N2's figure starts
         assert np.abs(cut2.frame_at(f).astype(int) - bare).max() <= 2, f
+    # Films put stats on night unless a FilmSpec asks for paper (the chapter's web surface is not used).
+    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}])
+    night = _plan(_facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]}))
+    assert {s["surface"] for s in night.plan["shots"] if s["kind"] == "stat"} == {"night"}
     # No more than `stats` items.
     many = {**STATS, "items": [STATS["items"][2]] * 5}
     project = tiny(root, chapters=[many], films={"16x9": {"stats": 2}})

@@ -601,6 +601,11 @@ class FilmSpec(Model):
         None, description="all | main (the first scrub's vantage, plus stats) | [chapter ids]."
     )
     stats: int | None = Field(None, ge=0, le=6, description="Stats shown (default 3).")
+    stats_surface: Literal["night", "paper"] | None = Field(
+        None,
+        description="The surface of the film's stat shots (default night: a paper card between dark aerials "
+        "is a glare block; the stats chapter's web `surface` is not used).",
+    )
     title_beats: int | None = Field(
         None, ge=3, le=16, description="At least 3: the title's words rise on beat 1."
     )
