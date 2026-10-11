@@ -7,6 +7,11 @@ dist/<slug>/<slug>-lite.html     email-sized: ~1080 px JPEGs for the hero, compa
                                  and video posters; other images keep only their LQIP; no video
 dist/<slug>/<slug>-offline.zip   the site folder for file:// (no service worker / manifest)
 dist/<slug>/HOW-TO-VIEW.txt  SHA256SUMS  build.json
+
+Films already rendered into dist/<slug>/film are checked against the plans the current YAML, masters
+and facts would make (film/plan.py `film_records`): a release refuses any problem, a draft package
+logs them. build.json records every film plan; SHA256SUMS lists each film with its plan.json and
+storyboard.
 """
 
 from __future__ import annotations
@@ -31,6 +36,8 @@ from PIL import Image
 
 from vantage import __version__, log
 from vantage.config import Project
+from vantage.film.plan import PLAN_SUFFIX, STORYBOARD_SUFFIX, film_records
+from vantage.media.ffmpeg import FFmpegError, ffmpeg_version
 from vantage.site.build import ReleaseError, build_site, inside
 from vantage.site.facts import check_release
 from vantage.site.images import data_uri, encode, jpeg_bytes, resize
@@ -366,10 +373,19 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _ffmpeg() -> str | None:
+    try:
+        return ffmpeg_version()
+    except (FFmpegError, OSError):
+        return None
+
+
 def package_project(project: Project, dist_dir: Path, *, release: bool = False) -> dict[str, Path]:
     """Package dist_dir/site into the offline deliverables. The site is built first when missing, and
     always rebuilt for a release: one already in dist may be an earlier draft build (Preview badge,
-    unverified facts) or predate the YAML that just passed the gates, and must not ship as a release."""
+    unverified facts) or predate the YAML that just passed the gates, and must not ship as a release.
+    A release also refuses films that are unplanned, stale, drafts, replaced, unapproved (when
+    output.film.require_approval) or that print a fact that is not releasable."""
     if release:
         problems = check_release(project)
         if problems:
@@ -381,6 +397,12 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
     elif not (site / "index.html").is_file():
         log.info(f"no site in {site}; building it first")
         build_site(project, site)
+    film_dir = dist_dir / "film"
+    film_info, film_problems = film_records(project, film_dir)
+    if release and film_problems:
+        raise ReleaseError("release package blocked by the films:\n  " + "\n  ".join(film_problems))
+    for problem in film_problems:
+        log.warn(problem)
     page = (site / "index.html").read_text(encoding="utf-8")
     story = read_story(page)
     theme_match = _THEME.search(page)
@@ -389,7 +411,10 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
     if project.config.output.single_file:
         files |= _single_files(project, site, story, theme, dist_dir)
     files["zip"] = _offline_zip(project, site, story, theme, dist_dir / f"{project.slug}-offline.zip")
-    films = sorted((dist_dir / "film").glob("*.mp4"))
+    films = sorted(film_dir.glob("*.mp4"))
+    if not films and project.config.output.film.enabled:
+        log.warn(f"no films in {film_dir}; run `vantage film {project.slug}` to add them")
+    ledger = sorted([*film_dir.glob(f"*{PLAN_SUFFIX}"), *film_dir.glob(f"*{STORYBOARD_SUFFIX}")])
     files["how_to_view"] = _how_to_view(story, files, films, dist_dir / "HOW-TO-VIEW.txt")
     site_files = [p for p in site.rglob("*") if p.is_file()]
     for p in site_files:
@@ -397,7 +422,9 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
             log.warn(
                 f"{p.relative_to(dist_dir)} is {p.stat().st_size / MIB:.1f} MiB; hosts like Cloudflare Pages cap files at 25 MiB"
             )
-    deliverables = sorted([*files.values(), *films], key=lambda p: p.relative_to(dist_dir).as_posix())
+    deliverables = sorted(
+        [*files.values(), *films, *ledger], key=lambda p: p.relative_to(dist_dir).as_posix()
+    )
     info = {
         "version": 1,
         "slug": project.slug,
@@ -407,12 +434,18 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
         "draft": story["meta"]["draft"],
         "simulated": story["meta"]["simulated"],
         "unverifiedFacts": story["meta"].get("unverifiedFacts", 0),
-        "tools": {"vantage": __version__, "python": platform.python_version(), "pillow": PIL.__version__},
+        "tools": {
+            "vantage": __version__,
+            "python": platform.python_version(),
+            "pillow": PIL.__version__,
+            "ffmpeg": _ffmpeg(),
+        },
         "site": {"files": len(site_files), "bytes": sum(p.stat().st_size for p in site_files)},
         "files": {
             p.relative_to(dist_dir).as_posix(): {"bytes": p.stat().st_size, "sha256": _sha256(p)}
             for p in deliverables
         },
+        "films": film_info,
     }
     files["build_json"] = dist_dir / "build.json"
     files["build_json"].write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")

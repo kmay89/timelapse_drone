@@ -18,7 +18,10 @@ import yaml
 from PIL import Image, PngImagePlugin
 
 from test_build import FACTS, make_project
+from test_film import FILM
+from test_film import make_project as make_film_project
 from vantage.config import load_project
+from vantage.film.render import render_film
 from vantage.media import ffmpeg
 from vantage.site import images
 from vantage.site.build import ReleaseError, build_site
@@ -350,3 +353,95 @@ def test_raster_logos_keep_pixels_and_lose_metadata(tmp_path, fmt, options, exac
         got, want = (np.asarray(i.convert("RGBA"), dtype=np.int16) for i in (out, src))
         assert np.array_equal(got, want) if exact else np.abs(got - want).mean() < 3
     assert images.strip_raster(path)[0] == data  # deterministic
+
+
+# ------------------------------- films ----------------------------------- #
+
+FILM_CUT = {**FILM, "vertical": False, "title_card_s": 0.5, "end_card_s": 0.5}
+
+
+@pytest.fixture(scope="module")
+def filmed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A releasable tiny project with its 16:9 film rendered into dist/film (copy it before changing it)."""
+    base = tmp_path_factory.mktemp("filmed")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("VANTAGE_FAST", "1")
+        project = make_film_project(base / "proj", film=FILM_CUT)
+        render_film(project, base / "dist" / "film")
+    return base
+
+
+def _copy(filmed: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    shutil.copytree(filmed, tmp_path / "w")
+    return tmp_path / "w" / "proj", tmp_path / "w" / "dist"
+
+
+def _set(path: Path, change: Any) -> None:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    change(data)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def test_release_refuses_stale_film(filmed, tmp_path, monkeypatch):
+    root, dist = _copy(filmed, tmp_path, monkeypatch)
+    _set(root / "story.yaml", lambda d: d.update(captures=[{"date": "2025-08-02", "note": "A new note."}]))
+    with pytest.raises(ReleaseError, match=r"tiny-site-16x9\.mp4 is stale") as err:
+        package_project(load_project(root), dist, release=True)
+    assert "shots" in str(err.value)
+
+
+def test_release_refuses_film_without_plan(filmed, tmp_path, monkeypatch):
+    root, dist = _copy(filmed, tmp_path, monkeypatch)
+    shutil.copy(dist / "film" / "tiny-site-16x9.mp4", dist / "film" / "tiny-site-9x16.mp4")
+    _set(root / "project.yaml", lambda d: d["output"]["film"].update(vertical=True))
+    with pytest.raises(ReleaseError, match=r"tiny-site-9x16\.mp4 has no tiny-site-9x16\.plan\.json"):
+        package_project(load_project(root), dist, release=True)
+
+
+def test_release_refuses_draft_film(tmp_path, monkeypatch):
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    root, dist = tmp_path / "proj", tmp_path / "dist"
+    render_film(make_film_project(root, film=FILM_CUT, draft=True), dist / "film")
+    _set(root / "project.yaml", lambda d: d.update(draft=False))
+    with pytest.raises(ReleaseError, match="draft") as err:
+        package_project(load_project(root), dist, release=True)
+    assert "stale" in str(err.value)
+
+
+def test_release_refuses_replaced_mp4(filmed, tmp_path, monkeypatch):
+    root, dist = _copy(filmed, tmp_path, monkeypatch)
+    mp4 = dist / "film" / "tiny-site-16x9.mp4"
+    mp4.write_bytes(mp4.read_bytes() + b"\0")
+    with pytest.raises(ReleaseError, match="render record"):
+        package_project(load_project(root), dist, release=True)
+
+
+def test_release_requires_approval_when_enabled(filmed, tmp_path, monkeypatch):
+    root, dist = _copy(filmed, tmp_path, monkeypatch)
+    _set(root / "project.yaml", lambda d: d["output"]["film"].update(require_approval=True))
+    with pytest.raises(ReleaseError, match="not approved"):
+        package_project(load_project(root), dist, release=True)
+    digest = json.loads((dist / "film" / "tiny-site-16x9.plan.json").read_text())["hash"]
+    (root / "approvals.yaml").write_text(
+        yaml.safe_dump({"approvals": [{"edition": "2026-10", "films": ["0" * 12]}, {"films": [digest[:12]]}]})
+    )
+    files = package_project(load_project(root), dist, release=True)
+    assert json.loads(files["build_json"].read_text())["films"]["16x9"]["problems"] == []
+
+
+def test_build_json_records_films(filmed, tmp_path, monkeypatch):
+    root, dist = _copy(filmed, tmp_path, monkeypatch)
+    files = package_project(load_project(root), dist)
+    info = json.loads(files["build_json"].read_text())
+    plan = json.loads((dist / "film" / "tiny-site-16x9.plan.json").read_text())
+    film = info["films"]["16x9"]
+    assert film["hash"] == plan["hash"] and film["fresh"] is True and film["problems"] == []
+    assert (film["mp4"], film["plan"], film["cut"], film["width"], film["height"]) == (
+        "film/tiny-site-16x9.mp4", "film/tiny-site-16x9.plan.json", "classic", 320, 180,
+    )  # fmt: skip
+    assert info["tools"]["ffmpeg"]
+    sums = files["checksums"].read_text()
+    for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.plan.json", "tiny-site-16x9.storyboard.jpg"):
+        assert f"  film/{name}\n" in sums
+        assert f"film/{name}" in info["files"]

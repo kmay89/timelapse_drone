@@ -14,6 +14,7 @@ One build (`vantage all <project>`) writes every edition into `dist/<slug>/`:
 | Lite single file | `<slug>-lite.html` | email attachment, iOS Quick Look | ≤ `output.lite_max_mb` (default 15 MB); key images only, no video |
 | Offline zip | `<slug>-offline.zip` | desktop `file://`, long-term archive | release assets < 2 GiB each |
 | Films | `film/<slug>-16x9.mp4`, `-9x16.mp4` | everyone: meetings, Photos, social | H.264, plays everywhere |
+| Film plans | `film/<slug>-<id>.plan.json`, `.storyboard.jpg` | approving a cut; proving what a film shows | `vantage film --plan-only` writes them in seconds; `package --release` refuses a film that no longer matches its plan |
 | Info | `HOW-TO-VIEW.txt`, `SHA256SUMS`, `build.json` | recipients, integrity, provenance | |
 
 `<html data-edition>` is `site`, `offline`, `single` or `lite`. Only the hosted site registers a
@@ -84,9 +85,12 @@ Cloudflare Access or a Netlify password for review.
 ## Release process
 
 1. `/vantage-verify` passes; the person has looked at the iPhone and no-JS screenshots.
-2. The client approves copy and every fact (recorded as in [PROJECTS.md](PROJECTS.md#approvals)).
+2. The client approves copy and every fact, and the films from their storyboards
+   (`uv run vantage film <project> --plan-only` writes `film/<slug>-<id>.storyboard.jpg` without
+   encoding; the approval names each plan hash). All recorded as in [PROJECTS.md](PROJECTS.md#approvals).
 3. `draft: false`, then a gated build: `uv run vantage all <project> --release` (fails on drafts and
-   on unknown or unapproved facts), `uv run python scripts/budgets.py dist/<slug>`.
+   on unknown or unapproved facts, and on films that are stale, drafts, replaced by hand or, with
+   `output.film.require_approval`, unapproved), `uv run python scripts/budgets.py dist/<slug>`.
 4. Tag `<slug>@<edition>` (for example `<slug>@2026-10`) in the repo that holds the project. The
    release workflow builds from committed masters with the gates on, checks budgets and checksums,
    and attaches the zip, both single files, the films, `HOW-TO-VIEW.txt`, `build.json` and

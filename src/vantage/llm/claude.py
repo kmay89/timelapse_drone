@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from vantage import log
 from vantage.config import Project
-from vantage.film.render import capture_labels
+from vantage.film.plan import capture_labels
 from vantage.models import MasterCapture, MastersIndex
 
 DEFAULT_MODEL = "claude-opus-5-5"

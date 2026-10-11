@@ -3,14 +3,16 @@
 catalog.json    ingest  → select
 selection.json  select  → masters
 index.json      masters → build / film
+<film>.plan.json  film plan → render / package (the FilmPlan of one film, see "Films")
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -153,3 +155,86 @@ class MastersVantage(_M):
 
 class MastersIndex(Artifact):
     vantages: dict[str, MastersVantage] = Field(default_factory=dict)
+
+
+# -------------------------------- films ----------------------------------- #
+
+# Shot kinds a plan may hold. ortho, heatmap and insert are reserved for photogrammetry products
+# (orthophoto series, DSM-difference layers, committed 3D-reconstruction clips) and refused for now.
+FILM_SHOT_KINDS = frozenset({"card", "section", "title", "capture", "curtain", "stat", "end", "rise", "dip"})
+RESERVED_SHOT_KINDS = frozenset({"ortho", "heatmap", "insert"})
+_PLAN_KEYS = ("slug", "cut", "renderer", "width", "height", "fps", "frames", "inputs", "shots")
+
+
+def canonical_json(obj: Any) -> bytes:
+    """The bytes a plan hash is taken over: sorted keys, no whitespace, UTF-8, no NaN. Floats keep
+    Python's shortest round-trip repr, so a plan read back from disk hashes (and renders) the same."""
+    return json.dumps(
+        obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode()
+
+
+class FilmPlan(_M):
+    """One film: `plan` decides every frame and is hashed; the rest is a record around it.
+
+    `facts` (a status snapshot), `warnings`, `encode` (bytes, not frames) and `render` (what the
+    encode produced) are not part of the hash. The hash is written into plan.json, and `load`
+    refuses a file whose plan no longer matches it (edited by hand).
+    """
+
+    version: int = 1
+    id: str
+    plan: dict[str, Any]
+    facts: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    encode: dict[str, Any] = Field(default_factory=dict)
+    render: dict[str, Any] | None = None
+
+    @field_validator("plan")
+    @classmethod
+    def _shape(cls, plan: dict[str, Any]) -> dict[str, Any]:
+        missing = [k for k in _PLAN_KEYS if k not in plan]
+        if missing:
+            raise ValueError(f"plan lacks {', '.join(missing)}")
+        for shot in plan["shots"]:
+            kind = shot.get("kind")
+            if kind in RESERVED_SHOT_KINDS:
+                raise ValueError(f"shot {shot.get('id')}: kind {kind!r} is reserved and not supported yet")
+            if kind not in FILM_SHOT_KINDS:
+                raise ValueError(f"shot {shot.get('id')}: unknown kind {kind!r}")
+        canonical_json(plan)  # JSON-safe, no NaN or infinity
+        return plan
+
+    @property
+    def hash(self) -> str:
+        """sha256 hex of canonical_json(plan); people quote its first 12 characters."""
+        return hashlib.sha256(canonical_json(self.plan)).hexdigest()
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "id": self.id,
+            "hash": self.hash,
+            "plan": self.plan,
+            "facts": self.facts,
+            "warnings": self.warnings,
+            "encode": self.encode,
+            "render": self.render,
+        }
+
+    def dumps(self) -> str:
+        return json.dumps(self.document(), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+
+    @classmethod
+    def load(cls, path: Path) -> FilmPlan:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        stored = data.pop("hash", None) if isinstance(data, dict) else None
+        plan = cls.model_validate(data)
+        if stored != plan.hash:
+            raise ValueError(f"{path.name}: its plan does not match its hash (edited by hand?)")
+        return plan
+
+    def save(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.dumps(), encoding="utf-8")
+        return path

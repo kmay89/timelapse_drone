@@ -1,7 +1,9 @@
-"""MP4 time-lapse films: every visit of a vantage as one continuous, slowly pushing camera move.
+"""MP4 time-lapse films rendered from their plans: every visit of a vantage as one slowly pushing move.
 
-    <out>/<slug>-16x9.mp4 + .jpg poster    output.film width × height
-    <out>/<slug>-9x16.mp4 + .jpg poster    phones and social (output.film.vertical)
+    <out>/<slug>-<id>.mp4               the film ('16x9': output.film width × height; '9x16': phones)
+    <out>/<slug>-<id>.jpg               poster
+    <out>/<slug>-<id>.plan.json         its FilmPlan (film/plan.py) and the render record
+    <out>/<slug>-<id>.storyboard.jpg    one tile per key frame (film/storyboard.py)
 
 A film is a title card, one section per vantage (the main vantage first; the
 vertical cut keeps only the main one) and an end card. Inside a section each
@@ -10,21 +12,20 @@ light) under an eased push that spans the whole section, with a date lower-third
 and a calendar rail whose ticks sit at the real flight dates. Cards dissolve into
 and out of the imagery while the camera keeps moving.
 
-Frames are composed with numpy/OpenCV and piped to ffmpeg (media.ffmpeg.FrameWriter).
-Text is typeset once per card and capture with Pillow in the brand fonts and
-alpha-composited, so a frame costs one warp, the occasional blend and a few small
+`_Film` evaluates a classic plan: the timeline, card text and inputs all come from the plan, so a
+plan read back from plan.json renders the same bytes. Frames are composed with numpy/OpenCV and
+piped to ffmpeg (media.ffmpeg.FrameWriter). Text is typeset once per card and capture with Pillow in
+the brand fonts and alpha-composited, so a frame costs one warp, the occasional blend and a few small
 composites. VANTAGE_FAST=1 caps the long edge at 960 px and encodes with a fast preset.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import json
+import hashlib
 import math
-import os
-from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Literal
@@ -34,18 +35,28 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from vantage import log
-from vantage.config import BrandKit, FontSpec, Project, ScrubChapter
-from vantage.media.ffmpeg import FrameWriter
-from vantage.models import MastersIndex
-from vantage.paths import RUNTIME_DIR
-from vantage.site.facts import FactNotes
-from vantage.site.render import capture_label as date_label
+from vantage.config import Project
+from vantage.film.plan import (
+    PLAN_SUFFIX,
+    ROLES,
+    SIMULATED_NOTE,
+    STORYBOARD_SUFFIX,
+    film_id,
+    font_path,
+    plan_films,
+    resolve_films,
+)
+from vantage.film.plan import capture_labels as capture_labels
+from vantage.film.storyboard import write_storyboard
+from vantage.media.ffmpeg import FrameWriter, ffmpeg_version
+from vantage.models import FilmPlan
+from vantage.site.build import ReleaseError
+from vantage.site.facts import check_release
 
 PUSH = 0.06  # Ken-Burns zoom across a section (1.00 → 1.06)
 PAN = 0.05  # vertical cut: drift either side of the portrait focus, in image widths
-FAST_LONG_EDGE = 960
 POSTER_QUALITY = 90
-SIMULATED_NOTE = "Simulated imagery for demonstration; not actual aerial footage."
+__all__ = ["SIMULATED_NOTE", "capture_labels", "render_film"]
 # BT.709 tags and matrix (players guess wrong otherwise), no timestamps → reproducible bytes,
 # and an explicit container (films are written to <name>.mp4.part, then renamed).
 _ENCODE = (
@@ -59,17 +70,9 @@ Font = ImageFont.FreeTypeFont | ImageFont.ImageFont
 Role = Literal["display", "text", "numeric"]
 
 
-def _fast() -> bool:
-    return os.environ.get("VANTAGE_FAST", "").lower() not in ("", "0", "false", "no")
-
-
 def _ease(u: float) -> float:
     u = min(max(u, 0.0), 1.0)
     return u * u * (3 - 2 * u)
-
-
-def _even(n: float) -> int:
-    return max(2, round(n / 2) * 2)
 
 
 def _hex(color: str) -> tuple[int, int, int]:
@@ -90,40 +93,9 @@ def _mix(a: np.ndarray, b: np.ndarray, w: float) -> np.ndarray:
     return cv2.convertScaleAbs(cv2.sqrt(m), alpha=255.0)
 
 
-def _plain(project: Project, text: str | None) -> str | None:
-    """Story, project and brand text as the site prints it: `{fact:…}` tokens become the fact's text."""
-    return FactNotes(project.facts.facts).plain(text)
-
-
-def capture_labels(project: Project, dates: Sequence[str]) -> dict[str, str]:
-    """Visit labels exactly as the site shows them: story.yaml's label, else 'June 2025'
-    ('June 14, 2025' when the vantage has two visits that month)."""
-    labels = {n.date.isoformat(): _plain(project, n.label) for n in project.story.captures if n.label}
-    months = Counter(d[:7] for d in dates)
-    return {d: labels.get(d) or date_label(d, day=months[d[:7]] > 1) for d in dates}
-
-
 # --------------------------------------------------------------------------- #
 # Typography
 # --------------------------------------------------------------------------- #
-
-
-@cache
-def _bundled() -> dict[str, dict]:
-    return json.loads((RUNTIME_DIR / "fonts" / "fonts.json").read_text(encoding="utf-8"))
-
-
-def _font_file(brand: BrandKit, spec: FontSpec) -> Path | None:
-    """The upright face of a brand font: client files first, then the bundled font."""
-    files = [p for f in spec.files if (p := brand.resolve(f)) and p.is_file()]
-    if files:
-        return next((p for p in files if "italic" not in p.name.lower()), files[0])
-    entry = _bundled().get(spec.bundled or "")
-    if entry:
-        faces = sorted(entry["faces"], key=lambda f: f.get("style") != "normal")
-        return RUNTIME_DIR / "fonts" / faces[0]["file"]
-    log.debug(f"no font file for {spec.family!r}; using Pillow's default face")
-    return None
 
 
 @cache
@@ -157,17 +129,12 @@ class _Style:
 
 
 class _Type:
-    """Brand fonts and colors, sized for one frame."""
+    """Brand fonts and colors (as a plan names them), sized for one frame."""
 
-    def __init__(self, brand: BrandKit, unit: float) -> None:
-        typo = brand.typography
-        self.files: dict[Role, Path | None] = {
-            "display": _font_file(brand, typo.display),
-            "text": _font_file(brand, typo.text),
-            "numeric": _font_file(brand, typo.numeric or typo.text),
-        }
+    def __init__(self, files: dict[Role, Path | None], colors: dict[str, str], unit: float) -> None:
+        self.files = files
         self.unit = unit
-        self.colors = {"paper": _hex(brand.colors.paper), "accent": _hex(brand.colors.accent)}
+        self.colors = {"paper": _hex(colors["paper"]), "accent": _hex(colors["accent"])}
 
     def font(self, s: _Style, scale: float = 1.0) -> Font:
         return _font(self.files[s.role], max(6, round(s.size * self.unit * scale)), s.weight)
@@ -265,7 +232,7 @@ class _Shot:
 
 @dataclass
 class _Section:
-    """One vantage's captures. Times are film seconds; they and the layers are set per cut."""
+    """One vantage's captures. Times are film seconds (from the plan); the layers are set per cut."""
 
     name: str
     shots: list[_Shot]
@@ -289,37 +256,6 @@ class _Card:
     dissolve: float = 0.0
 
 
-def _sections(project: Project, index: MastersIndex) -> list[_Section]:
-    """Main vantage (the first scrub chapter's, else the first) first, then every other with ≥ 2 visits."""
-    story = {v.id: v for v in project.story.vantages}
-    order = [vid for vid in story if vid in index.vantages] + [v for v in index.vantages if v not in story]
-    scrub = [ch.vantage for ch in project.story.chapters if isinstance(ch, ScrubChapter)]
-    main = next((vid for vid in scrub if vid in index.vantages), order[0] if order else None)
-    excluded = {n.date.isoformat() for n in project.story.captures if n.exclude}
-    notes = {n.date.isoformat(): _plain(project, n.note) for n in project.story.captures}
-    sections: list[_Section] = []
-    for vid in sorted(order, key=lambda v: v != main):
-        mv = index.vantages[vid]
-        captures = sorted((c for c in mv.captures if c.date not in excluded), key=lambda c: c.date)
-        labels = capture_labels(project, [c.date for c in captures])
-        shots = [
-            _Shot(c.date, labels[c.date], notes.get(c.date), project.masters_dir / c.file) for c in captures
-        ]
-        vantage = story.get(vid)
-        focus = vantage.portrait_focus if vantage and vantage.portrait_focus else (0.5, 0.5)
-        if shots and (not sections or len(shots) > 1):
-            name = _plain(project, vantage.name) if vantage else mv.name
-            sections.append(_Section(name, shots, (focus[0], focus[1])))
-    if not sections:
-        raise FileNotFoundError(f"no masters to film in {project.masters_dir}; run `vantage process` first")
-    return sections
-
-
-def _span(shots: Sequence[_Shot]) -> str:
-    first, last = shots[0].label, shots[-1].label
-    return first if first == last else f"{first} – {last}"
-
-
 # --------------------------------------------------------------------------- #
 # The film
 # --------------------------------------------------------------------------- #
@@ -340,26 +276,31 @@ LINK = _Style("text", 26, 500, "accent")
 FINE = _Style("text", 19, 400, alpha=0.6, leading=1.4)
 
 _Block = tuple[str | None, _Style, float]  # text (None = accent rule), style, gap above (units)
+STYLES = {
+    name: style for name, style in globals().items() if isinstance(style, _Style) and name.isupper()
+}  # plan blocks name their style: "KICKER", "TITLE", …
 
 
 class _Film:
-    """One cut (16:9 or 9:16): its layout, its timeline and a pure frame(t) function."""
+    """One classic cut (16:9 or 9:16) evaluated from its plan: layout, timeline and a pure frame(t)."""
 
-    def __init__(
-        self, project: Project, sections: Sequence[_Section], width: int, height: int, *, portrait: bool
-    ):
-        self.project, self.width, self.height, self.portrait = project, width, height, portrait
-        self.sections = [replace(s, days=[shot.day for shot in s.shots]) for s in sections]
-        settings = project.config.output.film
-        self.fps, self.hold, self.fade = settings.fps, settings.hold_s, settings.fade_s
+    def __init__(self, project: Project, plan: FilmPlan):
+        p = plan.plan
+        if p["cut"] != "classic":
+            raise ValueError(f"film {plan.id}: no renderer for cut {p['cut']!r}")
+        width, height = p["width"], p["height"]
+        self.project, self.plan, self.width, self.height = project, plan, width, height
+        self.portrait = portrait = height > width
+        self.fps, self.hold, self.fade = p["fps"], p["hold_s"], p["fade_s"]
         self.unit = u = min(width, height) / 1080
-        self.type = _Type(project.brand, u)
-        colors = project.brand.colors
-        night = np.array(_hex(colors.night)[::-1], np.float32)
-        paper = np.array(_hex(colors.paper)[::-1], np.float32)
-        self.accent = _hex(colors.accent)[::-1]
-        self.margin = round((0.075 if portrait else 0.055) * width)
-        self.rail_y = height - round((0.13 if portrait else 0.075) * height)
+        inputs = p["inputs"]
+        files = {role: font_path(inputs["fonts"][role]["file"], project.brand) for role in ROLES}
+        colors = inputs["colors"]
+        self.type = _Type(files, colors, u)
+        night = np.array(_hex(colors["night"])[::-1], np.float32)
+        paper = np.array(_hex(colors["paper"])[::-1], np.float32)
+        self.accent = _hex(colors["accent"])[::-1]
+        self.margin, self.rail_y = p["layout"]["margin"], p["layout"]["rail_y"]
         # Cards: brand night with a faint central glow.
         yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
         glow = np.exp(-(((xx - width / 2) / (0.6 * width)) ** 2 + ((yy - height / 2) / (0.6 * height)) ** 2))
@@ -372,10 +313,12 @@ class _Film:
             np.broadcast_to((1 - a) * 255 + 0.5, (rows, width, 3)), np.uint8
         )
         self.scrim_add = np.ascontiguousarray(np.broadcast_to(night * a + 0.5, (rows, width, 3)), np.uint8)
-        self.tag = self._tag()
+        self.tag = self._tag(p["tag"])
+        self.sections: list[_Section] = []
         self.cards: list[_Card] = []
         self._bases: dict[Path, np.ndarray] = {}
-        self._layout()
+        self._layout(p["shots"])
+        self.total, self.poster_t, self.frames = p["seconds_total"], p["poster_seconds"], p["frames"]
 
     # ----------------------------------------------------------- layout --- #
 
@@ -416,10 +359,8 @@ class _Film:
                 )
         return _Layer.of(canvas)
 
-    def _tag(self) -> _Layer | None:
+    def _tag(self, words: Sequence[str]) -> _Layer | None:
         """'Simulated imagery' / 'Preview' in the top corner of every capture: films travel without context."""
-        cfg = self.project.config
-        words = [w for w, on in (("Simulated imagery", cfg.simulated), ("Preview", cfg.draft)) if on]
         if not words:
             return None
         canvas, draw = self._canvas()
@@ -458,56 +399,31 @@ class _Film:
             draw.rectangle((x - u, y - 6 * u, x + u, y + 6 * u), fill=(*paper, 150))
         return _Layer.of(canvas)
 
-    def _layout(self) -> None:
-        """Typeset every card and capture, and lay the timeline out."""
-        cfg, brand, settings = self.project.config, self.project.brand, self.project.config.output.film
-        text = lambda s: _plain(self.project, s)  # noqa: E731
-        first, last = self.sections[0], self.sections[-1]
-        place = cfg.location.name if cfg.location else None
-        years = "–".join(dict.fromkeys((first.shots[0].date[:4], first.shots[-1].date[:4])))
-        title: list[_Block] = [
-            (text(cfg.kicker) or " · ".join(filter(None, (place, years))), KICKER, 0),
-            (None, KICKER, 26),
-            (text(cfg.title), TITLE, 34),
-        ]
-        if cfg.subtitle:
-            title.append((text(cfg.subtitle), SUBTITLE, 20))
-        title.append((_span(first.shots), SPAN, 34))
-
-        end: list[_Block] = [(brand.name, BRAND, 0)]
-        if brand.credit_line:
-            end.append((text(brand.credit_line), CREDIT, 18))
-        for i, partner in enumerate(brand.partners):
-            end += [(partner.role, ROLE, 22 if i else 40), (partner.name, PARTNER, 8)]
-        if cfg.output.base_url:
-            end.append((cfg.output.base_url.split("://")[-1].rstrip("/"), LINK, 40))
-        fine = filter(
-            None, (text(brand.copyright), text(brand.disclaimer), SIMULATED_NOTE if cfg.simulated else None)
-        )
-        end += [(text, FINE, 8 if i else 40) for i, text in enumerate(fine)]
-
-        t = settings.title_card_s
-        self.cards.append(_Card(0.0, t, self._stack(title), next=first, dissolve=min(self.fade, t / 3)))
-        first.lead = self.cards[0].dissolve
-        for k, section in enumerate(self.sections):
-            section.thirds = [self._third(shot) for shot in section.shots]
+    def _layout(self, shots: Sequence[dict]) -> None:
+        """Typeset every card and capture of the plan, and take its timeline."""
+        masters = self.project.masters_dir
+        by_id: dict[str, _Section] = {}
+        for shot in shots:
+            if shot["kind"] != "section":
+                continue
+            caps = [_Shot(c["date"], c["label"], c["note"], masters / c["file"]) for c in shot["shots"]]
+            sec = shot["seconds"]
+            section = _Section(
+                shot["name"], caps, (shot["focus"][0], shot["focus"][1]),
+                sec["start"], sec["length"], sec["lead"], sec["tail"], [c.day for c in caps],
+            )  # fmt: skip
+            section.thirds = [self._third(c) for c in caps]
             section.rail = self._rail(section)
-            if k:
-                d = settings.title_card_s
-                blocks: list[_Block] = [(_span(section.shots), KICKER, 0), (None, KICKER, 26)]
-                card = _Card(t, d, self._stack([*blocks, (section.name, SECTION_TITLE, 34)]))
-                card.prev, card.next, card.dissolve = self.sections[k - 1], section, min(self.fade, d / 3)
-                card.prev.tail = section.lead = card.dissolve
-                self.cards.append(card)
-                t += d
-            n = len(section.shots)
-            section.start, section.length = t, n * self.hold + (n - 1) * self.fade
-            t += section.length
-        d = settings.end_card_s
-        self.cards.append(_Card(t, d, self._stack(end), prev=last, dissolve=min(self.fade, d / 3)))
-        last.tail = self.cards[-1].dissolve
-        self.total = t + d
-        self.poster_t = first.start + (len(first.shots) - 1) * (self.hold + self.fade) + 0.85 * self.hold
+            by_id[shot["id"]] = section
+            self.sections.append(section)
+        for shot in shots:
+            if shot["kind"] != "card":
+                continue
+            blocks = [(b["text"], STYLES[b["style"]], b["gap"]) for b in shot["blocks"]]
+            sec = shot["seconds"]
+            card = _Card(sec["start"], sec["duration"], self._stack(blocks), dissolve=sec["dissolve"])
+            card.prev, card.next = by_id.get(shot.get("prev") or ""), by_id.get(shot.get("next") or "")
+            self.cards.append(card)
 
     # ----------------------------------------------------------- frames --- #
 
@@ -629,53 +545,116 @@ class _Film:
                 return self._section_frame(section, t - section.start)
         return self._card_frame(self.cards[-1], t)
 
-    def render(self, out: Path, *, crf: int, preset: str) -> int:
-        """Encode the film to `out` and its poster (the main vantage's final hold) next to it."""
-        frames = max(1, round(self.total * self.fps))
-        part = out.with_name(f"{out.name}.part")  # not *.mp4: packaging ships every film/*.mp4
-        try:
-            with FrameWriter(
-                part, self.width, self.height, fps=self.fps, crf=crf, preset=preset, extra=_ENCODE
-            ) as writer:
-                for k in range(frames):
-                    writer.write(self.frame(k / self.fps))
-        except BaseException:
-            part.unlink(missing_ok=True)
-            raise
-        part.replace(out)
+    def frame_at(self, k: int) -> np.ndarray:
+        """Frame k of the film (classic plans keep their timeline in seconds)."""
+        return self.frame(k / self.fps)
+
+    def encode(self, part: Path, *, crf: int, preset: str) -> None:
+        with FrameWriter(
+            part, self.width, self.height, fps=self.fps, crf=crf, preset=preset, extra=_ENCODE
+        ) as writer:
+            for k in range(self.frames):
+                writer.write(self.frame_at(k))
+
+    def poster(self) -> bytes:
+        """The poster JPEG: the main vantage's final hold."""
         params = [cv2.IMWRITE_JPEG_QUALITY, POSTER_QUALITY, cv2.IMWRITE_JPEG_PROGRESSIVE, 1]
-        cv2.imwrite(str(out.with_suffix(".jpg")), self.frame(self.poster_t), params)
-        return frames
+        ok, data = cv2.imencode(".jpg", self.frame(self.poster_t), params)
+        if not ok:
+            raise ValueError(f"could not encode the poster of film {self.plan.id}")
+        return data.tobytes()
 
 
-def render_film(project: Project, out_dir: Path) -> list[Path]:
-    """Render <slug>-16x9.mp4 (and <slug>-9x16.mp4 when output.film.vertical) with JPEG posters."""
-    index_path = project.masters_dir / "index.json"
-    if not index_path.is_file():
-        raise FileNotFoundError(f"no {index_path}; run `vantage process {project.slug}` first")
-    settings, fast = project.config.output.film, _fast()
-    timing = (settings.title_card_s, settings.fade_s, settings.end_card_s)
-    if settings.fps <= 0 or settings.hold_s <= 0 or min(timing) < 0:
-        raise ValueError("output.film needs fps and hold_s > 0, and fade_s, title_card_s, end_card_s >= 0")
-    sections = _sections(project, MastersIndex.load(index_path))
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-    def fit(w: float, h: float) -> tuple[int, int]:
-        s = min(1.0, FAST_LONG_EDGE / max(w, h)) if fast else 1.0
-        return _even(w * s), _even(h * s)
 
-    short = min(settings.width, settings.height)
-    cuts = [("16x9", fit(settings.width, settings.height), sections, False)]
-    if settings.vertical:
-        cuts.append(("9x16", fit(short, short * 16 / 9), sections[:1], True))
-    else:
-        for stale in out_dir.glob(f"{project.slug}-9x16.*"):
-            stale.unlink()
+def _render_one(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool) -> Path:
+    """Write one film's outputs as *.part files, then rename them all (the plan last). Returns the
+    MP4 (or, with plan_only, the plan.json)."""
+    stem = f"{project.slug}-{plan.id}"
+    mp4, poster = out_dir / f"{stem}.mp4", out_dir / f"{stem}.jpg"
+    plan_path, board = out_dir / f"{stem}{PLAN_SUFFIX}", out_dir / f"{stem}{STORYBOARD_SUFFIX}"
+    parts: dict[Path, Path] = {}  # final → part; never *.mp4: packaging ships every film/*.mp4
+
+    def part(final: Path) -> Path:
+        parts[final] = final.with_name(f"{final.name}.part")
+        return parts[final]
+
+    film = _Film(project, plan)
+    try:
+        if plan_only:
+            plan.render = None
+            if plan_path.is_file() and mp4.is_file():  # an unchanged plan keeps the film it rendered
+                try:
+                    old = FilmPlan.load(plan_path)
+                    plan.render = old.render if old.hash == plan.hash else None
+                except (OSError, ValueError):
+                    pass
+        else:
+            film.encode(part(mp4), crf=plan.encode["crf"], preset=plan.encode["preset"])
+            part(poster).write_bytes(film.poster())
+            plan.render = {
+                "mp4": {"bytes": parts[mp4].stat().st_size, "sha256": _sha256(parts[mp4])},
+                "web": None,
+                # The luminance meter arrives with the story cut; classic cuts dissolve ≥ fade_s.
+                "flash": {"pass": True, "max_transitions_per_s": 0, "max_delta": 0.0, "frame": 0},
+                "ffmpeg": ffmpeg_version(),
+            }
+        write_storyboard(plan, film.frame_at, plan.facts, part(board))
+        plan.save(part(plan_path))
+    except BaseException:
+        for p in parts.values():
+            p.unlink(missing_ok=True)
+        raise
+    for final, p in parts.items():
+        p.replace(final)
+    return plan_path if plan_only else mp4
+
+
+def _clean(project: Project, out_dir: Path, ids: Sequence[str]) -> None:
+    """Delete <slug>-<id>.* film files whose id is no longer in the film set (and stray *.part files)."""
+    for path in sorted(out_dir.glob(f"{project.slug}-*")):
+        if path.is_file() and (film_id(project.slug, path.name) not in ids or path.name.endswith(".part")):
+            log.info(f"removing {path.name}: not a current film")
+            path.unlink()
+
+
+def render_film(
+    project: Project,
+    out_dir: Path,
+    *,
+    only: Sequence[str] | None = None,
+    release: bool = False,
+    plan_only: bool = False,
+) -> list[Path]:
+    """Plan and render the films (all of them, or the ids in `only`) into out_dir = dist/<slug>/film:
+    MP4 + poster + plan.json + storyboard each. `plan_only` writes the plan and storyboard without
+    encoding; `release` first refuses a draft project or non-releasable facts. Returns the MP4s
+    (the plan.json files with plan_only)."""
+    if release:
+        problems = check_release(project)
+        if problems:
+            raise ReleaseError("release films blocked:\n  " + "\n  ".join(problems))
+    plans = plan_films(project, only=only)
     out_dir.mkdir(parents=True, exist_ok=True)
-    films = []
-    for name, (w, h), secs, portrait in cuts:
-        film = _Film(project, secs, w, h, portrait=portrait)
-        out = out_dir / f"{project.slug}-{name}.mp4"
-        frames = film.render(out, crf=20 if fast else 18, preset="veryfast" if fast else "slow")
-        log.info(f"{out.name}: {w}×{h}, {frames} frames ({frames / film.fps:.1f}s), {len(secs)} section(s)")
-        films.append(out)
-    return films
+    if only is None:
+        _clean(project, out_dir, list(resolve_films(project)))
+    outputs = []
+    for plan in plans.values():
+        out = _render_one(project, plan, out_dir, plan_only=plan_only)
+        p = plan.plan
+        sections = sum(s["kind"] == "section" for s in p["shots"])
+        done = "planned" if plan_only else "rendered"
+        log.info(
+            f"{out.name}: {p['width']}×{p['height']}, {p['frames']} frames ({p['frames'] / p['fps']:.1f}s), "
+            f"{sections} section(s), plan {plan.hash[:12]} {done}"
+        )
+        for warning in plan.warnings:
+            log.warn(f"film {plan.id}: {warning}")
+        outputs.append(out)
+    return outputs

@@ -67,6 +67,15 @@ def ffprobe_bin() -> str:
 
 
 @cache
+def ffmpeg_version() -> str:
+    """The ffmpeg build, e.g. '6.1.1-3ubuntu5' (film render records and build.json name it: the
+    same plan and inputs give the same bytes only with the same build)."""
+    out = subprocess.run([ffmpeg_bin(), "-version"], capture_output=True, text=True, check=True).stdout
+    words = out.split()
+    return words[2] if len(words) > 2 and words[:2] == ["ffmpeg", "version"] else "unknown"
+
+
+@cache
 def encoders() -> frozenset[str]:
     out = subprocess.run(
         [ffmpeg_bin(), "-hide_banner", "-encoders"], capture_output=True, text=True, check=True

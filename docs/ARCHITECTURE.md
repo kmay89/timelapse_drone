@@ -26,7 +26,9 @@ footage/ (raw, never committed)                  brand/ + story.yaml + project.y
         │           dist/<slug>/site/index.html      (hosted; works offline via SW)
         │           dist/<slug>/<slug>.html          (single self-contained file)
         │           dist/<slug>/<slug>-offline.zip   (site folder, opens from disk)
-        └──► film ─► dist/<slug>/film/<slug>-16x9.mp4, <slug>-9x16.mp4
+        └──► film ─► plan_films ─► <slug>-<id>.plan.json + .storyboard.jpg   (the Reel Ledger)
+                         └──► render ─► dist/<slug>/film/<slug>-16x9.mp4, <slug>-9x16.mp4 (+ posters)
+                                          ▲ package --release re-plans and refuses stale films
 ```
 
 ## Repository layout
@@ -54,7 +56,10 @@ src/vantage/
     theme.py             brand kit → CSS custom properties + @font-face (bundled/client fonts)
     render.py            StoryJSON → semantic, pre-rendered HTML (works without JS)
     package.py           single-file inliner, offline zip, manifest, icons, share card, sw.js
-  film/render.py         MP4 time-lapse films (16:9 and 9:16) with branded title/end cards
+  film/
+    plan.py              FilmPlans: YAML + masters + fonts → one hashed plan per film; the release gate
+    render.py            renders a plan to MP4 + poster (classic `_Film`, shared drawing code)
+    storyboard.py        one contact-sheet tile per key frame of a plan, with fact status chips
   llm/claude.py          optional Claude vision helpers (captions, alt text, milestones)
   demo/synth.py          procedural "drone footage" of a fictional site changing over time
   runtime/               the web runtime shipped into every story (no build step, no deps)
@@ -104,9 +109,9 @@ placeholder logos), a README and an empty `footage/` from `src/vantage/templates
 | `vantage align <project>` | register, crop, grade → masters/ + review sheets |
 | `vantage process <project>` | ingest → select → align |
 | `vantage build <project> [--out DIR]` | build the interactive site from masters + YAML; `--out` replaces only an earlier Vantage build, and refuses any other non-empty folder or one under version control |
-| `vantage film <project>` | render MP4 films |
-| `vantage package <project>` | single-file HTML + offline zip |
-| `vantage all <project>` | process → build → film → package |
+| `vantage film <project> [--film ID]… [--plan-only] [--release]` | plan and render the films, or the named ones. `--plan-only` writes plan.json and the storyboard without encoding. `--release` refuses drafts and non-releasable facts before planning. |
+| `vantage package <project> [--release]` | single-file HTML + offline zip; checks the films against their plans (`--release` refuses any problem, see "Films") |
+| `vantage all <project> [--release]` | process → build → film → package; `--release` reaches the film step too |
 | `vantage preview <project> [--port 8000]` | serve dist site locally |
 | `vantage demo [--fast] [--no-film]` | synthesize demo footage and run `all` on demo-lakeside |
 | `vantage caption <project>` | Claude vision drafts captions/alt text → work/llm/suggestions.yaml |
@@ -312,7 +317,7 @@ assets: [[path, bytes, sha256[:16]], ...]}`:
 ## Module API (cross-module entry points)
 
 Artifact models live in `vantage/models.py` (`Catalog`, `Selection`,
-`MastersIndex`, each with `.load(path)` / `.save(path)`); config models in
+`MastersIndex`, `FilmPlan`, each with `.load(path)` / `.save(path)`); config models in
 `vantage/config.py` (`load_project(path) -> Project`).
 
 ```python
@@ -325,8 +330,9 @@ vantage.process.masters.make_masters(project: Project, selection: Selection | No
     # touching nothing, if a master's visit is neither in the catalog nor excluded in story.yaml
 vantage.site.build.build_site(project: Project, out_dir: Path) -> Path
     # out_dir = dist/<slug>/site ; returns out_dir / "index.html"
-vantage.film.render.render_film(project: Project, out_dir: Path) -> list[Path]
-    # out_dir = dist/<slug>/film
+vantage.film.render.render_film(project: Project, out_dir: Path, *, only: Sequence[str] | None = None,
+                                release: bool = False, plan_only: bool = False) -> list[Path]
+    # out_dir = dist/<slug>/film; returns the MP4s (the plan.json files with plan_only). See "Films".
 vantage.site.package.package_project(project: Project, dist_dir: Path, *, release: bool = False) -> dict[str, Path]
     # dist_dir = dist/<slug>; reads dist_dir/site (builds it when missing); returns {"single_file": …, "zip": …}
     # release=True runs check_release, then always rebuilds dist_dir/site with release=True, so an
@@ -426,3 +432,151 @@ and `<slug>-lite.html` (email). `<html data-edition>` is `site` (hosted), `offli
   `sources: []`. Lite never carries video.
 * Fonts are inlined as `data:font/woff2` in the theme CSS; `meta.shareImage` is dropped unless
   it is an absolute URL. Packaging reads only files inside `site/`; a path that leads outside it is an error.
+
+## Films
+
+Films are made in two stages: plan, then render. `plan_films` turns YAML, `masters/index.json`, the
+master and font files and the settings into one **FilmPlan** per film. That step is pure and renders
+nothing. A renderer then evaluates a pure frame function over the plan and pipes the frames to
+ffmpeg. The same plan, with the same inputs, gives the same bytes with the same ffmpeg build.
+
+Today every film uses the **classic cut**: a title card, one section per vantage (the main vantage
+first; the 9:16 film keeps only the main one), a card between vantages and an end card. Inside a
+section each capture holds `hold_s` and dissolves `fade_s` into the next (linear light) under an
+eased 6 % push. `hold_s`, `fade_s`, `title_card_s` and `end_card_s` in `output.film` time it.
+
+### Output layout (dist/<slug>/film/)
+
+```
+<slug>-<id>.mp4              H.264 High, yuv420p, BT.709 tags, +faststart, bitexact, no audio stream;
+                             crf 18 slow (VANTAGE_FAST: crf 20 veryfast)
+<slug>-<id>.jpg              poster: the main vantage's final hold
+<slug>-<id>.plan.json        the FilmPlan plus its render record
+<slug>-<id>.storyboard.jpg   one tile per key frame
+```
+
+- Film ids match `[a-z0-9][a-z0-9-]{0,31}` and never end in `-web`. The film set is `16x9`, plus
+  `9x16` when `output.film.vertical`; those ids keep the file names films had before plans.
+- Every output of a film is written to `*.part` and renamed only once all of them exist (the plan
+  last). Packaging ships only finished `*.mp4` files.
+- A full `vantage film` run (no `--film`) deletes `<slug>-*` files whose id is no longer in the film
+  set, and stray `*.part` files.
+- `--plan-only` writes plan.json (with `render: null`) and the storyboard, but no MP4 or poster, so a
+  cut can be approved in seconds. A plan that has not changed keeps the render record of the MP4
+  next to it.
+
+`output.film.require_approval` (default false): `package --release` needs each film's plan hash in
+`approvals.yaml` (see PROJECTS.md).
+
+### plan.json
+
+Canonical JSON is `json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+allow_nan=False)` encoded as UTF-8 (`models.canonical_json`). Floats are never rounded: Python's
+shortest round-trip repr means a plan read back renders the same bytes. The file is written with
+`indent=2` and has no timestamps. `FilmPlan.load` refuses a file whose `plan` no longer matches its
+`hash` (edited by hand).
+
+```jsonc
+{ "version": 1,
+  "id": "16x9",
+  "hash": "<sha256 hex of canonical(plan)>",           // people quote the first 12 characters
+  "plan": {                                            // hashed: everything that decides frames
+    "slug": "demo-lakeside", "cut": "classic", "preset": null, "renderer": 1,   // renderer: bumped when frames change for an equal plan
+    "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
+    "grid": null,                                      // the beat grid of beat-cut films; null for classic
+    "layout": {"name": "classic-16x9", "margin": 106, "rail_y": 999, "type_scale": 1.0},
+    "draft": false, "simulated": true, "tag": ["Simulated imagery"],          // + "Preview" in drafts
+    "provenance": ["simulated"],                       // photo | simulated; reserved: ortho, analysis, reconstruction
+    "inputs": {                                        // every file the frames read, by role
+      "masters": {"overview/2025-04-12.jpg": {"sha256": "…", "w": 2560, "h": 1600}},
+      "fonts": {"display": {"file": "runtime:fraunces/….woff2" | "brand:fonts/….woff2", "sha256": "…"},
+                "text": {…}, "numeric": {…}},          // "pillow:default" (sha256 null) when a brand has no font file
+      "colors": {"night": "#…", "paper": "#…", "ink": "#…", "accent": "#…"} },
+    "camera": [], "captions": [], "chapters": [],
+    "shots": [ /* see below */ ],
+    "hold_s": 1.0, "fade_s": 0.8, "seconds_total": 47.0, "poster_seconds": 23.65 },   // classic timing
+  "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed
+  "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
+  "encode": {"crf": 18, "preset": "slow", "web": null, "gop": null, "tracks": false},  // NOT hashed: bytes, not frames
+  "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": null,
+             "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0, "frame": 0},
+             "ffmpeg": "6.1.1-3ubuntu5"} }             // written after the encode; null with --plan-only
+```
+
+`inputs` is a generic map of hashed files by role: later inputs (orthophotos, analysis layers,
+committed reconstruction clips) join it as new roles, and `provenance` will say so. The engine never
+reconstructs anything itself.
+
+Shots (in film order; `f0`, `f1` are frames, half-open; `key` is the storyboard frame):
+
+- Every shot: `id`, `kind`, `f0`, `f1`, `key`, `chapter` (null in classic cuts), `text`
+  (`[{role, text}]`, printed text with facts already resolved), `facts` (ids the shot prints).
+- `card` (`T1` title, `K1…` between vantages, `E1` end): `role` (title | section | end), `prev` and
+  `next` (section ids or null), `seconds: {start, duration, dissolve}`, `blocks: [{text | null, style,
+  gap}]` (null text is the accent rule; `style` names a style in render.py, such as KICKER or TITLE;
+  `gap` is the space above in units of short edge / 1080).
+- `section` (`S01…`): `vantage`, `name`, `focus` [x, y], `seconds: {start, length, lead, tail}`,
+  `shots: [{date, label, note, file, key, facts}]`. The classic renderer evaluates `frame(k / fps)`
+  in seconds.
+
+Shot kinds `ortho`, `heatmap` and `insert` are reserved and refused. A text that uses a
+`do-not-print` fact is never printed in a film: it is left out (a capture label falls back to its
+date, a vantage name to the masters' name) and a warning is recorded.
+
+### Storyboard (film/storyboard.py)
+
+- Tiles show the key frames in film order: the middle of each card, the middle of each capture's
+  hold, then the poster frame (`P1`). 8 columns of 320 px tiles for landscape films, 10 columns of
+  192 px for portrait ones.
+- Under each tile: `m:ss.ff · f<frame>` (prefixed with `bar.beat` on a beat grid), then
+  `<shot id> <kind> <date>`, then one chip per fact: green releasable, amber needs-client or
+  reported without an attribution, red do-not-print.
+- Footer: `<slug> · <id> · <cut> · W×H@fps · <duration> · plan <hash12> · DRAFT|RELEASE-READY`
+  (with `(<n> unreleasable)` when facts are not releasable).
+- Labels use the bundled Inter. JPEG quality 85, baseline, no metadata; the same plan gives the
+  same bytes.
+
+### Release gate (film/plan.py check_films; package and film --release)
+
+`package --release` runs `check_release`, rebuilds the site, then re-plans every film found in
+`film/` and refuses with one line per problem:
+
+1. `film/<name>.mp4` has no `<name>.plan.json` (rendered by an older engine?): run `vantage film <slug>`.
+2. Its id is not in the current film set: remove it, or run a full `vantage film`.
+3. It is stale: the plan hash differs from the re-planned hash. The message names the differing
+   top-level plan keys, and hints at VANTAGE_FAST when only the size differs.
+4. `plan.draft` is true.
+5. The MP4 sha256 differs from the `render` record, `render` is null, or a plan has no MP4.
+6. A fact it prints (as re-planned) is not releasable under the current facts.yaml.
+7. `render.flash.pass` is false (classic films record a pass; the luminance meter comes with the
+   story cut).
+8. `require_approval` is on and neither the hash nor its first 12 characters is listed in any
+   `approvals.yaml` `approvals[].films`.
+
+No films at all is allowed (with a warning). A non-release `package` logs the same problems as
+warnings. `vantage film --release` runs `check_release` and refuses a draft before planning.
+
+### build.json additions
+
+```jsonc
+"tools": {"vantage": …, "python": …, "pillow": …, "ffmpeg": "6.1.1-3ubuntu5"},
+"films": {"16x9": {"mp4": "film/demo-lakeside-16x9.mp4", "plan": "film/demo-lakeside-16x9.plan.json",
+          "hash": "…", "cut": "classic", "preset": null, "width": 1920, "height": 1080, "fps": 30,
+          "frames": 1410, "fresh": true, "draft": false, "facts": [], "unreleasable": [], "problems": []}}
+```
+
+`files` and SHA256SUMS list every top-level `film/` deliverable: each MP4, plan.json and storyboard.
+
+### Module API
+
+```python
+vantage.models.FilmPlan                     # .load(path) / .save(path) / .hash; models.canonical_json
+vantage.film.plan.plan_films(project: Project, *, only: Sequence[str] | None = None,
+                             fast: bool | None = None) -> dict[str, FilmPlan]   # pure; hashes inputs
+vantage.film.plan.check_films(project: Project, film_dir: Path) -> list[str]    # release problems
+vantage.film.plan.film_records(project: Project, film_dir: Path) -> tuple[dict, list[str]]  # build.json films + problems
+vantage.film.render.render_film(project, out_dir, *, only=None, release=False, plan_only=False) -> list[Path]
+vantage.film.storyboard.write_storyboard(plan: FilmPlan, frame_fn: Callable[[int], ndarray],
+                                         facts: Mapping[str, Mapping], out: Path) -> Path
+vantage.media.ffmpeg.ffmpeg_version() -> str
+```

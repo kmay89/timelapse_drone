@@ -237,6 +237,10 @@ class FilmSettings(Model):
     vertical: bool = Field(True, description="Also render a 1080x1920 cut for phones/social.")
     title_card_s: float = 3.0
     end_card_s: float = 3.0
+    require_approval: bool = Field(
+        False,
+        description="package --release needs each film's plan hash under approvals[].films in approvals.yaml.",
+    )
 
 
 class OutputSettings(Model):

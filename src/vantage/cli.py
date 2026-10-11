@@ -241,12 +241,20 @@ def _build(project: Project, out: Path | None = None, *, release: bool = False) 
     return index
 
 
-def _film(project: Project) -> list[Path]:
+def _film(
+    project: Project, *, only: list[str] | None = None, release: bool = False, plan_only: bool = False
+) -> list[Path]:
     from vantage.film.render import render_film
 
-    with log.step("render films"):
-        films = render_film(project, _dist(project) / "film")
-    log.ok("films → " + ", ".join(f"{_show(f)} ({_human(_size(f))})" for f in films))
+    options: dict[str, Any] = {"only": only} if only else {}
+    options |= {"release": True} if release else {}
+    options |= {"plan_only": True} if plan_only else {}
+    with log.step("plan films" if plan_only else "render films"):
+        films = render_film(project, _dist(project) / "film", **options)
+    log.ok(
+        ("plans → " if plan_only else "films → ")
+        + ", ".join(f"{_show(f)} ({_human(_size(f))})" for f in films)
+    )
     return films
 
 
@@ -271,7 +279,7 @@ def _all(project: Project, *, film: bool = True, force: bool = False, release: b
     index = _build(project, release=release)
     outputs: list[tuple[str, Path]] = [("site", index.parent)]
     if film and project.config.output.film.enabled:
-        outputs += [("film", f) for f in _film(project)]
+        outputs += [("film", f) for f in _film(project, release=release)]
     elif film:
         log.info("films disabled in project.yaml (output.film.enabled: false)")
     outputs += [(name.replace("_", " "), p) for name, p in _package(project, release=release).items()]
@@ -784,9 +792,23 @@ def build_cmd(
 
 
 @_command("film")
-def film_cmd(project: ProjectArg) -> None:
-    """Render the MP4 time-lapse films (16:9, plus 9:16 when enabled)."""
-    _film(_load(project))
+def film_cmd(
+    project: ProjectArg,
+    film: Annotated[
+        list[str] | None,
+        typer.Option("--film", help="Only this film id (repeatable), e.g. --film 16x9. Default: every film."),
+    ] = None,
+    plan_only: Annotated[
+        bool,
+        typer.Option("--plan-only", help="Write each film's plan.json and storyboard without encoding."),
+    ] = False,
+    release: Annotated[
+        bool,
+        typer.Option("--release", help="Refuse a draft project or {fact:…} tokens that are not releasable."),
+    ] = False,
+) -> None:
+    """Plan and render the MP4 films (16:9, plus 9:16 when enabled) with plan.json and storyboard."""
+    _film(_load(project), only=film, release=release, plan_only=plan_only)
 
 
 @_command("package")
