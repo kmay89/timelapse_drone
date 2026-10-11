@@ -173,4 +173,6 @@ function reveals() {
   const els = $$(".v-chapter:not(.v-hero) :is(.v-head, .v-quote, .v-stat, .v-tl), .v-standfirst > *");
   root.classList.add("v-reveal");
   onceVisible(els, (el) => el.classList.add("v-in"));
+  // A Tab scrolls a link only to the screen's edge, short of where its row rises in: show it on focus.
+  addEventListener("focusin", (e) => els.find((el) => el.contains(/** @type {Node} */ (e.target)))?.classList.add("v-in"));
 }
