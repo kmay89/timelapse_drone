@@ -36,10 +36,11 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import itertools
 import math
 import multiprocessing
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import cache
@@ -171,14 +172,23 @@ class _Type:
         track = s.tracking * s.size * self.unit * scale
         return sum(font.getlength(c) for c in text) + track * (len(text) - 1)
 
-    def wrap(self, text: str, s: _Style, max_width: float, scale: float = 1.0) -> list[str]:
+    def wrap(
+        self, text: str, s: _Style, max_width: float, scale: float = 1.0, *, balanced: bool = False
+    ) -> list[str]:
+        """Words filled onto lines of at most max_width. `balanced` keeps the greedy line count but
+        evens the lines out (`balance`): no one-word last line, no line ending on a word that
+        starts a sentence, when another break avoids it."""
         lines: list[str] = []
         for word in text.split():
             if lines and self.width(f"{lines[-1]} {word}", s, scale) <= max_width:
                 lines[-1] += f" {word}"
             else:
                 lines.append(word)
-        return lines
+        if not balanced or len(lines) < 2:
+            return lines
+        words = text.split()
+        rows = balance(words, len(lines), lambda a, b: self.width(" ".join(words[a:b]), s, scale), max_width)
+        return [" ".join(words[a:b]) for a, b in rows] if rows else lines
 
     def draw(
         self,
@@ -200,6 +210,34 @@ class _Type:
         for c in text:
             draw.text((x, baseline), c, font=font, fill=fill, anchor="ls")
             x += font.getlength(c) + track
+
+
+def balance(
+    words: Sequence[str], n: int, width: Callable[[int, int], float], max_width: float, limit: int = 20000
+) -> list[tuple[int, int]] | None:
+    """The best way to break `words` into n lines no wider than max_width, as [(start, end)] word
+    index ranges (None when there is none, or too many to try). Best: no one-word last line, no line
+    ending on a word that starts a sentence (after '.', '!' or '?'), then the narrowest widest line,
+    then the most even lines."""
+    from itertools import combinations
+
+    k = len(words)
+    if n < 2 or n > k or math.comb(k - 1, n - 1) > limit:
+        return None
+    best: tuple[tuple[int, float, float], list[tuple[int, int]]] | None = None
+    for cut in combinations(range(1, k), n - 1):
+        edges = [0, *cut, k]
+        rows = list(itertools.pairwise(edges))
+        widths = [width(a, b) for a, b in rows]
+        if max(widths) > max_width:
+            continue
+        bad = int(rows[-1][1] - rows[-1][0] == 1)
+        bad += sum(1 for a, b in rows[:-1] if b - a > 1 and words[b - 2].endswith((".", "!", "?")))
+        mean = sum(widths) / n
+        cost = (bad, round(max(widths), 3), round(sum((w - mean) ** 2 for w in widths), 3))
+        if best is None or cost < best[0]:
+            best = (cost, rows)
+    return best[1] if best else None
 
 
 def ink_box(x0: float, y0: float, x1: float, y1: float) -> list[int]:

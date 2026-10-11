@@ -763,7 +763,12 @@ renderer no longer has constants of its own.
 
 Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
 fit between the margins), curtain labels 44, stat value 220 / unit 77 / label 44 / source 26, card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
-are composited at sub-pixel offsets by bilinear warping of the pre-rendered layer patch. Scrims are
+are composited at sub-pixel offsets by bilinear warping of the pre-rendered layer patch. Story cuts
+break lines balanced (`render.balance`): the greedy line count, then the break set with no one-word
+last line and no line ending on a word that starts a sentence when another exists, then the
+narrowest widest line, then the most even lines; title word groups are balanced across lines the
+same way ("Where the / Wave Pool Was", not "Where the Wave Pool / Was"). Classic cuts keep greedy
+filling. Scrims are
 feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands.
 In 9:16 (story and classic) every word, the end card and the rail stay between 0.14H and 0.72H, clear
 of the right edge.
@@ -814,7 +819,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
     "slug": "demo-lakeside", "cut": "classic", "preset": null, "renderer": 1,   // renderer: bumped when frames change for an equal plan
                                                                                 // (classic 1; story 2: rails inset by their knob;
                                                                                 //  3: stat land/text_in, aligned and clipped figures;
-                                                                                //  4: the title fades over a whole beat)
+                                                                                //  4: the title fades over a whole beat;
+                                                                                //  5: balanced line breaks)
     "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
     "grid": null | {"bpm": 100.0, "fpb": 18, "dissolve": 12, "beats": 37},   // story: effective bpm; classic: null
     "layout": {"name": "classic-16x9", "safe": [54, 96, 54, 96], "margin": 106, "label_top": 54,

@@ -41,7 +41,7 @@ from vantage.config import Project
 from vantage.film.beat import Window, keyed, lerp, mix_cam, ramp
 from vantage.film.layout import Layout
 from vantage.film.plan import ROLES, font_path
-from vantage.film.render import _hex, _Layer, _mix, _Style, _Type, ink_box
+from vantage.film.render import _hex, _Layer, _mix, _Style, _Type, balance, ink_box
 from vantage.film.safety import SURFACES
 from vantage.models import FilmPlan
 
@@ -297,6 +297,12 @@ class _Cut:
                 x = 0.0
             x += (space if lines[-1] else 0) + w
             lines[-1].append(g)
+        if len(lines) > 1:  # the same number of lines, evened out: never a lone short last group
+            rows = balance(
+                groups, len(lines), lambda a, b: t.width(" ".join(groups[a:b]), style, scale), width
+            )
+            if rows:
+                lines = [list(range(a, b)) for a, b in rows]
         return scale, lines
 
     def _typeset(self) -> None:
@@ -413,7 +419,7 @@ class _Cut:
             value_s = dataclasses.replace(value_s, size=value_s.size * scale)
             unit_s = dataclasses.replace(unit_s, size=unit_s.size * scale)
         cap_v = self._cap(value_s)
-        lines = t.wrap(shot["label"], label_s, lay.text_width)
+        lines = t.wrap(shot["label"], label_s, lay.text_width, balanced=True)
         step = label_s.size * u * label_s.leading
         source = f"Source: {shot['source']}" if shot.get("source") else None
         height = cap_v + 56 * u + self._cap(label_s) + (len(lines) - 1) * step
@@ -544,7 +550,7 @@ class _Cut:
                     y += 3 * u * scale
                     continue
                 ascent, descent = t.font(style, scale).getmetrics()
-                for i, line in enumerate(t.wrap(text, style, max_w, scale)):
+                for i, line in enumerate(t.wrap(text, style, max_w, scale, balanced=True)):
                     y += ascent if i == 0 else style.size * u * scale * style.leading
                     lines.append((line, style, y))
                 y += descent

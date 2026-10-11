@@ -307,3 +307,20 @@ def test_encode_bytes_do_not_depend_on_the_cpu_count(tmp_path, monkeypatch):
     assert out["all"].read_bytes() == out["one"].read_bytes()
     assert (tmp_path / "all-web.mp4").read_bytes() == (tmp_path / "one-web.mp4").read_bytes()
     assert plan.encode["threads"] == ffmpeg.ENCODER_THREADS
+
+
+def test_balanced_wrapping():
+    """Same line count as greedy filling, but no widow and no line ending on a sentence's first word."""
+    from vantage.film.render import balance
+
+    def lines(text: str, n: int, max_width: float) -> list[str]:
+        words = text.split()
+        rows = balance(words, n, lambda a, b: len(" ".join(words[a:b])), max_width)
+        assert rows is not None
+        return [" ".join(words[a:b]) for a, b in rows]
+
+    assert lines("Where the Wave Pool Was", 2, 20) == ["Where the", "Wave Pool Was"]
+    honesty = "Every frame is made from the simulated flights. No in-between images are invented."
+    out = lines(honesty, 2, 50)
+    assert not out[0].endswith(" No") and len(out[-1].split()) > 1, out
+    assert balance(["a", "b"], 3, lambda a, b: 1.0, 10) is None  # more lines than words
