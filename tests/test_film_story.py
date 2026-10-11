@@ -26,15 +26,21 @@ from vantage.config import Project, load_project
 from vantage.film import beat
 from vantage.film.cut import _Cut
 from vantage.film.plan import SIMULATED_NOTE, plan_films, resolve_films
-from vantage.film.render import _render_one, render_film
+from vantage.film.render import _render_one, film_jobs, render_film
 from vantage.film.safety import LumaMeter, PlanError, check_plan
-from vantage.film.story import HONESTY
+from vantage.film.story import HONESTY, Geometry
 from vantage.media.ffmpeg import ffmpeg_bin
-from vantage.models import FilmPlan
+from vantage.models import FilmPlan, MastersIndex
+from vantage.site.build import ReleaseError
+from vantage.site.package import package_project
 
 DATES = ("2025-03-01", "2025-05-01", "2025-07-01", "2025-09-01", "2025-11-01")
 HUES = ((200, 90, 40), (60, 170, 60), (40, 80, 210), (40, 190, 200), (170, 60, 170))  # BGR
-STORY_FILM = {**FILM, "cut": "story", "bpm": 90, "vertical": False}
+STORY_FILM = {
+    **{k: v for k, v in FILM.items() if k != "cut"},
+    "bpm": 90,
+    "vertical": False,
+}  # story: the default
 B, D = 8, 5
 STEPS = [
     {"capture": DATES[0], "text": "**Before.** The old lot, weeds in the cracks."},
@@ -65,6 +71,8 @@ def tiny(
     film: dict[str, Any] | None = None,
     films: dict[str, Any] | None = None,
     hotspots: list[dict[str, Any]] | None = None,
+    chapters: list[dict[str, Any]] | None = None,
+    captures: list[dict[str, Any]] | None = None,
     **config: Any,
 ) -> Project:
     story: dict[str, Any] = {
@@ -80,8 +88,11 @@ def tiny(
                 "steps": STEPS if steps is None else steps,
                 "hotspots": hotspots or [],
             },
+            *(chapters or []),
         ],
     }
+    if captures is not None:
+        story["captures"] = captures
     if films is not None:
         story["films"] = films
     make_project(
@@ -434,3 +445,258 @@ def test_classic_still_identical(tmp_path):
         assert (a / name).read_bytes() == (b / name).read_bytes(), name
     record = FilmPlan.load(a / "tiny-site-16x9.plan.json").render
     assert record is not None and record["flash"]["pass"] is True and record["flash"]["max_delta"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# Curtain, stats, degrade, subjects, defaults, parallel renders, release
+# --------------------------------------------------------------------------- #
+
+COMPARE = {
+    "type": "compare",
+    "id": "versus",
+    "kicker": "Then and now",
+    "title": "Side by side",
+    "vantage": "site",
+    "before": DATES[0],
+    "after": DATES[4],
+    "before_label": "Then",
+    "after_label": "Now",
+    "steps": [{"text": "Half and half.", "split": 0.5}],
+}
+
+
+def _split(shot: dict[str, Any], f: int) -> float:
+    keys = shot["keys"]
+    return beat.keyed([beat.Window(k["a"], k["b"]) for k in keys], [k["split"] for k in keys], f, beat.lerp)
+
+
+def test_curtain_split_halves(tmp_path):
+    project = tiny(tmp_path / "p", chapters=[COMPARE], simulated=True)
+    plan = _plan(project)
+    shots = plan.plan["shots"]
+    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "curtain", "end"]
+    curtain = shots[6]
+    assert (curtain["before"], curtain["after"], curtain["labels"]) == (DATES[0], DATES[4], ["Then", "Now"])
+    assert curtain["f1"] - curtain["f0"] == (1 + 4) * B  # entry beat, then 2 + 2 beats per split
+    assert [k["split"] for k in curtain["keys"]] == [0.0, 0.5]
+    cut = _Cut(project, plan)
+    f = curtain["keys"][1]["a"] + 2  # holding at split 0.5
+    frame = cut.frame_at(f).astype(np.float32)
+    h, w = frame.shape[:2]
+    rows = slice(int(0.62 * h), int(0.75 * h))  # under the labels, clear of the grip and the band
+    left = frame[rows, 10 : w // 2 - 12].reshape(-1, 3).mean(axis=0)
+    right = frame[rows, w // 2 + 12 : w - 10].reshape(-1, 3).mean(axis=0)
+    assert np.abs(left - HUES[0]).max() < 30, left
+    assert np.abs(right - HUES[4]).max() < 30, right
+    # Labels show only while the rule is at least 8 px clear of their ink.
+    half = 1.5 * cut.u
+    ink_b, ink_a = curtain["label_ink"]
+    shown = [{f for a, b in side for f in range(a, b)} for side in curtain["reveal"]]
+    assert shown[0] and shown[1]  # both labels are revealed at split 0.5
+    for k in range(curtain["f0"], curtain["f1"]):
+        x = _split(curtain, k) * w
+        assert (k in shown[0]) == (x - half >= ink_b + 8), k
+        assert (k in shown[1]) == (x + half <= ink_a - 8), k
+        for side in (0, 1):
+            if k not in shown[side]:
+                assert cut._reveal(curtain, side, k) == 0.0
+    assert min(shown[0]) > curtain["keys"][0]["b"]  # before is hidden at split 0, then revealed
+
+
+def test_curtain_entry_without_jump(tmp_path):
+    project = tiny(tmp_path / "a", chapters=[COMPARE])
+    plan = _plan(project)
+    curtain = next(s for s in plan.plan["shots"] if s["kind"] == "curtain")
+    assert curtain["dissolve"] is None and curtain["from_after"] is True  # the series ended on `after`
+    cut = _Cut(project, plan)
+    f0 = curtain["f0"]
+    a, b = (cut.frame_at(f).astype(np.float32) for f in (f0 - 1, f0))
+    assert np.abs(a - b).mean() < 4  # no jump
+    project = tiny(tmp_path / "b", chapters=[{**COMPARE, "after": DATES[3]}])
+    curtain = next(s for s in _plan(project).plan["shots"] if s["kind"] == "curtain")
+    d = curtain["dissolve"]
+    assert d is not None and (d["f0"], d["f1"] - d["f0"]) == (curtain["f0"], D)
+    check_plan(_plan(project).plan)
+
+
+STATS = {
+    "type": "stats",
+    "id": "numbers",
+    "items": [
+        {"value": "42", "label": "a number nobody sourced"},
+        {"value": "{fact:secret}", "label": "hidden"},
+        {"value": "{fact:area}", "unit": "sq ft", "label": "of old pool", "source": "Site plan"},
+    ],
+}
+
+
+def test_stats_are_facts_only(tmp_path):
+    root = tmp_path / "p"
+    tiny(root, chapters=[STATS])
+    project = _facts(
+        root,
+        area={"text": "13,100", "status": "verified", "sources": ["plan"]},
+        secret={"text": "7", "status": "do-not-print"},
+    )
+    plan = _plan(project)
+    stats = [s for s in plan.plan["shots"] if s["kind"] == "stat"]
+    assert len(stats) == 1
+    stat = stats[0]
+    assert (stat["value"], stat["unit"], stat["label"], stat["source"]) == (
+        "13,100", "sq ft", "of old pool", "Site plan",
+    )  # fmt: skip
+    assert stat["facts"] == ["area"] and stat["surface"] == "paper" and stat["f1"] - stat["f0"] == 4 * B
+    assert any("'42' is not a {fact:} token" in w for w in plan.warnings), plan.warnings
+    assert any("stat 1" in w and "do-not-print" in w for w in plan.warnings), plan.warnings
+    assert "secret" not in plan.facts
+    # The renderer sets one layer per glyph of the plan's value: it never draws another number.
+    cut = _Cut(project, plan)
+    assert len(cut.layers[stat["id"]]["glyphs"]) == len("13,100")
+    first = cut.frame_at(stat["f0"] + 1).astype(np.float32)
+    landed = cut.frame_at(stat["key"]).astype(np.float32)
+    assert np.abs(first - landed).mean() > 1  # the figure slides in, then holds
+    # No more than `stats` items.
+    many = {**STATS, "items": [STATS["items"][2]] * 5}
+    project = tiny(root, chapters=[many], films={"16x9": {"stats": 2}})
+    project = _facts(root, area={"text": "13,100", "status": "verified"})
+    assert sum(s["kind"] == "stat" for s in _plan(project).plan["shots"]) == 2
+
+
+def test_degrade(tmp_path):
+    def kinds(n: int, chapters: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        excluded = [{"date": d, "exclude": True} for d in DATES[n:]]
+        project = tiny(tmp_path / f"p{n}", captures=excluded, chapters=chapters)
+        plan = _plan(project).plan
+        check_plan(plan)
+        return plan["shots"]
+
+    one = kinds(1)
+    assert [s["kind"] for s in one] == ["title", "capture", "end"]
+    assert one[1]["f1"] - one[1]["f0"] == 3 * B and one[1]["dissolve"] is None
+    unsourced = {**STATS, "items": [STATS["items"][0]]}
+    assert [s["kind"] for s in kinds(1, [unsourced])] == ["title", "capture", "end"]  # no fact, no stat
+    two = kinds(2)
+    assert [s["kind"] for s in two] == ["title", "capture", "curtain", "end"]
+    assert two[1]["f1"] - two[1]["f0"] == 3 * B
+    assert (two[2]["before"], two[2]["after"]) == (DATES[0], DATES[1])
+    assert [k["split"] for k in two[2]["keys"]] == [0.0, 0.5]
+    assert [s["kind"] for s in kinds(3)] == ["title", "capture", "capture", "capture", "end"]
+
+
+def test_push_target_shows_subject(tmp_path):
+    steps = [STEPS[0], {**STEPS[1], "focus": [0.62, 0.54, 1.6]}]
+    hotspots = [{"id": "tower", "x": 0.93, "y": 0.584, "label": "The tower", "to": DATES[1]}]
+    project = tiny(tmp_path / "p", steps=steps, hotspots=hotspots, film={"vertical": True})
+    for fid in ("16x9", "9x16"):
+        p = _plan(project, fid).plan
+        step = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["focus_requested"])
+        assert step["target"] == "focus+subject:tower" and step["subjects"] == ["tower"], fid
+        x, y, z = step["focus"]
+        geo = Geometry(p["width"], p["height"], 320, 200)
+        cx, cy = geo.centre(x, y, z)
+        hw, hh = geo.half(z)
+        assert cx - hw <= 0.93 <= cx + hw and cy - hh <= 0.584 <= cy + hh, (fid, cx, cy, hw, hh)
+
+
+def test_default_is_story_and_classic_opt_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    story_film = {k: v for k, v in FILM.items() if k != "cut"}
+    project = make_project(tmp_path / "s", film=story_film)
+    films = render_film(project, tmp_path / "s-out")
+    assert [f.name for f in films] == ["tiny-site-16x9.mp4", "tiny-site-9x16.mp4"]
+    for fid in ("16x9", "9x16"):
+        assert FilmPlan.load(tmp_path / "s-out" / f"tiny-site-{fid}.plan.json").plan["cut"] == "story"
+    classic = make_project(tmp_path / "c", film={**story_film, "cut": "classic", "vertical": False})
+    out = {}
+    for run in ("a", "b"):
+        out[run] = tmp_path / f"c-{run}"
+        render_film(classic, out[run])
+    assert FilmPlan.load(out["a"] / "tiny-site-16x9.plan.json").plan["cut"] == "classic"
+    for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.jpg", "tiny-site-16x9.plan.json"):
+        assert (out["a"] / name).read_bytes() == (out["b"] / name).read_bytes(), name
+
+
+def test_parallel_equals_sequential(tmp_path, monkeypatch):
+    project = tiny(tmp_path / "p", film={"vertical": True}, chapters=[COMPARE], simulated=True)
+    out = {}
+    for jobs in ("1", "2"):
+        monkeypatch.setenv("VANTAGE_FILM_JOBS", jobs)
+        assert film_jobs(2) == int(jobs)
+        out[jobs] = tmp_path / f"jobs-{jobs}"
+        render_film(project, out[jobs])
+    names = sorted(p.name for p in out["1"].iterdir())
+    assert names == sorted(p.name for p in out["2"].iterdir()) and len(names) == 8
+    assert not [n for n in names if n.endswith(".part")]
+    for name in names:
+        assert (out["1"] / name).read_bytes() == (out["2"] / name).read_bytes(), name
+
+
+def test_film_jobs(monkeypatch):
+    monkeypatch.delenv("VANTAGE_FILM_JOBS", raising=False)
+    assert film_jobs(1) == 1
+    monkeypatch.setenv("VANTAGE_FILM_JOBS", "8")
+    assert film_jobs(3) == 3
+    monkeypatch.setenv("VANTAGE_FILM_JOBS", "many")
+    with pytest.raises(ValueError, match="VANTAGE_FILM_JOBS"):
+        film_jobs(2)
+
+
+def test_release_gate_on_story_film(tmp_path, monkeypatch):
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    root, dist = tmp_path / "p", tmp_path / "dist"
+    stats = {**STATS, "items": [STATS["items"][2]]}
+    tiny(root, chapters=[stats])
+    project = _facts(root, area={"text": "13,100", "status": "needs-client", "sources": ["plan"]})
+    render_film(project, dist / "film")
+    plan = FilmPlan.load(dist / "film" / "tiny-site-16x9.plan.json")
+    assert plan.facts["area"]["releasable"] is False
+    with pytest.raises(ReleaseError, match="area"):
+        package_project(load_project(root), dist, release=True)
+
+
+@pytest.mark.slow
+def test_demo_story_cut(tmp_path):
+    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 62 beats,
+    the Demolition push keeps the slide tower in frame in both cuts, and the stats print exactly the
+    three figures the cut chooses."""
+    import shutil
+
+    from vantage.demo import synth
+    from vantage.ingest.catalog import build_catalog
+    from vantage.paths import repo_root
+    from vantage.process.masters import make_masters
+    from vantage.process.select import select_frames
+
+    demo = repo_root() / "projects" / "demo-lakeside"
+    footage = tmp_path / "footage"
+    synth.generate_demo_footage(footage, fast=True)
+    root = tmp_path / "demo"
+    root.mkdir()
+    for name in ("project.yaml", "story.yaml", "facts.yaml"):
+        shutil.copy(demo / name, root / name)
+    shutil.copytree(demo / "brand", root / "brand")
+    text = (root / "project.yaml").read_text(encoding="utf-8")
+    (root / "project.yaml").write_text(
+        text.replace("footage_dir: footage", f"footage_dir: {json.dumps(str(footage))}"), encoding="utf-8"
+    )
+    project = load_project(root)
+    make_masters(project, select_frames(project, build_catalog(project)))
+    plans = plan_films(project, fast=True)
+    assert list(plans) == ["16x9", "9x16"]
+    tower = next(h for ch in project.story.chapters if ch.id == "twelve-flights" for h in ch.hotspots)
+    assert tower.id == "slide-tower"
+    for fid, plan in plans.items():
+        p = plan.plan
+        assert p["cut"] == "story" and p["grid"]["beats"] == 62, (fid, p["grid"])
+        check_plan(p)
+        shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
+        step = shot["step"]
+        assert step["push"] and step["target"] == "focus+subject:slide-tower", (fid, step)
+        mv = MastersIndex.load(root / "masters" / "index.json").vantages["overview"]
+        geo = Geometry(p["width"], p["height"], mv.width, mv.height)
+        cx, cy = geo.centre(*step["focus"])
+        hw, hh = geo.half(step["focus"][2])
+        assert cx - hw <= tower.x <= cx + hw and cy - hh <= tower.y <= cy + hh, fid
+        stats = [s for s in p["shots"] if s["kind"] == "stat"]
+        assert [f for s in stats for f in s["facts"]] == ["flights", "stalls-to-meadow", "wave-pool-area"]
+        assert stats[2]["value"] == "13,100"

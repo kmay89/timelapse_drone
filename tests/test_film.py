@@ -92,7 +92,8 @@ def make_project(
     return load_project(root)
 
 
-FILM = {
+FILM = {  # the classic cut: these tests time its hold/fade timeline
+    "cut": "classic",
     "width": 320,
     "height": 180,
     "fps": 12,

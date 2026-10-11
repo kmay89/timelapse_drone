@@ -242,7 +242,7 @@ class FilmSettings(Model):
         description="package --release needs each film's plan hash under approvals[].films in approvals.yaml.",
     )
     cut: Literal["story", "classic"] = Field(
-        "classic", description="The cut of the derived films: story (on a beat grid) or classic (hold/fade)."
+        "story", description="The cut of the derived films: story (on a beat grid) or classic (hold/fade)."
     )
     bpm: float = Field(100.0, ge=60, le=160, description="The beat grid of story cuts.")
     max_upscale: float = Field(

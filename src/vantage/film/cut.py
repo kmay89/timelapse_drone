@@ -8,13 +8,18 @@ short edge / 1080 × type_scale) and then evaluates each frame from the plan alo
     dissolves → scrims behind each text block's ink → date label → words rising at sub-pixel offsets
     → rail and knob → tag ('Simulated imagery', 'Preview', and ' · plan <hash6>' in drafts).
 
-Cards and the end card dip to and from night in display gamma, like the classic cut. Every image
-pixel is a crop, a dissolve or a dip of registered masters; text, scrims and the rail are overlays.
+Curtains split two warps of the same camera at the rule (before left, after right) under a 3-unit
+accent rule and grip; their labels are clipped to their own side and shown only inside the plan's
+reveal intervals. Stats set the plan's figure on a fixed digit advance, one layer per glyph sliding
+into a mask. Cards, stats and the end card dip to and from their surface in display gamma, like the
+classic cut. Every image pixel is a crop, a dissolve, a curtain split or a dip of registered masters;
+text, scrims and the rail are overlays.
 """
 
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import datetime as dt
 import math
 from collections.abc import Sequence
@@ -25,10 +30,11 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from vantage.config import Project
-from vantage.film.beat import Window, keyed, mix_cam, ramp
+from vantage.film.beat import Window, keyed, lerp, mix_cam, ramp
 from vantage.film.layout import Layout
 from vantage.film.plan import ROLES, font_path
 from vantage.film.render import _hex, _Layer, _mix, _Style, _Type
+from vantage.film.safety import IMAGES, SURFACES
 from vantage.models import FilmPlan
 
 # Styles, in units (short edge / 1080 × type_scale).
@@ -45,6 +51,11 @@ PARTNER = _Style("text", 34, 500)
 LINK = _Style("text", 34, 500, "accent")
 HONESTY = _Style("text", 38, 400, alpha=0.92, leading=1.35)
 FINE = _Style("text", 27, 400, alpha=0.62, leading=1.4)
+CURTAIN_LABEL = _Style("numeric", 44, 600, tracking=0.06, upper=True)
+STAT_VALUE = _Style("numeric", 220, 500, "ink")
+STAT_UNIT = _Style("text", 220 * 0.35, 500, "ink", alpha=0.8)
+STAT_LABEL = _Style("text", 44, 400, "ink", alpha=0.92, leading=1.3)
+STAT_SOURCE = _Style("text", 26, 400, "ink", alpha=0.62)
 END_STYLES = {
     "brand": BRAND, "credit": CREDIT, "role": ROLE, "partner": PARTNER, "link": LINK,
     "honesty": HONESTY, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
@@ -85,8 +96,15 @@ def _disc(
     cv2.circle(region, ctr, round(r * 16), tuple(color), -1, cv2.LINE_AA, 4)
 
 
-def _put(frame: np.ndarray, layer: _Layer | None, opacity: float, dy: float = 0.0) -> None:
-    """Composite a layer at a (sub-pixel) vertical offset, clipped to the frame."""
+def _put(
+    frame: np.ndarray,
+    layer: _Layer | None,
+    opacity: float,
+    dy: float = 0.0,
+    clip: tuple[int, int, int, int] | None = None,
+) -> None:
+    """Composite a layer at a (sub-pixel) vertical offset, clipped to the frame (and to `clip`,
+    x0, y0, x1, y1, when given)."""
     if layer is None or opacity <= 0.002:
         return
     rgb, alpha, y = layer.rgb, layer.alpha, float(layer.y) + dy
@@ -100,8 +118,9 @@ def _put(frame: np.ndarray, layer: _Layer | None, opacity: float, dy: float = 0.
         alpha = cv2.warpAffine(np.pad(alpha, pad), m, (w, h + 1), flags=cv2.INTER_LINEAR)[..., None]
     h, w = alpha.shape[:2]
     fh, fw = frame.shape[:2]
-    y0, y1 = max(iy, 0), min(iy + h, fh)
-    x0, x1 = max(layer.x, 0), min(layer.x + w, fw)
+    cx0, cy0, cx1, cy1 = clip if clip is not None else (0, 0, fw, fh)
+    y0, y1 = max(iy, 0, cy0), min(iy + h, fh, cy1)
+    x0, x1 = max(layer.x, 0, cx0), min(layer.x + w, fw, cx1)
     if y1 <= y0 or x1 <= x0:
         return
     a = alpha[y0 - iy : y1 - iy, x0 - layer.x : x1 - layer.x]
@@ -140,6 +159,12 @@ class _Cut:
         )
         paper = np.array(self.paper, np.float32)
         self.card_bg = (self.night + (paper - self.night) * 0.05 * glow[..., None] + 0.5).astype(np.uint8)
+        self.surfaces = {
+            "night": self.card_bg,
+            "paper": np.ascontiguousarray(
+                np.broadcast_to(np.array(self.paper, np.uint8), self.card_bg.shape)
+            ),
+        }
         self.shots: list[dict[str, Any]] = p["shots"]
         self.starts = [s["f0"] for s in self.shots]
         cams = p["camera"]
@@ -224,8 +249,11 @@ class _Cut:
         return scale, lines
 
     def _typeset(self) -> None:
-        lay, u, t = self.lay, self.u, self.type
+        lay, u = self.lay, self.u
         self.layers: dict[str, Any] = {}
+        self.curtain_words: dict[str, dict[int, int]] = {}
+        self.curtain_keys: dict[str, tuple[list[Window], list[float]]] = {}
+        self.stat_mask: dict[str, tuple[int, int]] = {}
         for shot in self.shots:
             sid, kind = shot["id"], shot["kind"]
             text = {item["role"]: item["text"] for item in shot["text"]}
@@ -237,19 +265,14 @@ class _Cut:
                 entry: dict[str, Any] = {"label": label, "label_scrim": self._scrim(box, 0.42)}
                 words = text.get("words")
                 if words:
-                    size = 1.0
-                    w = t.width(words, LEAD)
-                    if w > lay.text_width:
-                        size = lay.text_width / w
-                    style = _Style(LEAD.role, LEAD.size * size, LEAD.weight)
-                    layer, box = self._ink(
-                        [(lay.margin, lay.lead_baseline, words, style, "l")], shadow=0.8, blur=7
-                    )
-                    entry["words"] = layer
-                    entry["words_scrim"] = self._scrim(box, 0.5, RISE * u)
+                    entry["words"], entry["words_scrim"] = self._words(words)
                 self.layers[sid] = entry
             elif kind in ("card", "end"):
                 self.layers[sid] = {"stack": self._stack(shot["text"])}
+            elif kind == "curtain":
+                self._typeset_curtain(shot)
+            elif kind == "stat":
+                self._typeset_stat(shot)
         # Rails: one per series, ticks at the real dates.
         self.rails: dict[int, list[int]] = {}
         for shot in self.shots:
@@ -260,6 +283,106 @@ class _Cut:
         self.rail_layers = {n: self._rail_layer(days) for n, days in self.rails.items()}
         x0, x1, y = lay.margin, lay.right, lay.rail_y
         self.rail_scrim = self._scrim((x0, y - 8 * u, x1, y + 8 * u), 0.32)
+
+    def _words(self, words: str) -> tuple[_Layer, _Layer]:
+        """Lead words at the lead baseline (shrunk to fit between the margins) and their scrim."""
+        lay, u, t = self.lay, self.u, self.type
+        size = 1.0
+        w = t.width(words, LEAD)
+        if w > lay.text_width:
+            size = lay.text_width / w
+        style = _Style(LEAD.role, LEAD.size * size, LEAD.weight)
+        layer, box = self._ink([(lay.margin, lay.lead_baseline, words, style, "l")], shadow=0.8, blur=7)
+        return layer, self._scrim(box, 0.5, RISE * u)
+
+    def _typeset_curtain(self, shot: dict[str, Any]) -> None:
+        lay = self.lay
+        style = dataclasses.replace(CURTAIN_LABEL, size=CURTAIN_LABEL.size * shot["label_scale"])
+        cap_top = shot["label_top"] + self._cap(style)
+        before, after = shot["labels"]
+        labels, scrims = [], []
+        for x, text, align in ((lay.margin, before, "l"), (lay.right, after, "r")):
+            layer, box = self._ink([(x, cap_top, text, style, align)])
+            labels.append(layer)
+            scrims.append(self._scrim(box, 0.42))
+        words, word_scrims, index = [], [], {}
+        for k, step in enumerate(shot["steps"]):
+            if step.get("words"):
+                layer, scrim = self._words(step["words"])
+                index[k] = len(words)
+                words.append(layer)
+                word_scrims.append(scrim)
+        self.layers[shot["id"]] = {
+            "labels": labels,
+            "label_scrims": scrims,
+            "words": words,
+            "words_scrims": word_scrims,
+        }
+        self.curtain_words[shot["id"]] = index
+        self.curtain_keys[shot["id"]] = (
+            [Window(k["a"], k["b"]) for k in shot["keys"]],
+            [k["split"] for k in shot["keys"]],
+        )
+
+    def _typeset_stat(self, shot: dict[str, Any]) -> None:
+        """A stat: the value on a fixed advance per digit (tabular, so Pillow needs no raqm), each
+        glyph its own layer for the slide into its mask; the unit after it; label and source below."""
+        lay, u, t = self.lay, self.u, self.type
+        color = "ink" if shot["surface"] == "paper" else "paper"
+        value_s, unit_s = (dataclasses.replace(s, color=color) for s in (STAT_VALUE, STAT_UNIT))
+        label_s, source_s = (dataclasses.replace(s, color=color) for s in (STAT_LABEL, STAT_SOURCE))
+        value, unit = shot["value"], shot.get("unit")
+
+        def advances(style: _Style) -> list[float]:
+            font = t.font(style)
+            digit = max(font.getlength(d) for d in "0123456789")
+            return [digit if c.isdigit() else font.getlength(c) for c in value]
+
+        def total(style: _Style, ustyle: _Style) -> float:
+            w = sum(advances(style))
+            if unit:
+                w += 0.18 * style.size * u + t.width(unit, ustyle)
+            return w
+
+        scale = 1.0
+        if total(value_s, unit_s) > lay.text_width:
+            scale = lay.text_width / total(value_s, unit_s) * 0.98
+            value_s = dataclasses.replace(value_s, size=value_s.size * scale)
+            unit_s = dataclasses.replace(unit_s, size=unit_s.size * scale)
+        cap_v = self._cap(value_s)
+        lines = t.wrap(shot["label"], label_s, lay.text_width)
+        step = label_s.size * u * label_s.leading
+        source = f"Source: {shot['source']}" if shot.get("source") else None
+        height = cap_v + 56 * u + self._cap(label_s) + (len(lines) - 1) * step
+        if source:
+            height += 30 * u + self._cap(source_s)
+        base = lay.top + (lay.bottom - lay.top - height) / 2 + cap_v
+        x = float(lay.margin)
+        glyphs = []
+        for c, adv in zip(value, advances(value_s), strict=True):
+            if not c.isspace():
+                w = t.width(c, value_s)
+                layer, _ = self._ink([(x + (adv - w) / 2, base, c, value_s, "l")], shadow=0.0)
+                glyphs.append(layer)
+            x += adv
+        rest = []
+        if unit:
+            layer, _ = self._ink([(x + 0.18 * value_s.size * u, base, unit, unit_s, "l")], shadow=0.0)
+            rest.append(layer)
+        y = base + 56 * u + self._cap(label_s)
+        for k, line in enumerate(lines):
+            layer, _ = self._ink([(lay.margin, y + k * step, line, label_s, "l")], shadow=0.0)
+            rest.append(layer)
+        y += (len(lines) - 1) * step
+        if source:
+            layer, _ = self._ink(
+                [(lay.margin, y + 30 * u + self._cap(source_s), source, source_s, "l")], shadow=0.0
+            )
+            rest.append(layer)
+        descent = t.font(value_s).getmetrics()[1]
+        top, bottom = math.floor(base - cap_v - 0.12 * value_s.size * u), math.ceil(base + descent)
+        self.layers[shot["id"]] = {"glyphs": glyphs, "rest": rest}
+        self.stat_mask[shot["id"]] = (top, bottom)
 
     def _typeset_title(self, shot: dict[str, Any], text: dict[str, str]) -> None:
         lay, u, t = self.lay, self.u, self.type
@@ -438,7 +561,150 @@ class _Cut:
             return self._title(i, f)
         if kind == "capture":
             return self._capture(i, f)
+        if kind == "curtain":
+            return self._curtain(i, f)
+        if kind == "stat":
+            return self._stat(i, f)
         return self._card(i, f)
+
+    def _split_at(self, shot: dict[str, Any], f: int) -> float:
+        windows, splits = self.curtain_keys[shot["id"]]
+        return keyed(windows, splits, f, lerp)
+
+    def _composite(self, shot: dict[str, Any], cam: tuple[float, ...], split: float) -> np.ndarray:
+        """Before left of the rule, after right of it (split 0 shows all of the after image)."""
+        x = min(max(round(split * self.width), 0), self.width)
+        if x >= self.width:
+            return self._warp(shot["before_file"], cam)
+        frame = self._warp(shot["after_file"], cam)
+        if x > 0:
+            frame[:, :x] = self._warp(shot["before_file"], cam)[:, :x]
+        return frame
+
+    def _bare(self, i: int, f: int) -> np.ndarray:
+        """Image shot i at frame f without its overlays or its own dissolve (what a dissolve leaves)."""
+        shot = self.shots[i]
+        cam = self.camera(f)
+        if shot["kind"] == "curtain":
+            return self._composite(shot, cam, self._split_at(shot, f))
+        return self._warp(shot["file"], cam)
+
+    def _reveal(self, shot: dict[str, Any], side: int, f: int) -> float:
+        """Opacity of a curtain label: on only inside its reveal intervals (the rule clear of its ink),
+        fading in over B/3 and out over the last B/3 frames before the rule comes back."""
+        third = self.third
+        for a, b in shot["reveal"][side]:
+            if a <= f < b:
+                op = ramp(f, a, third) if a > shot["f0"] else 1.0
+                if b < shot["f1"]:
+                    op *= 1 - ramp(f, b - third, third)
+                return op
+        return 0.0
+
+    def _ghost(self, frame: np.ndarray, j: int, opacity: float) -> None:
+        """The overlays of image shot j as they were on its last frame, at `opacity` (fading out)."""
+        if opacity <= 0.002:
+            return
+        shot, L = self.shots[j], self.layers[self.shots[j]["id"]]
+        last = shot["f1"] - 1
+        if shot["kind"] == "capture":
+            _put(frame, self.rail_scrim, opacity)
+            _put(frame, L["label_scrim"], opacity)
+            _put(frame, L["label"], opacity)
+            if "words" in L and (shot.get("step") or {}).get("land") is not None:
+                _put(frame, L["words_scrim"], opacity)
+                _put(frame, L["words"], opacity)
+            _put(frame, self.rail_layers[shot["series"]], opacity)
+            self._progress(frame, self.rails[shot["series"]], shot["rail"], opacity)
+        elif shot["kind"] == "curtain":
+            x = self._split_at(shot, last) * self.width
+            self._curtain_overlays(frame, j, last, x, opacity)
+
+    def _grip(self, frame: np.ndarray, x: float, opacity: float) -> None:
+        """The curtain rule (3 units, accent) and its grip (44 units at 0.56H) at x."""
+        if opacity <= 0.002:
+            return
+        u, h = self.u, self.height
+        y = 0.56 * h
+        r = 22 * u
+        before = frame.copy() if opacity < 0.998 else None
+        _bar(frame, x - 1.5 * u, 0, x + 1.5 * u, h, self.accent)
+        _disc(frame, x, y, r, self.accent, self.night_bgr, 1.5 * u)
+        for d in (-1, 1):  # chevrons
+            pts = np.array([[x + d * 5 * u, y - 7 * u], [x + d * 11 * u, y], [x + d * 5 * u, y + 7 * u]])
+            cv2.polylines(
+                frame, [np.round(pts * 16).astype(np.int32)], False, tuple(int(c) for c in self.paper),
+                max(1, round(2 * u)), cv2.LINE_AA, 4,
+            )  # fmt: skip
+        if before is not None:
+            frame[:] = cv2.addWeighted(frame, opacity, before, 1 - opacity, 0)
+
+    def _curtain_overlays(self, frame: np.ndarray, i: int, f: int, x: float, opacity: float) -> None:
+        """Labels (each clipped to its side of the rule) and the steps' film.line words."""
+        shot, L, u = self.shots[i], self.layers[self.shots[i]["id"]], self.u
+        xi = round(x)
+        for side, clip in enumerate(((0, 0, xi, self.height), (xi, 0, self.width, self.height))):
+            vis = self._reveal(shot, side, f) * opacity
+            _put(frame, L["label_scrims"][side], vis, clip=clip)
+            _put(frame, L["labels"][side], vis, clip=clip)
+        steps, index = shot["steps"], self.curtain_words[shot["id"]]
+        for k, step in enumerate(steps):
+            if k not in index or f < step["land"]:
+                continue
+            e = ramp(f, step["land"], self.third)
+            out = 1 - ramp(f, steps[k + 1]["f0"], self.third) if k + 1 < len(steps) else 1.0
+            _put(frame, L["words_scrims"][index[k]], e * out * opacity)
+            _put(frame, L["words"][index[k]], e * out * opacity, RISE * u * (1 - e))
+
+    def _curtain(self, i: int, f: int) -> np.ndarray:
+        shot, prev = self.shots[i], self.shots[i - 1] if i else None
+        cam = self.camera(f)
+        split = self._split_at(shot, f)
+        frame = self._composite(shot, cam, split)
+        d = shot["dissolve"]
+        w = ramp(f, d["f0"], d["f1"] - d["f0"]) if d else 1.0
+        mixed = d is not None and d["from"] not in SURFACES
+        if mixed and w < 1:
+            frame = _mix(self._bare(i - 1, f), frame, w)
+        # The previous shot's overlays leave over the first half of the entry, ours come in over
+        # the second, so two labels never share a corner.
+        n = d["f1"] - d["f0"] if mixed and d is not None else 2 * self.third
+        half = max(1, n // 2)
+        fade = ramp(f, shot["f0"] + half, n - half) if mixed or d is None else 1.0
+        if prev is not None and prev["kind"] in ("capture", "curtain") and (mixed or d is None):
+            self._ghost(frame, i - 1, 1 - ramp(f, shot["f0"], half))
+        x = split * self.width
+        edge = min(1.0, max(0.0, min(x, self.width - x) / (24 * self.u)))
+        self._grip(frame, x, fade * edge)
+        self._curtain_overlays(frame, i, f, x, fade)
+        self._put_tag(frame)
+        if d is not None and not mixed and w < 1:
+            frame = cv2.addWeighted(self.surfaces[d["from"]], 1 - w, frame, w, 0)
+        return frame
+
+    def _stat(self, i: int, f: int) -> np.ndarray:
+        """A stat on its surface: glyphs slide up into their mask (2-frame stagger, half a beat each)
+        from the downbeat, already the true figure; unit, label and source fade in on beat 1."""
+        shot, L = self.shots[i], self.layers[self.shots[i]["id"]]
+        f0, f1, B, third = shot["f0"], shot["f1"], self.fpb, self.third
+        frame = self.surfaces[shot["surface"]].copy()
+        nxt = self.shots[i + 1] if i + 1 < len(self.shots) else None
+        out = 1 - ramp(f, f1 - third, third) if nxt is not None and nxt["kind"] in IMAGES else 1.0
+        top, bottom = self.stat_mask[shot["id"]]
+        dist = bottom - top
+        half = max(1, round(B / 2))
+        for k, glyph in enumerate(L["glyphs"]):
+            e = ramp(f, f0 + 2 * k, half)
+            _put(frame, glyph, out, dist * (1 - e), clip=(0, top, self.width, bottom))
+        e = ramp(f, f0 + B, third)
+        for layer in L["rest"]:
+            _put(frame, layer, e * out)
+        prev = self.shots[i - 1] if i else None
+        dip = shot.get("dip", self.d)
+        if prev is not None and f < f0 + dip:
+            w = ramp(f, f0, dip)
+            frame = cv2.addWeighted(self._shot(i - 1, f), 1 - w, frame, w, 0)
+        return frame
 
     def _title(self, i: int, f: int) -> np.ndarray:
         shot, L = self.shots[i], self.layers[self.shots[i]["id"]]
@@ -466,22 +732,28 @@ class _Cut:
         frame = self._warp(shot["file"], cam)
         d = shot["dissolve"]
         w = ramp(f, d["f0"], d["f1"] - d["f0"]) if d else 1.0
-        within = d is not None and d["from"] != "night" and prev is not None and prev["kind"] == "capture"
-        if within and w < 1:
-            assert prev is not None
-            frame = _mix(self._warp(prev["file"], cam), frame, w)
-        self._overlays(frame, i, f, w if within else 1.0)
-        if d is not None and d["from"] == "night" and w < 1:
-            frame = cv2.addWeighted(self.card_bg, 1 - w, frame, w, 0)
+        mixed = d is not None and d["from"] not in SURFACES
+        if mixed and w < 1:
+            frame = _mix(self._bare(i - 1, f), frame, w)
+        within = mixed and prev is not None and prev["kind"] == "capture"
+        intro = None
+        if mixed and d is not None and prev is not None and prev["kind"] == "curtain":
+            half = max(1, (d["f1"] - d["f0"]) // 2)
+            self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
+            intro = ramp(f, d["f0"] + half, d["f1"] - d["f0"] - half)
+        self._overlays(frame, i, f, w if within else 1.0, intro)
+        if d is not None and not mixed and w < 1:
+            frame = cv2.addWeighted(self.surfaces[d["from"]], 1 - w, frame, w, 0)
         return frame
 
-    def _overlays(self, frame: np.ndarray, i: int, f: int, w: float) -> None:
+    def _overlays(self, frame: np.ndarray, i: int, f: int, w: float, intro: float | None = None) -> None:
         """Scrims, date label, words, rail and tag of capture i at frame f (w: its dissolve so far)."""
         shot, L, u = self.shots[i], self.layers[self.shots[i]["id"]], self.u
         prev = self.shots[i - 1] if i else None
         within = w < 1 and prev is not None and prev["kind"] == "capture"
         P = self.layers[prev["id"]] if within and prev is not None else None
-        intro = ramp(f, shot["f0"], self.third) if prev is not None and prev["kind"] == "title" else 1.0
+        if intro is None:
+            intro = ramp(f, shot["f0"], self.third) if prev is not None and prev["kind"] == "title" else 1.0
         # Scrims, then text.
         _put(frame, self.rail_scrim, intro)
         if P is not None:
@@ -539,7 +811,7 @@ class _Cut:
             opacity *= 1 - ramp(f, shot["f1"] - third, third)
         _put(frame, L["stack"], opacity)
         prev = self.shots[i - 1] if i else None
-        if prev is not None and prev["kind"] in ("title", "capture") and f < shot["f0"] + dip:
+        if prev is not None and f < shot["f0"] + dip:
             w = ramp(f, shot["f0"], dip)
             frame = cv2.addWeighted(self._shot(i - 1, f), 1 - w, frame, w, 0)
         return frame

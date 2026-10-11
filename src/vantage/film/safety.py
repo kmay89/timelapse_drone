@@ -2,8 +2,11 @@
 every rendered frame.
 
 Static (plan time, an error): every transition between two images is a dissolve of at least
-ceil(0.34·fps) frames (a dip through night counts as two), there is no hard cut between images,
-and the push and word timings stay on the plan's grid.
+ceil(0.34·fps) frames (a dip through night counts as two), there is no hard cut between images
+(a curtain may open without one only on the image the film already shows), every curtain sweep
+lasts at least 2 beats, and every dip into or out of a paper surface lasts `surface_dip` frames.
+`surface_dip` is the shortest dip from night to paper (in display gamma) in which no frame pair
+changes luminance by THRESHOLD or more, so a paper stats card never flashes.
 
 Luminance (render time, every frame, every cut): each frame is downscaled to 1/8 (INTER_AREA),
 converted from sRGB to linear light and reduced to Rec.709 relative luminance on a 4×4 grid of
@@ -18,12 +21,13 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any
 
 import cv2
 import numpy as np
 
-from vantage.film.beat import min_dissolve
+from vantage.film.beat import min_dissolve, ramp
 
 CELLS = 4
 THRESHOLD = 0.10  # |ΔL| of a transition
@@ -43,8 +47,40 @@ class FlashError(ValueError):
     """A rendered film exceeds the flash limit."""
 
 
+def _luminance(bgr: tuple[int, int, int]) -> float:
+    return float(_SRGB_TO_LINEAR[np.array(bgr, np.uint8)] @ _BGR_WEIGHTS)
+
+
+def _bgr(color: str) -> tuple[int, int, int]:
+    h = color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16)
+
+
+def surface_dip(fps: int, dissolve: int, night: str, paper: str) -> int:
+    """Frames of a dip into or out of a paper surface: the shortest n ≥ `dissolve` in which a
+    display-gamma dip between the night and paper colours never changes luminance by THRESHOLD
+    or more between two frames (images lie between the two, so they are covered too)."""
+    a, b = np.array(_bgr(night), np.float64), np.array(_bgr(paper), np.float64)
+    for n in range(dissolve, 4 * fps + 1):
+        lum = []
+        for k in range(-1, n + 1):
+            w = ramp(k, 0, n)
+            mixed = tuple(int(v) for v in np.clip(np.floor(a * (1 - w) + b * w + 0.5), 0, 255))
+            lum.append(_luminance(mixed))  # type: ignore[arg-type]
+        if max(abs(y - x) for x, y in pairwise(lum)) < THRESHOLD:
+            return n
+    return 4 * fps
+
+
+IMAGES = frozenset({"title", "capture", "curtain"})
+SURFACES = frozenset({"night", "paper"})
+
+
 def check_plan(plan: dict[str, Any]) -> None:
-    """Raise PlanError when a story plan cuts between images or dissolves faster than 0.34 s.
+    """Raise PlanError when a story plan cuts between images, dissolves faster than 0.34 s, sweeps a
+    curtain in under 2 beats or dips into or out of paper faster than `surface_dip`.
 
     Classic plans keep their own hold/fade timing and are not checked here (the meter still
     measures them)."""
@@ -52,29 +88,52 @@ def check_plan(plan: dict[str, Any]) -> None:
         return
     fps = plan["fps"]
     shortest = min_dissolve(fps)
+    grid = plan.get("grid") or {}
+    fpb = grid.get("fpb", 1)
+    colors = plan["inputs"]["colors"]
+    paper = surface_dip(fps, grid.get("dissolve", shortest), colors["night"], colors["paper"])
     problems: list[str] = []
-    image = {"title", "capture"}
     prev: dict[str, Any] | None = None
+
+    def surface(shot: dict[str, Any] | None) -> str | None:
+        if shot is None:
+            return None
+        if shot["kind"] in ("card", "end"):
+            return "night"
+        return shot.get("surface") if shot["kind"] == "stat" else None
+
     for shot in plan["shots"]:
-        kind = shot["kind"]
-        if kind == "capture":
+        kind, sid = shot["kind"], shot["id"]
+        if kind in ("capture", "curtain"):
             d = shot.get("dissolve")
             same = prev is not None and prev["kind"] == "title" and prev.get("capture") == shot.get("capture")
-            if prev is not None and prev["kind"] in image and d is None and not same:
-                problems.append(f"{shot['id']}: a hard cut from {prev['id']} (every image change dissolves)")
+            if kind == "curtain":
+                same = shot.get("from_after", False)
+            if prev is not None and prev["kind"] in IMAGES and d is None and not same:
+                problems.append(f"{sid}: a hard cut from {prev['id']} (every image change dissolves)")
+            if prev is not None and prev["kind"] not in IMAGES and d is None:
+                problems.append(f"{sid}: a hard cut from {prev['id']} (images dip in from a surface)")
             if d is not None:
                 n = d["f1"] - d["f0"]
-                if n < shortest:
+                need = paper if "paper" in (d["from"], surface(prev)) else shortest
+                if n < need:
                     problems.append(
-                        f"{shot['id']}: a {n}-frame dissolve ({n / fps:.2f} s) is shorter than "
-                        f"{shortest} frames (0.34 s)"
+                        f"{sid}: a {n}-frame dissolve ({n / fps:.2f} s) is shorter than {need} frames"
+                        + (" (0.34 s)" if need == shortest else " (a dip from paper)")
                     )
                 if d["f0"] != shot["f0"]:
-                    problems.append(f"{shot['id']}: its dissolve does not start with the shot")
-        if kind in ("card", "end") and prev is not None and prev["kind"] in image:
+                    problems.append(f"{sid}: its dissolve does not start with the shot")
+        if kind == "curtain":
+            keys = shot.get("keys") or []
+            for k0, k1 in pairwise(keys):
+                if k1["a"] - k0["b"] < 2 * fpb:
+                    problems.append(f"{sid}: a curtain sweep of {k1['a'] - k0['b']} frames is under 2 beats")
+        if kind in ("card", "end", "stat") and prev is not None:
             n = shot.get("dip", 0)
-            if n < shortest:
-                problems.append(f"{shot['id']}: a {n}-frame dip to night is shorter than {shortest} frames")
+            mine, theirs = surface(shot), surface(prev)
+            need = paper if "paper" in (mine, theirs) and mine != theirs else shortest
+            if (prev["kind"] in IMAGES or mine != theirs) and n < need:
+                problems.append(f"{sid}: a {n}-frame dip is shorter than {need} frames")
         prev = shot
     if problems:
         raise PlanError("film plan is not safe to render:\n  " + "\n  ".join(problems))
@@ -149,4 +208,4 @@ class LumaMeter:
             )
 
 
-__all__ = ["FlashError", "LumaMeter", "PlanError", "cells", "check_plan"]
+__all__ = ["IMAGES", "SURFACES", "FlashError", "LumaMeter", "PlanError", "cells", "check_plan", "surface_dip"]

@@ -66,6 +66,8 @@ def tiles(plan: FilmPlan) -> list[Tile]:
         else:
             kind = f"card {shot['role']}" if shot["kind"] == "card" else shot["kind"]
             date = shot.get("capture") if isinstance(shot.get("capture"), str) else None
+            if shot["kind"] == "curtain":
+                date = f"{shot['before']}|{shot['after']}"
             out.append(Tile(shot["key"], shot["id"], kind, date, tuple(shot["facts"])))
     if p.get("poster_seconds") is not None:
         first = next((s for s in p["shots"] if s["kind"] == "section"), None)

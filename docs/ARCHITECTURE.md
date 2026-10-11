@@ -1,7 +1,7 @@
 # Vantage — architecture & contracts
 
 Vantage turns repeat drone flights over a changing site into a cinematic,
-iPhone-first interactive progress story (plus a classic MP4 time-lapse film),
+iPhone-first interactive progress story (plus MP4 time-lapse films cut from the story),
 themed from a client's brand kit. This file is the **contract** between the
 modules: if you change a format or a function signature here, change it
 everywhere.
@@ -60,10 +60,13 @@ src/vantage/
     plan.py              FilmPlans: YAML + masters + fonts → one hashed plan per film; the film set; the release gate
     beat.py              the beat grid (frames per beat, dissolves) and ports of the runtime's holdWindows/keyed
     layout.py            safe zones and text/rail anchors of the story layouts (16:9, 9:16)
-    story.py             derives a story cut's shots from the chapters: title, captures, cards, end; push clamps
-    cut.py               renders story plans: pure frame(f) (pyramid warps, dissolves, words, rail, tag)
+    story.py             derives a story cut's shots from the chapters: title, captures, cards, curtains, stats,
+                         end; degrade for 1–2 captures; subject-aware push targets and zoom clamps
+    cut.py               renders story plans: pure frame(f) (pyramid warps, dissolves, words, rail, tag,
+                         curtain splits, tabular stat figures, surface dips)
     safety.py            photosensitivity: static plan check and the per-frame luminance (flash) meter
-    render.py            renders a plan to MP4 + poster (classic `_Film`, shared drawing code, the encode)
+    render.py            renders plans to MP4 + poster (classic `_Film`, shared drawing code, the encode,
+                         films side by side in worker processes)
     storyboard.py        one contact-sheet tile per key frame of a plan, with fact status chips
   llm/claude.py          optional Claude vision helpers (captions, alt text, milestones)
   demo/synth.py          procedural "drone footage" of a fictional site changing over time
@@ -447,16 +450,22 @@ ffmpeg. The same plan, with the same inputs, gives the same bytes with the same 
 
 A film has one of two cuts:
 
-- **story** (`film/story.py`, rendered by `film/cut.py`): shots derived from the chapters on a beat
-  grid, the step's lead words landing on downbeats and pushes toward what changed (see "Derived
-  story cut"). Opt-in for now with `output.film.cut: story` or a FilmSpec `cut: story`.
-- **classic** (the default for now): a title card, one section per vantage (the main vantage first;
+- **story** (the default; `film/story.py`, rendered by `film/cut.py`): shots derived from the
+  chapters on a beat grid: the step's lead words landing on downbeats, pushes toward what changed, a
+  curtain through the compare chapter and the stats as figures (see "Derived story cut").
+- **classic** (`output.film.cut: classic` or a FilmSpec `cut: classic`): a title card, one section per vantage (the main vantage first;
   the 9:16 film keeps only the main one), a card between vantages and an end card. Inside a section
   each capture holds `hold_s` and dissolves `fade_s` into the next (linear light) under an eased 6 %
   push. `hold_s`, `fade_s`, `title_card_s` and `end_card_s` in `output.film` time it.
 
-Not yet built: compare (curtain), stats, the event-screen loop (`preset: screen`, `loop`), web
-encodes and tracks. A plan for a loop film is refused with "not supported yet".
+Not yet built: the event-screen loop (`preset: screen`, `loop`), web encodes and tracks. A plan for
+a loop film is refused with "not supported yet".
+
+Rendering: when more than one film is rendered and `os.cpu_count()` ≥ 4, each film renders in its
+own worker process (`ProcessPoolExecutor`, spawn context, `cv2.setNumThreads(1)` inside), one per
+film. `VANTAGE_FILM_JOBS` overrides the worker count; 1 renders sequentially. Workers write `*.part`
+files only; they are renamed once every worker has succeeded, and every film's parts are deleted
+when one fails. Parallel and sequential renders give the same bytes.
 
 ### Output layout (dist/<slug>/film/)
 
@@ -487,7 +496,7 @@ project.yaml `output.film` (FilmSettings). Existing fields are unchanged; `hold_
 `title_card_s` and `end_card_s` time the classic cut. New fields:
 
 ```yaml
-cut: classic          # story | classic: the cut of the derived films (classic until story covers every chapter)
+cut: story            # story | classic: the cut of the derived films
 bpm: 100              # 60–160; the beat grid of story cuts
 max_upscale: 1.6      # 1.0–3.0; output px per master px never exceeds this in a push
 require_approval: false
@@ -539,18 +548,21 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
 ### Derived story cut (film/story.py derive_cut)
 
 Shots come from the chapters in scope, in story order: the first hero → title; each scrub chapter →
-a series of captures; then the end card. (Compare → curtain and stats → stat shots come in later
-steps; gallery, explore, text, timeline and video chapters are not used.) A film with no scrub
-chapter in scope plays the main vantage's captures as one quiet series.
+a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots; then
+the end card. Gallery, explore, text, timeline and video chapters are not used. A film with no scrub
+or compare chapter in scope plays the main vantage's captures as one quiet series. For the demo
+both derived cuts are 62 beats (37.2 s at 100 bpm).
 
-- **title** (`title_beats`, 4): the first image (the first series capture) at rest under a 30 % night
+- **title** (`title_beats`, 4): the first image (the first series capture, else the first curtain's
+  before image) at rest under a 30 % night
   scrim. The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
   across beat 0; the title's word groups (up to three, split by word count) rise on frames B, B + B/3
   and B + 2B/3 (`groups`). Text and scrim fade out over the last B/3 frames. Frame 0 is the image.
 - **capture** (one per capture of each series: `from`..`to` minus `exclude`d captures): 1 beat with
   no step, 3 with a step, 4 with a push (at least 3 when the film has a single image).
-  - Every capture except the film's first image starts with a D-frame dissolve on its first frame:
-    `_mix` in linear light from the previous capture, or a display-gamma dip from night after a card.
+  - Every capture except the film's first image starts with a dissolve on its first frame: `_mix` in
+    linear light from the previous image (a capture, or a curtain as it ended) over D frames, or a
+    display-gamma dip from a surface (`from: night` after a card, `from: <surface>` after a stat).
   - The date label swaps at the dissolve's midpoint; the rail knob eases (smoothstep) to the new
     tick over the dissolve. Ticks sit at the real dates of the series.
   - Words: `film.line`, else the step's leading `**bold**` run, resolved through the facts (a
@@ -560,9 +572,44 @@ chapter in scope plays the main vantage's captures as one quiet series.
   - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`), holds to
     the end of the shot and eases back during the next shot's dissolve.
   - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
-- **card** (4 beats): inserted when consecutive captures change vantage. The chapter kicker and title
-  (else the vantage name) on night. A D-frame dip (`dip`) from the image in display gamma; the next
-  capture dips in from night.
+- **card** (4 beats): inserted when consecutive image shots (captures, curtains) change vantage. The
+  chapter kicker and title (else the vantage name) on night. A dip (`dip`) from the image in display
+  gamma; the next image dips in from night.
+- **curtain** (`C1…`, one per compare chapter; mode `blink` is rendered as a curtain too): before is
+  left of the rule, after right of it; split 0 shows all of the after image.
+  - Entry: 1 beat at split 0. If the previous image is not `after` (same vantage and capture), a
+    D-frame dissolve to `after`; otherwise no dissolve (`from_after: true`). Either way the camera
+    returns to rest over the entry beat, and the previous shot's label, words and rail leave over the
+    first half of the entry while the curtain's own overlays arrive over the second.
+  - Then per step that has a split (steps with `film.skip` are left out; no split at all: one step at
+    0.5): 2 beats of smoothstep sweep to the split, then 2 beats of hold. `keys` holds the hold
+    windows in frames, eased by `keyed` exactly like the camera. A step's focus is clamped like a push
+    (no subject recentring) and eases in over the sweep.
+  - Words: only `film.line` goes on screen (landing on the sweep's downbeat, out at the next sweep);
+    the full step text is for the tracks.
+  - Labels: `before_label` / `after_label` (else the capture labels) at the top-left and top-right,
+    44 units, shrunk (`label_scale`) so each fits between its text edge and a rule at the centre, and
+    set under the tag when the tag is top-right (`label_top`). `label_ink` holds the inner ink edges
+    and `reveal` the frame intervals in which each label shows: only while the rule (3 units wide)
+    is at least 8 px clear of its ink. A label fades in over B/3, out over the last B/3 frames of its
+    interval, and is clipped to its own side of the rule.
+  - The rule is 3 units wide in the accent colour; the grip is a 44-unit disc with chevrons at 0.56H.
+- **stat** (`N1…`, 4 beats each, at most `stats`, default 3): items of the first stats chapter in
+  scope, in order, whose value contains a `{fact:}` token. Any other item, and any item whose value,
+  unit, label or source uses a do-not-print fact, is left out with a plan warning.
+  - Background: the chapter's `surface` (default paper), entered by a dip (`dip`).
+  - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
+    (tabular figures without raqm; other glyphs keep their own advance). Each glyph slides up into a
+    mask over B/2 frames, staggered by 2 frames, from the downbeat. The value is the plan's printed
+    fact text: it never counts.
+  - Unit at 0.35× the value size after it; label at 44 units and "Source: <source>" at 26 units
+    below. They fade in at beat 1. Ink on paper, paper on night; no scrims, no tag.
+  - Followed by an image, the text fades out over the last B/3 frames and the image dips in from the
+    bare surface.
+- **Dips**: every dip and dissolve is D frames, except one that crosses between paper and another
+  surface or an image: it lasts `surface_dip` frames (film/safety.py, 17 for the demo colours at
+  30 fps), the shortest display-gamma dip from night to paper in which no frame pair changes
+  luminance by 0.10 or more.
 - **end** (`end_beats`, 6): a D-frame dip to night, then brand name, credit line, partners, the short
   `base_url`, copyright, disclaimer, the honesty line and SIMULATED_NOTE when the project is simulated.
   The honesty line comes from `provenance`:
@@ -580,7 +627,11 @@ chapter in scope plays the main vantage's captures as one quiet series.
   even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a
   3-beat step without a push (`push: false, reason: clamped`).
 - **Rest camera**: the image centre at zoom 1 in 16:9; the vantage's `portrait_focus` in 9:16.
-- **Degrade**: 0 captures is an error; 1 capture plays title → capture (3 beats) → end.
+- **Degrade** (counted on the main vantage's captures after exclusions): 0 captures is an error;
+  1 capture plays title → capture (at least 3 beats, words if it is a step) → stats → end; 2 captures
+  play title → the first capture (3 beats, no push) → a curtain between the two (the first compare
+  chapter on the main vantage in scope gives labels and splits, else `[0.5]`) → stats → end; 3 or
+  more play the full cut.
 - Pushes sample a two-level pyramid per master (L0 at s0, L1 at s0·zmax, zmax the largest camera
   zoom in the plan) and blend the two warps with weight log z / log zmax, so there is no pop between
   levels. The classic cut keeps its single level at s0·1.06.
@@ -598,7 +649,7 @@ type_scale)`; px values are rounded. Styles are in units of short edge / 1080 ×
 | classic 16x9 / 9x16 | margin .055W / .075W, rail H − round(.075H / .13H) (unchanged) | | | | |
 
 Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
-fit between the margins), card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
+fit between the margins), curtain labels 44, stat value 220 / unit 77 / label 44 / source 26, card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
 are composited at sub-pixel offsets by bilinear warping of the pre-rendered layer patch. Scrims are
 feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands.
 In 9:16 every word, the end card and the rail stay between 0.14H and 0.72H, clear of the right edge.
@@ -607,8 +658,10 @@ In 9:16 every word, the end card and the rail stay between 0.14H and 0.72H, clea
 
 - **Static** (`check_plan`, at plan time and again before rendering a story plan; `PlanError`):
   every change between two images is a dissolve of at least ceil(0.34·fps) frames that starts with
-  its shot, there are no hard cuts between images, and every card or end dip is as long. Classic
-  plans keep their own timing and are not checked.
+  its shot, there are no hard cuts between images (a curtain may open without a dissolve only on the
+  image already on screen, `from_after`), an image after a surface always dips in, every card, stat
+  or end dip is as long, any dip to or from paper lasts at least `surface_dip` frames, and every
+  curtain sweep lasts at least 2 beats. Classic plans keep their own timing and are not checked.
 - **Luminance** (`LumaMeter`, render time, every frame of every cut): each frame is downscaled to 1/8
   (INTER_AREA), converted from sRGB to linear light and reduced to Rec.709 relative luminance on a 4×4
   grid of cells. A transition is a frame pair in which any cell changes by |ΔL| ≥ 0.10 while the
@@ -647,7 +700,7 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
     "captions": [], "chapters": [],
     "shots": [ /* see below */ ],
     "hold_s": 1.0, "fade_s": 0.8, "seconds_total": 47.0, "poster_seconds": 23.65 },   // classic timing
-    // story instead: "poster": <frame> (the last frame of the last capture shot)
+    // story instead: "poster": <frame> (the last frame of the last capture shot, else of the last curtain)
   "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
   "encode": {"crf": 18, "preset": "slow", "web": null, "gop": null, "tracks": false},  // NOT hashed: bytes, not frames
@@ -677,11 +730,19 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
 - `title` (`T1`): `vantage`, `capture` (date), `file`, `groups` (the frames the title's word groups
   start rising). Text roles `kicker`, `title`.
 - `capture` (`S01…`): `vantage`, `capture` (date), `label`, `file`, `dissolve` (`{from: <date> |
-  "night", f0, f1}` or null on the film's first image), `series` (ordinal), `rail` (index on the
+  <curtain id> | "night" | "paper", f0, f1}` or null on the film's first image), `series` (ordinal), `rail` (index on the
   series' rail), `step` (null or `{index, words, words_from: film.line | lead | null,
   focus_requested, focus [x, y, z_eff], target, subjects, z_eff, upscale, push, reason, land,
   push_f0, push_f1}`). Text roles `label`, `words`.
 - `card` (`K1…`): `vantage`, `dip` (frames). Text roles `kicker`, `title`.
+- `curtain` (`C1…`): `vantage`, `before`, `after` (dates), `before_file`, `after_file`, `labels`
+  [before, after], `label_scale`, `label_top` (cap-top px), `label_ink` [right edge of the before
+  label, left edge of the after label] (px), `reveal` [[[f0, f1], …] per label], `dissolve` (as a
+  capture's, or null), `from_after`, `keys` [{a, b, split}], `steps` [{index, split, f0 (sweep start),
+  words, words_from: film.line | null, land, focus_requested, and when focused: focus, target,
+  subjects, z_eff, upscale, push, reason}]. Text roles `before`, `after`, `words`.
+- `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper), `dip`. Text roles
+  `value`, `unit`, `label`, `source`.
 - `end` (`E1`): `dip`, `honesty`. Text roles `brand`, `credit`, `role`, `partner`, `link`, `fine`,
   `honesty`.
 
@@ -693,8 +754,9 @@ date, a vantage name to the masters' name) and a warning is recorded.
 
 - Tiles show the key frames in film order. Classic: the middle of each card, the middle of each
   capture's hold, then the poster frame (`P1`). Story: one per shot `key` (the title once its words
-  are in, a capture at its words or push hold, else the end of its hold, a card's middle, the end
-  card once its text is in). 8 columns of 320 px tiles for landscape films, 10 columns of
+  are in, a capture at its words or push hold, else the end of its hold, a card's middle, a curtain
+  holding the split nearest 0.5, a stat once its figure has landed, the end card once its text is
+  in). A curtain's date reads `<before>|<after>`. 8 columns of 320 px tiles for landscape films, 10 columns of
   192 px for portrait ones.
 - Under each tile: `m:ss.ff · f<frame>` (prefixed with `bar.beat` on a beat grid), then
   `<shot id> <kind> <date>`, then one chip per fact: green releasable, amber needs-client or
@@ -743,6 +805,7 @@ vantage.film.plan.plan_films(project: Project, *, only: Sequence[str] | None = N
 vantage.film.plan.check_films(project: Project, film_dir: Path) -> list[str]    # release problems
 vantage.film.plan.film_records(project: Project, film_dir: Path) -> tuple[dict, list[str]]  # build.json films + problems
 vantage.film.render.render_film(project, out_dir, *, only=None, release=False, plan_only=False) -> list[Path]
+vantage.film.render.film_jobs(n: int) -> int                                # worker processes for n films (VANTAGE_FILM_JOBS)
 vantage.film.storyboard.write_storyboard(plan: FilmPlan, frame_fn: Callable[[int], ndarray],
                                          facts: Mapping[str, Mapping], out: Path) -> Path
 vantage.film.plan.resolve_films(project: Project) -> dict[str, FilmDef]     # enabled films, settings merged
@@ -752,6 +815,7 @@ vantage.film.beat.hold_windows(keys, hold) / keyed(windows, values, v, mix)  # p
 vantage.film.layout.layout(name, width, height, *, safe=None, type_scale=1.0) -> Layout
 vantage.film.story.derive_cut(project, film, index, fonts, hashes, warnings, *, fast) -> FilmPlan
 vantage.film.safety.check_plan(plan: dict) -> None                          # PlanError
+vantage.film.safety.surface_dip(fps, dissolve, night, paper) -> int          # frames of a dip to or from paper
 vantage.film.safety.LumaMeter(fps).add(frame) / .result() / .check(name)    # FlashError
 vantage.film.render.encode_frames(film, part, *, crf, preset, meter=None)   # the one encode path
 vantage.media.ffmpeg.ffmpeg_version() -> str

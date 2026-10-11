@@ -2,9 +2,9 @@
 
 Vantage turns repeat drone flights over a changing site into a cinematic, iPhone-first interactive
 progress story (pinned time-lapse scrub, before/after curtain, hotspots, a photo essay that works with
-JavaScript off) plus MP4 time-lapse films, themed from the client's brand kit. One build makes a
-hosted site that works offline, a full single-file HTML, a lite single file for email, an offline zip
-and the films. The engine is generic and this repo is public; client projects live elsewhere.
+JavaScript off) plus MP4 time-lapse films cut from the story on a beat grid, themed from the client's
+brand kit. One build makes a hosted site that works offline, a full single-file HTML, a lite single
+file for email, an offline zip and the films. The engine is generic and this repo is public; client projects live elsewhere.
 
 `docs/ARCHITECTURE.md` is the contract between modules (CLI, artifacts, StoryJSON, output layout).
 Read it before changing a format or a cross-module function, and update it in the same change.
@@ -85,7 +85,8 @@ npm run test:web:local                     # Playwright, iPhone + desktop Chromi
 | `docs/` | ARCHITECTURE (contract), BLUEPRINT, CAPTURE_GUIDE, DELIVERY, PROJECTS, RUNBOOK, research/ |
 
 Environment: `VANTAGE_PROJECTS` (projects root), `VANTAGE_DIST` (output root), `VANTAGE_FAST=1`
-(smaller, quicker films), `ANTHROPIC_API_KEY` or an `ant` login (only for `vantage caption`).
+(smaller, quicker films), `VANTAGE_FILM_JOBS` (film worker processes; 1 = sequential),
+`ANTHROPIC_API_KEY` or an `ant` login (only for `vantage caption`).
 
 ## Skills and agents
 

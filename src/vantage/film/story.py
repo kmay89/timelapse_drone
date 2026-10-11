@@ -6,16 +6,22 @@
              the title's word groups rise on frames 0, B/3 and 2B/3 of beat 1
     capture  one per capture of each scrub chapter (from..to, minus `exclude`d captures): 1 beat
              for a quiet capture, 3 for a step, 4 for a step that pushes in. Every capture but the
-             film's first image opens with a D-frame dissolve; the step's words (film.line, else its
+             film's first image opens with a dissolve; the step's words (film.line, else its
              leading **bold** run) land on beat 1 and a push reaches its target at beat 2⅓
-    card     between consecutive captures of different vantages: the chapter's kicker and title on
-             night, dipped in and out over D frames
+    curtain  one per compare chapter: an entry beat at split 0 (a dissolve to `after` unless it is
+             already on screen), then 2 beats of sweep and 2 of hold per step with a split; the
+             labels show only while the rule is 8 px clear of their ink (`reveal`)
+    stat     up to `stats` items of the first stats chapter whose value is a {fact:} token, 4 beats
+             each on the chapter's surface; the figure is the fact's text and never counts
+    card     between consecutive images of different vantages: the chapter's kicker and title on
+             night, dipped in and out
     end      a dip to night, then the brand, credits, URL, fine print and the honesty line
 
-Every shot start, dissolve start, push start and word landing is a multiple of B (film/beat.py).
-Push targets are clamped so a master is never enlarged beyond `max_upscale` and recentred on the
-hotspots that changed since the previous step. Compare, stats, rise and dip shots are later steps
-of the films work; a story with no scrub chapter in scope plays the main vantage as one quiet series.
+Every shot start, dissolve start, sweep, push start and word landing is a multiple of B
+(film/beat.py). Push targets are clamped so a master is never enlarged beyond `max_upscale` and
+recentred on the hotspots that changed since the previous step. A main vantage with one or two
+captures degrades to title → capture (→ curtain) → stats → end. Dips to or from paper last
+`surface_dip` frames so a paper card never flashes.
 """
 
 from __future__ import annotations
@@ -27,7 +33,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from vantage.config import CaptureNote, HeroChapter, Hotspot, Project, ScrubChapter, Step
+from vantage.config import (
+    FACT_TOKEN_RE,
+    CaptureNote,
+    CompareChapter,
+    HeroChapter,
+    Hotspot,
+    Project,
+    ScrubChapter,
+    StatsChapter,
+    Step,
+)
 from vantage.film.beat import Grid, beat_grid
 from vantage.film.layout import Layout, layout
 from vantage.film.plan import (
@@ -39,7 +55,7 @@ from vantage.film.plan import (
     fact_snapshot,
     film_size,
 )
-from vantage.film.safety import check_plan
+from vantage.film.safety import IMAGES, check_plan, surface_dip
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
 from vantage.site.render import capture_label as date_label
@@ -285,9 +301,120 @@ def _fallback_series(project: Project, caps: _Captures, vid: str, size: tuple[in
     return _Series(None, vid, name, None, None, caps.of(vid), geo, (pf[0], pf[1]))
 
 
+@dataclass
+class _Curtain:
+    chapter: str | None
+    vantage: str
+    name: str
+    kicker: str | None
+    title: str | None
+    before: _Capture
+    after: _Capture
+    labels: tuple[str | None, str | None]  # raw before_label, after_label (None: the capture label)
+    steps: list[tuple[int | None, Step | None, float]]  # (step index, step, split)
+    geometry: Geometry
+    portrait_focus: tuple[float, float]
+
+
+def _vantage_info(project: Project, caps: _Captures, vid: str) -> tuple[str, tuple[float, float]]:
+    vantage = next((v for v in project.story.vantages if v.id == vid), None)
+    pf = vantage.portrait_focus if vantage and vantage.portrait_focus else (0.5, 0.5)
+    name = (vantage.name if vantage else None) or caps.index.vantages[vid].name
+    return name, (pf[0], pf[1])
+
+
+def _curtain(
+    project: Project,
+    chapter_index: int | None,
+    ch: CompareChapter | None,
+    caps: _Captures,
+    vid: str,
+    size: tuple[int, int],
+    *,
+    pair: tuple[_Capture, _Capture] | None = None,
+) -> _Curtain | None:
+    """A compare chapter as a curtain (or, with `pair`, the curtain of a two-capture film)."""
+    cid = _chapter_ids(project)[chapter_index] if chapter_index is not None else None
+    where = f"chapter {cid!r}"
+    if vid not in caps.index.vantages:
+        caps.warnings.append(f"{where}: vantage {vid!r} has no masters; left out of the films")
+        return None
+    every = caps.of(vid)
+    if pair is None:
+        if len(every) < 2:
+            caps.warnings.append(f"{where}: fewer than two captures to compare; left out of the films")
+            return None
+        assert ch is not None
+        dates = [c.date for c in every]
+        lo = resolve_capture_ref(ch.before, dates, default=0)
+        hi = resolve_capture_ref(ch.after, dates, default=len(dates) - 1)
+        if lo == hi:
+            caps.warnings.append(f"{where}: before and after are the same capture; left out of the films")
+            return None
+        pair = (every[lo], every[hi])
+    steps: list[tuple[int | None, Step | None, float]] = []
+    for j, step in enumerate(ch.steps if ch else []):
+        if step.film is not None and step.film.skip:
+            continue
+        if step.split is not None:
+            steps.append((j, step, step.split))
+    if not steps:
+        steps = [(None, None, 0.5)]
+    name, pf = _vantage_info(project, caps, vid)
+    labels = (ch.before_label, ch.after_label) if ch else (None, None)
+    return _Curtain(
+        cid, vid, name, ch.kicker if ch else None, ch.title if ch else None, pair[0], pair[1], labels,
+        steps, _geometry(project, caps.index, vid, *size), pf,
+    )  # fmt: skip
+
+
+def _stat_items(
+    project: Project, cid: str, ch: StatsChapter, limit: int, warnings: list[str]
+) -> list[dict[str, Any]]:
+    """Up to `limit` stats whose value is a {fact:} token, printed through the facts. Any other item,
+    and any item that uses a do-not-print fact, is left out with a warning. Values never count."""
+    out: list[dict[str, Any]] = []
+    for k, item in enumerate(ch.items):
+        if len(out) >= limit:
+            break
+        where = f"chapter {cid!r} stat {k}"
+        if not FACT_TOKEN_RE.search(item.value):
+            warnings.append(f"{where}: value {item.value!r} is not a {{fact:}} token; left out of the films")
+            continue
+        say = _Printer(project, warnings)
+        value = say(item.value, f"{where} value")
+        unit = say(item.unit, f"{where} unit") if item.unit else None
+        label = say(item.label, f"{where} label")
+        source = say(item.source, f"{where} source") if item.source else None
+        if value is None or label is None or (item.unit and unit is None) or (item.source and source is None):
+            warnings.append(f"{where}: left out of the films (it uses a do-not-print fact)")
+            continue
+        out.append({"value": value, "unit": unit, "label": label, "source": source, "facts": list(say.facts)})
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # The cut
 # --------------------------------------------------------------------------- #
+
+
+class _Camera:
+    """Hold windows in frames ({a, b, x, y, zoom}); beat.keyed smoothsteps between them."""
+
+    def __init__(self) -> None:
+        self.windows: list[dict[str, Any]] = []
+
+    def hold(self, a: int, cam: Cam, b: int | None = None) -> None:
+        b = a if b is None else b
+        if self.windows:
+            last = self.windows[-1]
+            if (last["x"], last["y"], last["zoom"]) == cam:
+                last["b"] = max(last["b"], b)
+                return
+        self.windows.append({"a": a, "b": b, "x": cam[0], "y": cam[1], "zoom": cam[2]})
+
+    def until(self, f: int) -> None:
+        self.windows[-1]["b"] = max(self.windows[-1]["b"], f)
 
 
 @dataclass
@@ -297,8 +424,10 @@ class _Builder:
     grid: Grid
     layout: Layout
     warnings: list[str]
+    paper_dip: int
     shots: list[dict[str, Any]] = field(default_factory=list)
     f: int = 0  # the next shot's first frame (always on the grid)
+    camera: _Camera = field(default_factory=_Camera)
 
     def say(self) -> _Printer:
         return _Printer(self.project, self.warnings)
@@ -309,13 +438,42 @@ class _Builder:
         self.shots.append(shot)
         return shot
 
-    def rest(self, series: _Series) -> Cam:
+    def rest(self, part: _Series | _Curtain) -> Cam:
         if self.layout.width < self.layout.height:
-            return series.portrait_focus[0], series.portrait_focus[1], 1.0
+            return part.portrait_focus[0], part.portrait_focus[1], 1.0
         return 0.5, 0.5, 1.0
 
+    @property
+    def prev(self) -> dict[str, Any] | None:
+        return self.shots[-1] if self.shots else None
 
-def _title(b: _Builder, first: _Series) -> dict[str, Any]:
+    def entry(self) -> dict[str, Any]:
+        """The dissolve an image shot starting now opens with, after the previous shot."""
+        prev, f0, D = self.prev, self.f, self.grid.dissolve
+        assert prev is not None
+        if prev["kind"] in ("card", "end"):
+            return {"from": "night", "f0": f0, "f1": f0 + D}
+        if prev["kind"] == "stat":
+            n = self.paper_dip if prev["surface"] == "paper" else D
+            return {"from": prev["surface"], "f0": f0, "f1": f0 + n}
+        return {
+            "from": prev.get("capture") if prev["kind"] == "capture" else prev["id"],
+            "f0": f0,
+            "f1": f0 + D,
+        }
+
+    def dip(self, surface: str) -> int:
+        """Frames of the dip into a `surface` shot starting now."""
+        prev = self.prev
+        theirs = None
+        if prev is not None and prev["kind"] in ("card", "end"):
+            theirs = "night"
+        elif prev is not None and prev["kind"] == "stat":
+            theirs = prev["surface"]
+        return self.paper_dip if "paper" in (surface, theirs) and surface != theirs else self.grid.dissolve
+
+
+def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> dict[str, Any]:
     project, cfg = b.project, b.project.config
     hero = next((ch for ch in project.story.chapters if isinstance(ch, HeroChapter)), None)
     say = b.say()
@@ -323,14 +481,11 @@ def _title(b: _Builder, first: _Series) -> dict[str, Any]:
     kicker = kicker or say(cfg.kicker, "project.yaml kicker")
     if not kicker:
         place = cfg.location.name if cfg.location else None
-        dates = [c.date for c in first.captures]
         years = "–".join(dict.fromkeys((dates[0][:4], dates[-1][:4])))
         kicker = " · ".join(filter(None, (place, years)))
     title = say(hero.title, "hero title") if hero and hero.title else None
     title = title or say(cfg.title, "project.yaml title") or ""
-    cap = first.captures[0]
     B, third = b.grid.fpb, b.grid.third
-    beats = b.film.title_beats
     shot = {
         "id": "T1",
         "kind": "title",
@@ -339,14 +494,47 @@ def _title(b: _Builder, first: _Series) -> dict[str, Any]:
             t for t in ({"role": "kicker", "text": kicker}, {"role": "title", "text": title}) if t["text"]
         ],
         "facts": list(say.facts),
-        "vantage": first.vantage,
+        "vantage": vantage,
         "capture": cap.date,
         "file": cap.file,
         "groups": [B, B + third, B + 2 * third],
     }
-    b.add(shot, beats)
+    b.add(shot, b.film.title_beats)
     shot["key"] = min(shot["f1"] - third - 1, 2 * B + third)
     return shot
+
+
+def _aim_step(
+    b: _Builder,
+    geo: Geometry,
+    requested: Sequence[float],
+    explicit: bool,
+    subjects: Sequence[Hotspot],
+    rest: Cam,
+    zmax: float,
+    label: str,
+) -> tuple[Cam, dict[str, Any]]:
+    """A step's camera target, clamped by max_upscale (with warnings), and its plan record."""
+    cam, target = aim(geo, requested, zmax, [] if explicit else subjects, explicit=explicit)
+    z = max(requested[2], 1.0)
+    if zmax < z - 1e-9:
+        b.warnings.append(
+            f"{label}: push clamped from {z:g} to {zmax:.3g} ({b.film.id}; max_upscale {b.film.max_upscale:g})"
+        )
+    upscale = geo.s0 * cam[2]
+    if upscale > SOFT + 1e-9:
+        b.warnings.append(f"{label}: soft push, {upscale:.2f} output px per master px ({b.film.id})")
+    a, c = geo.centre(rest[0], rest[1], 1.0), geo.centre(cam[0], cam[1], cam[2])
+    push = not (cam[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
+    return cam, {
+        "focus": [cam[0], cam[1], cam[2]],
+        "target": target,
+        "subjects": [] if explicit else [h.id for h in subjects],
+        "z_eff": cam[2],
+        "upscale": upscale,
+        "push": push,
+        "reason": None if push else "clamped",
+    }
 
 
 def _push(
@@ -379,31 +567,65 @@ def _push(
     }
     if not requested:
         return record, None
-    geo = series.geometry
     explicit = bool(step.film and step.film.focus)
-    cam, target = aim(geo, requested, zmax, [] if explicit else cap.subjects, explicit=explicit)
-    z = max(requested[2], 1.0)
-    label = f"{series.chapter} {cap.date}"
-    if zmax < z - 1e-9:
-        b.warnings.append(
-            f"{label}: push clamped from {z:g} to {zmax:.3g} ({b.film.id}; max_upscale {b.film.max_upscale:g})"
-        )
-    upscale = geo.s0 * cam[2]
-    if upscale > SOFT + 1e-9:
-        b.warnings.append(f"{label}: soft push, {upscale:.2f} output px per master px ({b.film.id})")
-    a, c = geo.centre(rest[0], rest[1], 1.0), geo.centre(cam[0], cam[1], cam[2])
-    shift = math.hypot(c[0] - a[0], c[1] - a[1])
-    push = not (cam[2] < MIN_ZOOM and shift < MIN_SHIFT)
-    record.update(
-        focus=[cam[0], cam[1], cam[2]],
-        target=target,
-        subjects=[] if explicit else [h.id for h in cap.subjects],
-        z_eff=cam[2],
-        upscale=upscale,
-        push=push,
-        reason=None if push else "clamped",
+    cam, aimed = _aim_step(
+        b, series.geometry, requested, explicit, cap.subjects, rest, zmax, f"{series.chapter} {cap.date}"
     )
-    return record, (cam if push else None)
+    record.update(aimed)
+    return record, (cam if aimed["push"] else None)
+
+
+def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, name: str, vid: str):
+    say = b.say()
+    k = say(kicker, f"chapter {chapter!r} kicker") if kicker else None
+    t = (say(title, f"chapter {chapter!r} title") if title else None) or name
+    n = sum(s["kind"] == "card" for s in b.shots) + 1
+    dip = b.dip("night")
+    card = b.add(
+        {
+            "id": f"K{n}",
+            "kind": "card",
+            "chapter": chapter,
+            "text": [x for x in ({"role": "kicker", "text": k}, {"role": "title", "text": t}) if x["text"]],
+            "facts": list(say.facts),
+            "vantage": vid,
+            "dip": dip,
+        },
+        4,
+    )
+    card["key"] = card["f0"] + 2 * b.grid.fpb
+    return card
+
+
+def _curtain_labels(
+    project: Project, fonts: dict[str, Any], lay: Layout, texts: Sequence[str], tagged: bool
+) -> tuple[float, int, list[float]]:
+    """(scale, cap-top y, advance widths in px) of the curtain labels as film/cut.py sets them: each
+    label fits between its text edge and a rule at the centre, and the row sits under a top-right tag when there is one."""
+    from vantage.film.cut import CURTAIN_LABEL, TAG
+    from vantage.film.plan import font_path
+    from vantage.film.render import _Type
+
+    files = {role: font_path(fonts[role]["file"], project.brand) for role in ("display", "text", "numeric")}
+    c = project.brand.colors
+    t = _Type(files, {"paper": c.paper, "accent": c.accent, "ink": c.ink}, lay.unit)  # type: ignore[arg-type]
+    room = min(lay.width / 2 - lay.margin, lay.right - lay.width / 2) - 12 - 1.5 * lay.unit
+    widest = max(t.width(text, CURTAIN_LABEL) for text in texts)
+    scale = min(1.0, room / widest) if widest > 0 else 1.0
+    top = lay.label_top
+    if tagged and lay.tag == "top-right":
+        top += round(-t.font(TAG).getbbox("H", anchor="ls")[1] + 18 * lay.unit)
+    return scale, top, [t.width(text, CURTAIN_LABEL, scale) for text in texts]
+
+
+def _intervals(flags: Sequence[bool], f0: int) -> list[list[int]]:
+    out: list[list[int]] = []
+    for k, on in enumerate(flags):
+        if on and (not out or out[-1][1] != f0 + k):
+            out.append([f0 + k, f0 + k + 1])
+        elif on:
+            out[-1][1] += 1
+    return out
 
 
 def derive_cut(
@@ -425,144 +647,182 @@ def derive_cut(
     B, D, third = grid.fpb, grid.dissolve, grid.third
     width, height = film_size(settings, film.aspect, fast=fast)
     lay = layout(f"story-{film.aspect}", width, height, safe=film.safe, type_scale=film.type_scale)
+    colors = project.brand.colors
+    paper_dip = surface_dip(fps, D, colors.night, colors.paper)
     caps = _Captures(project, index, warnings)
     chapters = project.story.chapters
-    series: list[_Series] = []
-    for i in in_scope(project, film, index, warnings):
+    ids = _chapter_ids(project)
+    size = (width, height)
+    scope = in_scope(project, film, index, warnings)
+
+    # The parts of the cut, in story order.
+    parts: list[tuple[str, Any]] = []
+    for i in scope:
         ch = chapters[i]
-        if (
-            isinstance(ch, ScrubChapter)
-            and (s := _series(project, i, ch, caps, (width, height)))
-            and s.captures
-        ):
-            series.append(s)
+        if isinstance(ch, ScrubChapter):
+            if (s := _series(project, i, ch, caps, size)) and s.captures:
+                parts.append(("series", s))
+        elif isinstance(ch, CompareChapter):
+            if c := _curtain(project, i, ch, caps, ch.vantage, size):
+                parts.append(("curtain", c))
+        elif isinstance(ch, StatsChapter) and not any(k == "stats" for k, _ in parts):
+            items = _stat_items(project, ids[i], ch, film.stats, warnings) if film.stats else []
+            if items:
+                parts.append(("stats", (ids[i], ch.surface or "paper", items)))
+
+    # Degrade on the main vantage's captures (after exclusions).
     main = main_vantage(project, index)
-    if not series and main is not None and caps.of(main):
-        series = [_fallback_series(project, caps, main, (width, height))]
-    if not series:
+    every = caps.of(main) if main is not None else []
+    if not every:
         raise FileNotFoundError(f"no masters to film in {project.masters_dir}; run `vantage process` first")
-    total_images = sum(len(s.captures) for s in series)
+    assert main is not None
+    stats = [p for p in parts if p[0] == "stats"]
+    still: set[int] = set()  # id() of captures that must not push (the two-capture cut's before)
+    if len(every) <= 2:
+        series = next((s for k, s in parts if k == "series" and s.vantage == main), None)
+        series = series or _fallback_series(project, caps, main, size)
+        series.captures = [c for c in series.captures if c.date == every[0].date] or [every[0]]
+        parts = [("series", series)]
+        if len(every) == 2:
+            compare = next(
+                (
+                    (i, ch)
+                    for i, ch in enumerate(chapters)
+                    if isinstance(ch, CompareChapter) and ch.vantage == main and i in scope
+                ),
+                (None, None),
+            )  # fmt: skip
+            still.add(id(series.captures[0]))
+            c = _curtain(project, compare[0], compare[1], caps, main, size, pair=(every[0], every[1]))
+            if c is not None:
+                parts.append(("curtain", c))
+        parts += stats
+    elif not any(k in ("series", "curtain") for k, _ in parts):
+        parts.insert(0, ("series", _fallback_series(project, caps, main, size)))
+    images = [p for k, p in parts if k in ("series", "curtain")]
+    total_images = sum(len(p.captures) if isinstance(p, _Series) else 1 for p in images)
 
-    b = _Builder(project, film, grid, lay, warnings)
-    upscaled = {s.vantage for s in series if s.geometry.s0 > film.max_upscale + 1e-9}
-    for vid in sorted(upscaled):
-        geo = next(s.geometry for s in series if s.vantage == vid)
-        warnings.append(
-            f"vantage {vid}: master upscaled even at rest ({geo.s0:.2f}× > max_upscale "
-            f"{film.max_upscale:g}; {geo.mw}×{geo.mh} masters for a {width}×{height} film)"
-        )
-    _title(b, series[0])
+    b = _Builder(project, film, grid, lay, warnings, paper_dip)
+    for part in images:
+        geo = part.geometry
+        if geo.s0 > film.max_upscale + 1e-9:
+            text = (
+                f"vantage {part.vantage}: master upscaled even at rest ({geo.s0:.2f}× > max_upscale "
+                f"{film.max_upscale:g}; {geo.mw}×{geo.mh} masters for a {width}×{height} film)"
+            )
+            if text not in warnings:
+                warnings.append(text)
+    first = images[0]
+    first_cap = first.captures[0] if isinstance(first, _Series) else first.before
+    _title(b, first.vantage, first_cap, [c.date for c in every])
+    cam = b.camera
+    cam.hold(0, b.rest(first))
 
-    # Camera: hold windows in frames ({a, b, x, y, zoom}); smoothstep between them (beat.keyed).
-    camera: list[dict[str, Any]] = []
-
-    def hold(a: int, cam: Cam) -> None:
-        if camera and (camera[-1]["x"], camera[-1]["y"], camera[-1]["zoom"]) == cam:
-            return
-        camera.append({"a": a, "b": a, "x": cam[0], "y": cam[1], "zoom": cam[2]})
-
-    def until(f: int) -> None:
-        camera[-1]["b"] = max(camera[-1]["b"], f)
-
-    hold(0, b.rest(series[0]))
-    n, cards = 0, 0
-    prev: dict[str, Any] | None = None
+    n, series_no = 0, -1
     pushed: Cam | None = None  # the previous capture's push target, still held
-    for number, s in enumerate(series):
-        rest = b.rest(s)
-        zmax = s.geometry.zmax(film.max_upscale)
-        if prev is not None and prev["vantage"] != s.vantage:
-            cards += 1
-            say = b.say()
-            kicker = say(s.kicker, f"chapter {s.chapter!r} kicker") if s.kicker else None
-            title = (say(s.title, f"chapter {s.chapter!r} title") if s.title else None) or s.name
-            card = b.add(
-                {
-                    "id": f"K{cards}",
-                    "kind": "card",
-                    "chapter": s.chapter,
-                    "text": [
-                        t
-                        for t in ({"role": "kicker", "text": kicker}, {"role": "title", "text": title})
-                        if t["text"]
-                    ],
-                    "facts": list(say.facts),
-                    "vantage": s.vantage,
-                    "dip": D,
-                },
-                4,
-            )
-            card["key"] = card["f0"] + 2 * B
-            until(card["f0"] + D)
-            camera.append({"a": card["f1"], "b": card["f1"], "x": rest[0], "y": rest[1], "zoom": rest[2]})
+    last_vantage = first.vantage
+    for kind, part in parts:
+        if kind in ("series", "curtain") and part.vantage != last_vantage:
+            if b.prev is not None and b.prev["kind"] in IMAGES:
+                cam.until(b.f + b.dip("night"))
+            _card(b, part.chapter, part.kicker, part.title, part.name, part.vantage)
             pushed = None
-            prev = card
-        for j, cap in enumerate(s.captures):
-            n += 1
-            first = n == 1
-            step, target = _push(b, s, cap, rest, zmax)
-            beats = 1 if step is None else (4 if target else 3)
-            if total_images == 1:
-                beats = max(beats, 3)
-            f0 = b.f
-            if first:
-                dissolve = None
-            elif prev is not None and prev["kind"] == "card":
-                dissolve = {"from": "night", "f0": f0, "f1": f0 + D}
-            else:
-                dissolve = {"from": prev["capture"] if prev else None, "f0": f0, "f1": f0 + D}
-            if pushed is not None:  # the previous push eases back during this dissolve
-                until(f0)
-                hold(f0 + D, rest)
-            if target is not None:
-                until(f0 + B)
-                camera.append(
-                    {
-                        "a": f0 + 2 * B + third,
-                        "b": f0 + beats * B,
-                        "x": target[0],
-                        "y": target[1],
-                        "zoom": target[2],
-                    }
-                )
-            pushed = target
-            facts = list(dict.fromkeys([*cap.label_facts, *(step["facts"] if step else [])]))
-            text = [{"role": "label", "text": cap.label}]
-            if step and step["words"]:
-                text.append({"role": "words", "text": step["words"]})
-                step["land"] = f0 if first else f0 + B
-            if step is not None:
-                step.pop("facts")
+        if kind == "series":
+            s: _Series = part
+            series_no += 1
+            rest = b.rest(s)
+            zmax = s.geometry.zmax(film.max_upscale)
+            for cap in s.captures:
+                n += 1
+                f0 = b.f
+                step, target = _push(b, s, cap, rest, zmax)
+                if id(cap) in still and target is not None:
+                    assert step is not None
+                    step.update(push=False, reason="two captures")
+                    target = None
+                beats = 1 if step is None else (4 if target else 3)
+                if total_images == 1 or id(cap) in still:
+                    beats = max(beats, 3)
+                dissolve = None if n == 1 and b.prev and b.prev["kind"] == "title" else b.entry()
+                if b.prev is not None and b.prev["kind"] not in IMAGES:
+                    cam.hold(f0, rest)
+                if pushed is not None:  # the previous push eases back during this dissolve
+                    cam.until(f0)
+                    cam.hold(f0 + D, rest)
                 if target is not None:
-                    step["push_f0"], step["push_f1"] = f0 + B, f0 + 2 * B + third
-            shot = b.add(
-                {
-                    "id": f"S{n:02d}",
-                    "kind": "capture",
-                    "chapter": s.chapter,
-                    "text": text,
-                    "facts": facts,
-                    "vantage": s.vantage,
-                    "capture": cap.date,
-                    "label": cap.label,
-                    "file": cap.file,
-                    "dissolve": dissolve,
-                    "series": number,
-                    "rail": j,
-                    "step": step,
-                },
-                beats,
-            )
-            f1 = shot["f1"]
-            if target is not None:
-                shot["key"] = min(f1 - 1, f0 + 3 * B)
-            elif step is not None:
-                shot["key"] = f0 + 2 * B
-            else:
-                shot["key"] = f1 - 1
-            if cap.file not in hashes:
-                hashes[cap.file] = _sha256(project.masters_dir / cap.file)
-            prev = shot
+                    cam.until(f0 + B)
+                    cam.hold(f0 + 2 * B + third, target, f0 + beats * B)
+                pushed = target
+                facts = list(dict.fromkeys([*cap.label_facts, *(step["facts"] if step else [])]))
+                text = [{"role": "label", "text": cap.label}]
+                if step and step["words"]:
+                    text.append({"role": "words", "text": step["words"]})
+                    step["land"] = f0 if dissolve is None else f0 + B
+                if step is not None:
+                    step.pop("facts")
+                    if target is not None:
+                        step["push_f0"], step["push_f1"] = f0 + B, f0 + 2 * B + third
+                shot = b.add(
+                    {
+                        "id": f"S{n:02d}",
+                        "kind": "capture",
+                        "chapter": s.chapter,
+                        "text": text,
+                        "facts": facts,
+                        "vantage": s.vantage,
+                        "capture": cap.date,
+                        "label": cap.label,
+                        "file": cap.file,
+                        "dissolve": dissolve,
+                        "series": series_no,
+                        "rail": s.captures.index(cap),
+                        "step": step,
+                    },
+                    beats,
+                )
+                f1 = shot["f1"]
+                if target is not None:
+                    shot["key"] = min(f1 - 1, f0 + 3 * B)
+                elif step is not None:
+                    shot["key"] = f0 + 2 * B
+                else:
+                    shot["key"] = f1 - 1
+                if cap.file not in hashes:
+                    hashes[cap.file] = _sha256(project.masters_dir / cap.file)
+            last_vantage = s.vantage
+        elif kind == "curtain":
+            pushed = _curtain_shot(b, part, fonts, hashes)
+            last_vantage = part.vantage
+        else:
+            cid, surface, items = part
+            for item in items:
+                dip = b.dip(surface)
+                if b.prev is not None and b.prev["kind"] in IMAGES:
+                    cam.until(b.f + dip)
+                k = sum(s["kind"] == "stat" for s in b.shots) + 1
+                text = [
+                    {"role": role, "text": item[role]}
+                    for role in ("value", "unit", "label", "source")
+                    if item[role]
+                ]
+                shot = b.add(
+                    {
+                        "id": f"N{k}",
+                        "kind": "stat",
+                        "chapter": cid,
+                        "text": text,
+                        "facts": item["facts"],
+                        "value": item["value"],
+                        "unit": item["unit"],
+                        "label": item["label"],
+                        "source": item["source"],
+                        "surface": surface,
+                        "dip": dip,
+                    },
+                    4,
+                )
+                shot["key"] = shot["f0"] + 3 * B
+            pushed = None
 
     # End card.
     brand = project.brand
@@ -576,15 +836,18 @@ def derive_cut(
         lines += [{"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name}]
     if cfg.output.base_url:
         lines.append({"role": "link", "text": cfg.output.base_url.split("://")[-1].rstrip("/")})
-    for text, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer")):
-        if text and (t := say(text, f"brand.yaml {where}")):
+    for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer")):
+        if text_ and (t := say(text_, f"brand.yaml {where}")):
             lines.append({"role": "fine", "text": t})
     lines.append({"role": "honesty", "text": honesty})
     if cfg.simulated:
         lines.append({"role": "fine", "text": SIMULATED_NOTE})
+    dip = b.dip("night")
+    if b.prev is not None and b.prev["kind"] in IMAGES:
+        cam.until(b.f + dip)
     if pushed is not None:
-        until(b.f)
-        hold(b.f + D, b.rest(series[-1]))
+        cam.until(b.f)
+        cam.hold(b.f + D, b.rest(images[-1]))
     end = b.add(
         {
             "id": "E1",
@@ -592,22 +855,25 @@ def derive_cut(
             "chapter": None,
             "text": lines,
             "facts": list(say.facts),
-            "dip": D,
+            "dip": dip,
             "honesty": honesty,
         },
         film.end_beats,
     )
-    end["key"] = min(end["f1"] - 1, end["f0"] + D + 2 * B)
+    end["key"] = min(end["f1"] - 1, end["f0"] + dip + 2 * B)
     frames = b.f
-    until(frames)
+    cam.until(frames)
 
     masters: dict[str, Any] = {}
     for shot in b.shots:
-        if "file" in shot:
-            mv = index.vantages[shot["vantage"]]
-            masters[shot["file"]] = {"sha256": hashes[shot["file"]], "w": mv.width, "h": mv.height}
-    colors = brand.colors
-    poster = next(sh for sh in reversed(b.shots) if sh["kind"] == "capture")["f1"] - 1
+        for file in (shot.get("file"), shot.get("before_file"), shot.get("after_file")):
+            if file:
+                mv = index.vantages[shot["vantage"]]
+                masters[file] = {"sha256": hashes[file], "w": mv.width, "h": mv.height}
+    poster_shot = next(
+        (sh for sh in reversed(b.shots) if sh["kind"] == "capture"),
+        next((sh for sh in reversed(b.shots) if sh["kind"] == "curtain"), None),
+    )
     plan: dict[str, Any] = {
         "slug": project.slug,
         "cut": "story",
@@ -635,11 +901,11 @@ def derive_cut(
                 "accent": colors.accent,
             },
         },
-        "camera": camera,
+        "camera": cam.windows,
         "shots": b.shots,
         "captions": [],
         "chapters": [],
-        "poster": poster,
+        "poster": poster_shot["f1"] - 1 if poster_shot else b.shots[0]["key"],
     }
     check_plan(plan)
     used = sorted({f for shot in b.shots for f in shot["facts"]})
@@ -656,6 +922,113 @@ def derive_cut(
             "tracks": False,
         },
     )
+
+
+def _curtain_shot(b: _Builder, c: _Curtain, fonts: dict[str, Any], hashes: dict[str, str]) -> Cam | None:
+    """The curtain of a compare chapter: an entry beat at split 0, then 2 beats of sweep and 2 of hold
+    per step with a split. Before is left of the rule, after right of it. Returns the camera target
+    it ends on when that is not the rest camera."""
+    project, lay, film = b.project, b.layout, b.film
+    B = b.grid.fpb
+    cam = b.camera
+    f0 = b.f
+    rest = b.rest(c)
+    prev = b.prev
+    same = (
+        prev is not None
+        and prev["kind"] in ("title", "capture")
+        and prev.get("vantage") == c.vantage
+        and prev.get("capture") == c.after.date
+    )
+    dissolve = None if same else b.entry()
+    if prev is not None and prev["kind"] in IMAGES:
+        cam.until(f0)
+    cam.hold(f0 + B if prev is not None and prev["kind"] in IMAGES else f0, rest, f0 + B)
+    say = b.say()
+    where = f"chapter {c.chapter!r}"
+    labels = []
+    for raw, cap, side in zip(c.labels, (c.before, c.after), ("before", "after"), strict=True):
+        label = say(raw, f"{where} {side}_label") if raw else None
+        if label is None:
+            label = cap.label
+            say.add(cap.label_facts)
+        labels.append(label)
+    before_label, after_label = labels
+    zmax = c.geometry.zmax(film.max_upscale)
+    keys: list[dict[str, Any]] = [{"a": f0, "b": f0 + B, "split": 0.0}]
+    steps: list[dict[str, Any]] = []
+    t = f0 + B
+    target = rest
+    for j, step, split in c.steps:
+        record: dict[str, Any] = {"index": j, "split": split, "f0": t, "words": None, "words_from": None}
+        target = rest
+        if step is not None:
+            line = step.film.line if step.film and step.film.line else None
+            words = say(line, f"{where} step {j} film words") if line else None
+            if words:
+                record.update(words=words, words_from="film.line", land=t)
+            requested = step.film.focus if step.film and step.film.focus else step.focus
+            record["focus_requested"] = list(requested) if requested else None
+            if requested:
+                aimed_cam, aimed = _aim_step(
+                    b, c.geometry, requested, bool(step.film and step.film.focus), [], rest, zmax,
+                    f"{c.chapter} step {j}",
+                )  # fmt: skip
+                record.update(aimed)
+                if aimed["push"]:
+                    target = aimed_cam
+        cam.until(t)
+        cam.hold(t + 2 * B, target, t + 4 * B)
+        keys.append({"a": t + 2 * B, "b": t + 4 * B, "split": split})
+        steps.append(record)
+        t += 4 * B
+    # Labels show only while the rule (3 units wide) is at least 8 px clear of their ink.
+    tagged = project.config.simulated or project.config.draft
+    scale, label_top, (wb, wa) = _curtain_labels(project, fonts, lay, [before_label, after_label], tagged)
+    ink = [lay.margin + wb, lay.right - wa]
+    half = 1.5 * lay.unit
+    from vantage.film.beat import Window, keyed, lerp
+
+    windows = [Window(k["a"], k["b"]) for k in keys]
+    splits = [k["split"] for k in keys]
+    xs = [keyed(windows, splits, f, lerp) * lay.width for f in range(f0, t)]
+    reveal = [
+        _intervals([x - half >= ink[0] + 8 for x in xs], f0),
+        _intervals([x + half <= ink[1] - 8 for x in xs], f0),
+    ]
+    k = sum(s["kind"] == "curtain" for s in b.shots) + 1
+    text = [{"role": "before", "text": before_label}, {"role": "after", "text": after_label}]
+    text += [{"role": "words", "text": s["words"]} for s in steps if s["words"]]
+    shot = b.add(
+        {
+            "id": f"C{k}",
+            "kind": "curtain",
+            "chapter": c.chapter,
+            "text": text,
+            "facts": list(say.facts),
+            "vantage": c.vantage,
+            "before": c.before.date,
+            "after": c.after.date,
+            "before_file": c.before.file,
+            "after_file": c.after.file,
+            "labels": [before_label, after_label],
+            "label_scale": scale,
+            "label_top": label_top,
+            "label_ink": ink,
+            "reveal": reveal,
+            "dissolve": dissolve,
+            "from_after": same,
+            "keys": keys,
+            "steps": steps,
+        },
+        1 + 4 * len(steps),
+    )
+    best = min(range(len(steps)), key=lambda s: abs(steps[s]["split"] - 0.5))
+    shot["key"] = keys[best + 1]["a"] + B
+    for file in (c.before.file, c.after.file):
+        if file not in hashes:
+            hashes[file] = _sha256(project.masters_dir / file)
+    return None if target == rest else target
 
 
 __all__ = [

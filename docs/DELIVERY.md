@@ -13,7 +13,7 @@ One build (`vantage all <project>`) writes every edition into `dist/<slug>/`:
 | Full single file | `<slug>.html` | desktop, AirDrop to a Mac, archive | `output.single_file_max_mb` (default 60 MB); video dropped first, then image quality |
 | Lite single file | `<slug>-lite.html` | email attachment, iOS Quick Look | ≤ `output.lite_max_mb` (default 15 MB); key images only, no video |
 | Offline zip | `<slug>-offline.zip` | desktop `file://`, long-term archive | release assets < 2 GiB each |
-| Films | `film/<slug>-16x9.mp4`, `-9x16.mp4` | everyone: meetings, Photos, social | H.264, plays everywhere |
+| Films | `film/<slug>-16x9.mp4`, `-9x16.mp4` | everyone: meetings, Photos, social | H.264, plays everywhere; story cut (default) or classic (`output.film.cut: classic`) |
 | Film plans | `film/<slug>-<id>.plan.json`, `.storyboard.jpg` | approving a cut; proving what a film shows | `vantage film --plan-only` writes them in seconds; `package --release` refuses a film that no longer matches its plan |
 | Info | `HOW-TO-VIEW.txt`, `SHA256SUMS`, `build.json` | recipients, integrity, provenance | |
 

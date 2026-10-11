@@ -14,6 +14,9 @@ and out of the imagery while the camera keeps moving.
 
 Story plans are rendered by `film/cut.py` (`_Cut`); `renderer` picks the one for a plan's cut, and
 every film goes through `encode_frames` and the luminance meter of `film/safety.py`.
+`render_film` renders several films side by side in worker processes (`film_jobs`;
+VANTAGE_FILM_JOBS=1 renders them one after another, with the same bytes) and renames their
+*.part outputs only once every film has succeeded.
 
 `_Film` evaluates a classic plan: the timeline, card text and inputs all come from the plan, so a
 plan read back from plan.json renders the same bytes. Frames are composed with numpy/OpenCV and
@@ -27,7 +30,10 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import math
+import multiprocessing
+import os
 from collections.abc import Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -125,7 +131,7 @@ class _Style:
     role: Role
     size: float  # in units of 1/1080 of the frame's short edge
     weight: int = 400
-    color: Literal["paper", "accent"] = "paper"
+    color: Literal["paper", "accent", "ink"] = "paper"
     alpha: float = 1.0
     tracking: float = 0.0  # em
     upper: bool = False
@@ -138,7 +144,7 @@ class _Type:
     def __init__(self, files: dict[Role, Path | None], colors: dict[str, str], unit: float) -> None:
         self.files = files
         self.unit = unit
-        self.colors = {"paper": _hex(colors["paper"]), "accent": _hex(colors["accent"])}
+        self.colors = {k: _hex(colors[k]) for k in ("paper", "accent", "ink") if k in colors}
 
     def font(self, s: _Style, scale: float = 1.0) -> Font:
         return _font(self.files[s.role], max(6, round(s.size * self.unit * scale)), s.weight)
@@ -611,9 +617,11 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _render_one(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool) -> Path:
-    """Write one film's outputs as *.part files, then rename them all (the plan last). Returns the
-    MP4 (or, with plan_only, the plan.json)."""
+def _render_parts(
+    project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool
+) -> tuple[dict[Path, Path], FilmPlan]:
+    """Write one film's outputs as *.part files: ({final: part}, the plan with its render record).
+    On failure the parts written so far are deleted."""
     stem = f"{project.slug}-{plan.id}"
     mp4, poster = out_dir / f"{stem}.mp4", out_dir / f"{stem}.jpg"
     plan_path, board = out_dir / f"{stem}{PLAN_SUFFIX}", out_dir / f"{stem}{STORYBOARD_SUFFIX}"
@@ -650,9 +658,82 @@ def _render_one(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: b
         for p in parts.values():
             p.unlink(missing_ok=True)
         raise
+    return parts, plan
+
+
+def _commit(parts: dict[Path, Path]) -> None:
+    """Rename a film's *.part files to their final names (the plan.json last: it was added last)."""
     for final, p in parts.items():
         p.replace(final)
-    return plan_path if plan_only else mp4
+
+
+def _render_one(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool) -> Path:
+    """Write one film's outputs as *.part files, then rename them all (the plan last). Returns the
+    MP4 (or, with plan_only, the plan.json)."""
+    parts, plan = _render_parts(project, plan, out_dir, plan_only=plan_only)
+    _commit(parts)
+    return _final(project, plan, out_dir, plan_only=plan_only)
+
+
+def _final(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: bool) -> Path:
+    stem = f"{project.slug}-{plan.id}"
+    return out_dir / (f"{stem}{PLAN_SUFFIX}" if plan_only else f"{stem}.mp4")
+
+
+def _worker(project: Project, plan: FilmPlan, out_dir: Path) -> tuple[dict[Path, Path], FilmPlan]:
+    """One film rendered in a worker process (OpenCV single-threaded: the films run side by side)."""
+    cv2.setNumThreads(1)
+    return _render_parts(project, plan, out_dir, plan_only=False)
+
+
+def film_jobs(n: int) -> int:
+    """Worker processes for n films: VANTAGE_FILM_JOBS when set (1: sequential), else one per film
+    when there is more than one and at least 4 CPUs."""
+    env = os.environ.get("VANTAGE_FILM_JOBS", "").strip()
+    if env:
+        try:
+            jobs = int(env)
+        except ValueError as exc:
+            raise ValueError(f"VANTAGE_FILM_JOBS must be a whole number, not {env!r}") from exc
+    else:
+        cpus = os.cpu_count() or 1
+        jobs = cpus if n > 1 and cpus >= 4 else 1
+    return max(1, min(jobs, n))
+
+
+def _render_all(
+    project: Project, plans: Sequence[FilmPlan], out_dir: Path, *, plan_only: bool
+) -> list[FilmPlan]:
+    """Render every plan (in worker processes when film_jobs allows) and rename the outputs only
+    once every film has succeeded; on any failure every film's *.part files are deleted."""
+    jobs = 1 if plan_only else film_jobs(len(plans))
+    done: list[tuple[dict[Path, Path], FilmPlan]] = []
+    try:
+        if jobs == 1:
+            for plan in plans:
+                done.append(_render_parts(project, plan, out_dir, plan_only=plan_only))
+        else:
+            ctx = multiprocessing.get_context("spawn")  # never fork a process that holds OpenCV threads
+            with ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as pool:
+                futures = [pool.submit(_worker, project, plan, out_dir) for plan in plans]
+                errors = []
+                for future in futures:
+                    try:
+                        done.append(future.result())
+                    except BaseException as exc:  # keep collecting so every worker's parts are known
+                        errors.append(exc)
+                if errors:
+                    raise errors[0]
+    except BaseException:
+        for parts, _ in done:
+            for part in parts.values():
+                part.unlink(missing_ok=True)
+        for part in out_dir.glob(f"{project.slug}-*.part"):
+            part.unlink(missing_ok=True)
+        raise
+    for parts, _ in done:
+        _commit(parts)
+    return [plan for _, plan in done]
 
 
 def _clean(project: Project, out_dir: Path, ids: Sequence[str]) -> None:
@@ -684,8 +765,8 @@ def render_film(
     if only is None:
         _clean(project, out_dir, list(resolve_films(project)))
     outputs = []
-    for plan in plans.values():
-        out = _render_one(project, plan, out_dir, plan_only=plan_only)
+    for plan in _render_all(project, list(plans.values()), out_dir, plan_only=plan_only):
+        out = _final(project, plan, out_dir, plan_only=plan_only)
         p = plan.plan
         sections = sum(s["kind"] in ("section", "capture") for s in p["shots"])
         done = "planned" if plan_only else "rendered"
