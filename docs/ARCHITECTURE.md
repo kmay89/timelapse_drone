@@ -743,14 +743,23 @@ of the right edge.
   long dip from paper can need more `end_beats` than the minimum). A loop plan opens with a `rise` and closes with a `dip`, each
   at least ceil(0.34·fps) frames, and its frame count is a multiple of 2B. Classic plans keep their
   own timing and are not checked.
-- **Luminance** (`LumaMeter`, render time, every frame of every cut): each frame is downscaled to 1/8
-  (INTER_AREA), converted from sRGB to linear light and reduced to Rec.709 relative luminance on a 4×4
-  grid of cells. A transition is a frame pair in which any cell changes by |ΔL| ≥ 0.10 while the
-  darker value is < 0.80. The film fails if any window of `fps` frames holds more than 3
-  transitions: the renderer deletes the `.part` outputs and raises `FlashError`. The meter only reads
-  frames, so it never changes bytes; its result is `render.flash`
-  (`{pass, max_transitions_per_s, max_delta, frame}`). For a loop film it also reads frame N (= frame
-  0), so the seam is measured like any other transition.
+- **Flashes** (`LumaMeter`, render time, every frame of every cut, classic cuts included: they have
+  no static check, so the meter is their guard): each frame is downscaled to 1/8 (INTER_AREA),
+  converted from sRGB to linear light and averaged over 113 regions, an 8×8 grid of cells plus the
+  7×7 cells offset by half a cell (`safety.regions`), so a flash across a cell corner is seen whole.
+  Following WCAG 2.3.1's general and red flash definitions, a **transition** is a monotonic run of a
+  region's Rec.709 relative luminance, however many frames it is ramped over, that changes it by
+  ≥ 0.10 while its darker end is < 0.80; or a run of its red value max(0, (R − G − B)·320) of more
+  than 20 with saturated red (R / (R + G + B) ≥ 0.8, linear) at one end. A run ends only when the
+  value comes back 0.10 (red: 20) from its extreme, so noise does not split a dissolve into several.
+  The film fails if any region holds more than 3 transitions within `fps` frames (WCAG allows 3
+  flashes, 6 transitions, a second; and a region, 1/64 of the frame, is smaller than WCAG's 25 % of
+  a 10° field, about 2.8 % of a screen, so a flash of that size changes some region in full): the renderer deletes the `.part`
+  outputs and raises `FlashError`. The meter only reads frames, so it never changes bytes; its
+  result is `render.flash` (`{pass, max_transitions_per_s, max_delta, frame}`; `max_delta` is the
+  largest one-frame change of any region). For a loop film it also reads frame N (= frame 0), so the
+  seam is measured like any other transition. The fast demo films measure at most 3 transitions a
+  second.
 
 ### plan.json
 

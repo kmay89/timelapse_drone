@@ -8,6 +8,7 @@ frame centre tells which capture is on screen.
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import subprocess
@@ -409,6 +410,45 @@ def test_flash_meter():
     for v in (40, 200, 40, 200, 40):
         meter.add(np.full((64, 64, 3), v, np.uint8))
     assert not meter.passed and meter.result()["pass"] is False
+
+
+def _ramped(lo: float, hi: float, ramp_frames: int, n: int = 60) -> list[float]:
+    """A flicker between lo and hi, ramped linearly over `ramp_frames` frames each way."""
+    up = [lo + (hi - lo) * k / ramp_frames for k in range(ramp_frames)]
+    down = [hi - (hi - lo) * k / ramp_frames for k in range(ramp_frames)]
+    return ((up + down) * n)[:n]
+
+
+def test_flash_meter_sees_ramped_flicker():
+    """WCAG counts a change however many frames it takes: a 5 Hz flicker ramped over 3 frames each
+    way, and a 2.5 Hz one over 6, fail although no single frame pair changes by 0.10."""
+    five_hz = _ramped(0.0, 0.27, 3)
+    assert max(abs(a - b) for a, b in itertools.pairwise(five_hz)) < 0.10
+    assert not _feed(five_hz).passed and _feed(five_hz).worst >= 9
+    assert not _feed(_ramped(0.0, 0.5, 6)).passed
+    assert _feed(_ramped(0.0, 0.5, 15)).passed  # 1 Hz: two transitions a second
+    assert _feed(_ramped(0.0, 0.08, 3)).passed  # under 0.10 each way: no transition
+    # Noise does not split a slow dissolve into many transitions.
+    rng = np.random.default_rng(0)
+    slow = [0.6 - 0.5 * k / 30 + rng.normal(0, 0.01) for k in range(30)] + [0.1] * 30
+    assert _feed(slow).worst == 1
+
+
+def test_flash_meter_regions_and_red():
+    """A flash in a quarter of one cell, straddling cell edges, is seen by the offset regions; a
+    saturated red flash fails even where the luminance change alone would not."""
+    meter = LumaMeter(30)
+    frame = np.full((256, 256, 3), 30, np.uint8)
+    for k in range(10):
+        f = frame.copy()
+        if k % 2:
+            f[48:80, 48:80] = 255  # 32 × 32 px around the corner of four 64-px cells
+        meter.add(f)
+    assert not meter.passed
+    meter = LumaMeter(30)
+    for k in range(10):  # dark red ↔ black: ΔL ≈ 0.05, below the general threshold
+        meter.add(np.full((64, 64, 3), (0, 0, 120 if k % 2 else 0), np.uint8))
+    assert meter.max_delta < 0.10 and not meter.passed
 
 
 def test_short_end_card_is_refused(tmp_path):
