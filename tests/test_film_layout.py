@@ -4,6 +4,8 @@ layout unchanged, and the -web.mp4 copy (H.264, faststart, VBV-capped, reproduci
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import struct
 import subprocess
 from pathlib import Path
@@ -206,7 +208,7 @@ def test_web_encode(tmp_path):
     plan = FilmPlan.load(out["a"] / "tiny-site-16x9.plan.json")
     p, encode = plan.plan, plan.encode
     rate = web_maxrate(p["frames"] / p["fps"])
-    assert encode["web"] == {"crf": 23, "preset": "slow", "maxrate": rate, "bufsize": 2 * rate}
+    assert encode["web"] == {"crf": 23, "preset": "slow", "maxrate": rate, "bufsize": 2 * rate, "threads": 4}
     assert plan.render is not None and plan.render["web"]["bytes"] == web.stat().st_size
     assert check_films(project, out["a"]) == []
     # A hand-replaced web copy is caught like a hand-replaced film.
@@ -280,3 +282,28 @@ def _edit_film(root: Path, *, lang: str | None = None, **film: object) -> None:
     if lang:
         data["lang"] = lang
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    shutil.which("taskset") is None or (os.cpu_count() or 1) < 2, reason="needs taskset, 2+ CPUs"
+)
+def test_encode_bytes_do_not_depend_on_the_cpu_count(tmp_path, monkeypatch):
+    """x264's thread count is pinned: one CPU or all of them, the same frames give the same bytes."""
+    from vantage.media import ffmpeg
+
+    project = tiny(tmp_path / "p", simulated=True)
+    plan = plan_films(project, only=["16x9"], fast=True)["16x9"]
+    film = renderer(project, plan)
+    real = ffmpeg.ffmpeg_bin()
+    one_cpu = tmp_path / "ffmpeg-one-cpu"
+    one_cpu.write_text(f'#!/bin/sh\nexec taskset -c 0 "{real}" "$@"\n', encoding="utf-8")
+    one_cpu.chmod(0o755)
+    out = {}
+    for name, binary in (("all", real), ("one", str(one_cpu))):
+        monkeypatch.setattr(ffmpeg, "ffmpeg_bin", lambda binary=binary: binary)
+        out[name] = tmp_path / f"{name}.mp4"
+        web = (tmp_path / f"{name}-web.mp4", plan.encode["web"])
+        encode_frames(film, out[name], crf=plan.encode["crf"], preset=plan.encode["preset"], web=web)
+    assert out["all"].read_bytes() == out["one"].read_bytes()
+    assert (tmp_path / "all-web.mp4").read_bytes() == (tmp_path / "one-web.mp4").read_bytes()
+    assert plan.encode["threads"] == ffmpeg.ENCODER_THREADS

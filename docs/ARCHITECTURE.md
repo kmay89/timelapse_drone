@@ -449,7 +449,9 @@ and `<slug>-lite.html` (email). `<html data-edition>` is `site` (hosted), `offli
 Films are made in two stages: plan, then render. `plan_films` turns YAML, `masters/index.json`, the
 master and font files and the settings into one **FilmPlan** per film. That step is pure and renders
 nothing. A renderer then evaluates a pure frame function over the plan and pipes the frames to
-ffmpeg. The same plan, with the same inputs, gives the same bytes with the same ffmpeg build.
+ffmpeg. The same plan, with the same inputs, gives the same bytes with the same ffmpeg build, on any
+machine: x264's thread count, which changes its output, is pinned to 4 (`-threads 4`,
+`media.ffmpeg.ENCODER_THREADS`, recorded as `encode.threads`) rather than left to the CPU count.
 
 A film has one of two cuts:
 
@@ -479,7 +481,7 @@ when one fails. Parallel and sequential renders give the same bytes.
 ```
 <slug>-<id>.mp4              H.264 High, yuv420p, BT.709 tags, +faststart, bitexact, no audio stream;
                              mov_text captions (off by default) and named chapters (see "Tracks");
-                             crf 18 slow (VANTAGE_FAST: crf 20 veryfast)
+                             crf 18 slow (VANTAGE_FAST: crf 20 veryfast), -threads 4
 <slug>-<id>-web.mp4          web copy ≤ 25 MiB: the same frames, crf 23 under a VBV cap (see "Web encode");
                              not for loop films, nor with output.film.web: false
 <slug>-<id>.jpg              poster (classic: the main vantage's final hold; story: the last frame of the last capture)
@@ -785,8 +787,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
   "checks": {"safe": [96, 54, 1824, 1026], "ink": [{"shot": "T1", "layer": "stack", "box": [598, 330, 724, 420]}],
              "outside": []},                           // NOT hashed: written by the renderer (see Layout presets)
-  "encode": {"crf": 18, "preset": "slow", "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
-             "bufsize": 8030000} | null, "gop": null | 48, "tracks": true, "lang": "eng"},  // NOT hashed: bytes, not frames
+  "encode": {"crf": 18, "preset": "slow", "threads": 4, "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
+             "bufsize": 8030000, "threads": 4} | null, "gop": null | 48, "tracks": true, "lang": "eng"},  // NOT hashed: bytes, not frames
                                                        // tracks: embed captions and chapters; lang: ISO 639-2
                                                        // gop: a loop film's closed GOP, 2B frames
   "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": {"bytes": 0, "sha256": ""} | null,
@@ -858,8 +860,8 @@ date, a vantage name to the masters' name) and a warning is recorded.
   `<slug>-<id>-web.mp4`, encoded from the same frame pipe as the main film (`FrameWriter`
   `extra_outputs`: one rawvideo input, one independent encoder per output, so the main film's bytes
   equal a single-output encode).
-- Args: `-c:v libx264 -profile:v high -crf 23 -preset slow (VANTAGE_FAST: veryfast) -maxrate R
-  -bufsize 2R -pix_fmt yuv420p -movflags +faststart` plus the main film's BT.709 and bitexact args.
+- Args: `-c:v libx264 -profile:v high -crf 23 -preset slow (VANTAGE_FAST: veryfast) -threads 4
+  -maxrate R -bufsize 2R -pix_fmt yuv420p -movflags +faststart` plus the main film's BT.709 and bitexact args.
   R = min(6,000,000, floor(0.9 · 25 MiB · 8 / duration_s)) bit/s, floored to a whole kbit/s
   (`plan.web_maxrate`; 37.2 s → 5,073,000).
 - `render.web` records its bytes and sha256; the release gate checks it like the MP4.

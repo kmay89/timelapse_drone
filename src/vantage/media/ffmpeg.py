@@ -230,6 +230,9 @@ def iter_frames(
         stderr.text()
 
 
+ENCODER_THREADS = 4  # pinned so the same frames give the same bytes on any machine
+
+
 class FrameWriter:
     """Pipe BGR frames into ffmpeg to produce an H.264 (or HEVC) MP4.
 
@@ -239,6 +242,10 @@ class FrameWriter:
     `extra_outputs` [(path, args)] adds more encodes of the same frames from the one rawvideo pipe:
     each output's args are its complete output options (codec, rate control, filters, flags), so
     every output is encoded independently and the main one's bytes equal a single-output run.
+
+    The encoder's thread count is pinned (`threads`, default ENCODER_THREADS): x264 splits its work
+    by thread count, and left on auto (1.5 × the CPUs it may use) the same frames give different
+    bytes on machines with different CPU counts.
     """
 
     def __init__(
@@ -253,6 +260,7 @@ class FrameWriter:
         preset: str = "medium",
         extra: Sequence[str] = (),
         extra_outputs: Sequence[tuple[Path, Sequence[str]]] = (),
+        threads: int = ENCODER_THREADS,
     ) -> None:
         self.out, self.width, self.height = out, width, height
         for path in (out, *(p for p, _ in extra_outputs)):
@@ -282,6 +290,8 @@ class FrameWriter:
             str(crf),
             "-preset",
             preset,
+            "-threads",
+            str(threads),
             "-pix_fmt",
             "yuv420p",
             "-movflags",

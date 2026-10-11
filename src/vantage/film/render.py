@@ -68,7 +68,7 @@ from vantage.film.plan import capture_labels as capture_labels
 from vantage.film.safety import LumaMeter, check_plan
 from vantage.film.storyboard import write_storyboard
 from vantage.film.tracks import SUFFIXES, embed, track_texts
-from vantage.media.ffmpeg import FrameWriter, ffmpeg_version
+from vantage.media.ffmpeg import ENCODER_THREADS, FrameWriter, ffmpeg_version
 from vantage.models import FilmPlan
 from vantage.site.build import ReleaseError
 from vantage.site.facts import check_release
@@ -633,6 +633,7 @@ def web_args(web: Mapping[str, Any]) -> list[str]:
     faststart and the same BT.709, bitexact settings as the main film."""
     return [
         "-c:v", "libx264", "-profile:v", "high", "-crf", str(web["crf"]), "-preset", web["preset"],
+        "-threads", str(web.get("threads", ENCODER_THREADS)),
         "-maxrate", str(web["maxrate"]), "-bufsize", str(web["bufsize"]),
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", *_ENCODE,
     ]  # fmt: skip
@@ -656,6 +657,7 @@ def encode_frames(
     meter: LumaMeter | None = None,
     web: tuple[Path, Mapping[str, Any]] | None = None,
     gop: int | None = None,
+    threads: int = ENCODER_THREADS,
 ) -> None:
     """Pipe every frame of a film to ffmpeg (and through the luminance meter, which only reads);
     `web` (path, plan.json encode.web) adds the web encode as a second output of the same pipe;
@@ -665,7 +667,7 @@ def encode_frames(
     extra = [*loop_args(gop), *_ENCODE] if gop else list(_ENCODE)
     with FrameWriter(
         part, film.width, film.height, fps=film.fps, crf=crf, preset=preset, extra=extra,
-        extra_outputs=extra_outputs,
+        extra_outputs=extra_outputs, threads=threads,
     ) as writer:  # fmt: skip
         for k in range(film.frames):
             frame = film.frame_at(k)
@@ -760,6 +762,7 @@ def _render_parts(
             encode_frames(
                 film, part(mp4), crf=plan.encode["crf"], preset=plan.encode["preset"], meter=meter,
                 web=(part(web_mp4), web) if web else None, gop=plan.encode.get("gop"),
+                threads=plan.encode.get("threads", ENCODER_THREADS),
             )  # fmt: skip
             meter.check(f"film {plan.id}")
             if plan.encode.get("tracks"):  # captions and chapters, by stream copy (video unchanged)

@@ -32,6 +32,7 @@ from vantage import log
 from vantage.config import FILM_ID_RE, BrandKit, FilmSettings, FontSpec, Project, ScrubChapter
 from vantage.film.layout import layout
 from vantage.film.tracks import SUFFIXES, Tracks, iso639_2, sentence, track_facts, track_texts
+from vantage.media.ffmpeg import ENCODER_THREADS
 from vantage.models import FilmPlan, MastersIndex
 from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
@@ -367,16 +368,18 @@ def encode_settings(
     """plan.json `encode` (not hashed: it changes bytes, not frames). `web` is the -web.mp4 encode:
     crf 23 under a VBV cap, null for loop films and when output.film.web is false. `gop` is a loop
     film's closed GOP in frames (2 beats of `fpb`), else null. `tracks`: the MP4s embed the captions
-    and chapters (film/tracks.py), whose subtitle track is tagged `lang` (ISO 639-2)."""
+    and chapters (film/tracks.py), whose subtitle track is tagged `lang` (ISO 639-2). `threads`:
+    x264's thread count, pinned because it changes the bytes (media/ffmpeg.py ENCODER_THREADS)."""
     preset = "veryfast" if fast else "slow"
     web = None
     if settings.web and not film.loop:
         rate = web_maxrate(frames / fps)
-        web = {"crf": 23, "preset": preset, "maxrate": rate, "bufsize": 2 * rate}
+        web = {"crf": 23, "preset": preset, "maxrate": rate, "bufsize": 2 * rate, "threads": ENCODER_THREADS}
     gop = GOP_BEATS * fpb if film.loop and fpb else None
     return {
         "crf": 20 if fast else 18,
         "preset": preset,
+        "threads": ENCODER_THREADS,
         "web": web,
         "gop": gop,
         "tracks": has_tracks(film, settings),
