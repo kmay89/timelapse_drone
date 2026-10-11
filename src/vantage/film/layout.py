@@ -4,6 +4,9 @@
                   · rail .88H · tag top-right inside the safe zone
     story-9x16    safe .14H .12W .28H .06W · label cap-top .16H · lead baseline .60H · rail .70H
                   · tag right-aligned, baseline 18 units above the rail
+    screen        the event-screen loop (16:9, type_scale 1.6): .05 on every side (overscan-safe on
+                  TVs) · label cap-top at the safe top · lead baseline .76H · rail .88H · tag
+                  top-right inside the safe zone
     classic-16x9  today's numbers, byte for byte: margin .055W, rail H − round(.075H), bottom scrim
                   rows .42H, tag .8·margin from the top-left corner (ink checked against .05 all round)
     classic-9x16  the story-9x16 safe zone: rail .70H, the lower third above it, the tag top-left at
@@ -105,6 +108,7 @@ Fractions = tuple[float, float, float, float]
 _STORY: dict[str, tuple[Fractions, float | None, float, float, TagAnchor]] = {
     "story-16x9": ((0.06, 0.05, 0.06, 0.05), None, 0.78, 0.88, "top-right"),
     "story-9x16": ((0.14, 0.12, 0.28, 0.06), 0.16, 0.60, 0.70, "rail-right"),
+    "screen": ((0.05, 0.05, 0.05, 0.05), None, 0.76, 0.88, "top-right"),
 }
 CLASSIC_16X9: Fractions = (0.05, 0.05, 0.05, 0.05)  # the zone its ink is checked against
 CLASSIC_KNOB = 5  # units: the classic rail knob's radius (its rail ends are inset by it in 9:16)

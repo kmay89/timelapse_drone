@@ -168,8 +168,7 @@ def test_resolve_films_precedence(tmp_path):
     )  # fmt: skip
     assert films["teaser"].chapters == ("flights",) and films["teaser"].aspect == "16x9"
     assert list(plan_films(project, fast=True)) == ["16x9", "9x16", "teaser"]  # auto films only
-    with pytest.raises(ValueError, match="not supported yet"):
-        plan_films(project, only=["screen"])
+    assert plan_films(project, only=["screen"], fast=True)["screen"].plan["loop"] is True
 
 
 @pytest.mark.parametrize(

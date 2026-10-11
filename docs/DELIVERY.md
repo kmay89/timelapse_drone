@@ -15,6 +15,8 @@ One build (`vantage all <project>`) writes every edition into `dist/<slug>/`:
 | Offline zip | `<slug>-offline.zip` | desktop `file://`, long-term archive | release assets < 2 GiB each |
 | Films | `film/<slug>-16x9.mp4`, `-9x16.mp4` | everyone: meetings, Photos, social | H.264, plays everywhere; story cut (default) or classic (`output.film.cut: classic`); the 9:16 cut keeps all text between 14 % and 72 % of the height, clear of the phone UI on the right |
 | Web films | `film/<slug>-16x9-web.mp4`, `-9x16-web.mp4` | websites, social and CMS uploads | ≤ 25 MiB each (checked by `scripts/budgets.py`); the same frames under a bitrate cap; `output.film.web: false` turns them off |
+| Event-screen loop | `film/<slug>-screen.mp4` (on request: `vantage film <slug> --film screen`) | a silent TV or projector at an event | 16:9, 75 bpm, large type inside a 5 % overscan margin; seamless (it rises from night and dips back to it); closed GOPs, no audio, no captions, no web copy; never embedded on the site |
+| USB loop file | `film/usb/<slug>-screen-<H>h.mp4` (`--hours H`, 0 < H ≤ 12) | a TV's own USB media player | the loop repeated by stream copy in seconds; refused over 3.9 GiB (FAT32); **not hosted, not packaged, not a release asset**: copy it to an exFAT or FAT32 stick yourself |
 | Film plans | `film/<slug>-<id>.plan.json`, `.storyboard.jpg` | approving a cut; proving what a film shows | `vantage film --plan-only` writes them in seconds; `package --release` refuses a film that no longer matches its plan |
 | Info | `HOW-TO-VIEW.txt`, `SHA256SUMS`, `build.json` | recipients, integrity, provenance | |
 

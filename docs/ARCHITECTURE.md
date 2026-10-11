@@ -68,6 +68,7 @@ src/vantage/
     render.py            renders plans to MP4 + web copy + poster (classic `_Film`, shared drawing code, the
                          encode, ink checks, films side by side in worker processes)
     storyboard.py        one contact-sheet tile per key frame of a plan, with fact status chips
+    loop.py              --hours: a loop film repeated by stream copy into film/usb/ (FAT32 size guard)
   llm/claude.py          optional Claude vision helpers (captions, alt text, milestones)
   demo/synth.py          procedural "drone footage" of a fictional site changing over time
   runtime/               the web runtime shipped into every story (no build step, no deps)
@@ -117,7 +118,7 @@ placeholder logos), a README and an empty `footage/` from `src/vantage/templates
 | `vantage align <project>` | register, crop, grade → masters/ + review sheets |
 | `vantage process <project>` | ingest → select → align |
 | `vantage build <project> [--out DIR]` | build the interactive site from masters + YAML; `--out` replaces only an earlier Vantage build, and refuses any other non-empty folder or one under version control |
-| `vantage film <project> [--film ID]… [--plan-only] [--release]` | plan and render the films, or the named ones. `--plan-only` writes plan.json and the storyboard without encoding. `--release` refuses drafts and non-releasable facts before planning. |
+| `vantage film <project> [--film ID]… [--plan-only] [--release] [--hours H]` | plan and render the `auto` films, or the named ones (including on-demand ones such as `screen`). `--plan-only` writes plan.json and the storyboard without encoding. `--release` refuses drafts and non-releasable facts before planning. `--hours H` (with `--film` naming a loop film) repeats it into `film/usb/` without re-encoding. |
 | `vantage package <project> [--release]` | single-file HTML + offline zip; checks the films against their plans (`--release` refuses any problem, see "Films") |
 | `vantage all <project> [--release]` | process → build → film → package; `--release` reaches the film step too |
 | `vantage preview <project> [--port 8000]` | serve dist site locally |
@@ -458,8 +459,9 @@ A film has one of two cuts:
   each capture holds `hold_s` and dissolves `fade_s` into the next (linear light) under an eased 6 %
   push. `hold_s`, `fade_s`, `title_card_s` and `end_card_s` in `output.film` time it.
 
-Not yet built: the event-screen loop (`preset: screen`, `loop`) and tracks. A plan for a loop film is
-refused with "not supported yet".
+A **loop film** (`preset: screen`, or any story FilmSpec with `loop: true`) is a seamless cycle for an
+event screen: it rises from pure night and dips back to it, so frame N equals frame 0 (see "Loop
+films"). Not yet built: tracks (captions, chapters, transcript).
 
 Rendering: when more than one film is rendered and `os.cpu_count()` ≥ 4, each film renders in its
 own worker process (`ProcessPoolExecutor`, spawn context, `cv2.setNumThreads(1)` inside), one per
@@ -477,7 +479,10 @@ when one fails. Parallel and sequential renders give the same bytes.
 <slug>-<id>.jpg              poster (classic: the main vantage's final hold; story: the last frame of the last capture)
 <slug>-<id>.plan.json        the FilmPlan plus its render record
 <slug>-<id>.storyboard.jpg   one tile per key frame
+usb/<slug>-<id>-<H>h.mp4     --hours: a loop film repeated H hours by stream copy (never packaged, hosted or released)
 ```
+
+A loop film's MP4 has closed GOPs of 2 beats (`encode.gop`) and no web copy.
 
 - Film ids match `[a-z0-9][a-z0-9-]{0,31}` and never end in `-web`. The film set is `16x9`, plus
   `9x16` when `output.film.vertical`; those ids keep the file names films had before plans.
@@ -511,7 +516,7 @@ story.yaml:
 films:                       # optional; id → FilmSpec; merged over the derived set
   16x9: {}                   # derived: aspect 16x9, chapters all
   9x16: {chapters: main}     # derived when output.film.vertical (aspect from the id)
-  screen: {preset: screen}   # the event loop (auto: false); planning it says "not supported yet"
+  screen: {preset: screen}   # the event loop (auto: false) → render it with --film screen
 # FilmSpec fields (all optional): preset (screen) · cut · aspect (16x9|9x16) · bpm · chapters (all | main | [chapter ids])
 #   · stats (0–6, default 3) · title_beats (4) · end_beats (6) · safe [top, right, bottom, left] (fractions)
 #   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
@@ -524,7 +529,9 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
 - Precedence: explicit FilmSpec field > preset > output.film (`cut`, `bpm`, `max_upscale`) > built-in
   default. A new id's aspect is 16x9 unless the id is `9x16`.
 - The `screen` preset sets cut story, aspect 16x9, loop true, bpm 75, type_scale 1.6, safe 0.05 on
-  every side, auto false.
+  every side (the `screen` layout), auto false, title_beats 4, end_beats 4, and capture beats 2 (no
+  step), 4 (a step) and 5 (a push) where other films have 1, 3 and 4 (`FilmDef.beats`, preset only).
+  Loop films have no web encode and no embedded tracks. A loop film needs the story cut.
 - `vantage film` (no `--film`) plans and renders the `auto` films; `--film ID` names any enabled film.
 - The 16:9 size is `output.film.width × height`; the 9:16 size is `short × short·16/9`. `VANTAGE_FAST=1`
   caps the long edge at 960 px, which changes the size and so the plan hash.
@@ -618,6 +625,25 @@ both derived cuts are 62 beats (37.2 s at 100 bpm).
   The honesty line comes from `provenance`:
   - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
   - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
+- **Loop films** (`loop: true`; the `screen` preset):
+  - A `rise` (`R1`, 2 beats) opens the film: frame 0 is a pure night fill, easing in display gamma
+    (`ramp(f, f0 + 1, n)`, 0 on its first frame) onto the title's image at rest under the title's
+    30 % scrim, with the tag. When a series follows the title, its rail is shown with the knob
+    sweeping back from the last tick to tick 0; the rail then stays (knob at 0) through the title into
+    the first capture instead of fading in.
+  - The title starts at 2B (its `groups` and `key` are relative to its own `f0`).
+  - Stats need releasable facts unless the project is a draft: any other item is left out with a
+    plan warning ("left out of the loop"), since the loop plays unattended.
+  - The end card (`end_beats`, 4) prints only the brand name and, when `output.base_url` is set, the
+    short URL in large type (text role `url`, 64 units × type_scale); no credits, partners, fine
+    print or honesty line (the `honesty` field is still recorded). No QR code in v1.
+  - The end card is lengthened by a beat when needed so the film's length is a whole number of GOPs
+    (2B frames): N % 2B == 0.
+  - A `dip` (`D1`, 2 beats) closes the film: the end card eases in display gamma to the night fill,
+    reaching it on frame N (`ramp(f, f0, n + 1)`), one past the last frame. So frame(N) == frame(0),
+    byte for byte, and a player looping the file shows no seam. The renderer checks it before
+    encoding (`render.check_seam`).
+  - For the demo the screen cycle is 76 beats at 75 bpm (1824 frames, 60.8 s at 30 fps).
 - **Push target**: `film.focus` when given (`target: film.focus`); otherwise the step's `focus`,
   recentred so the step's **subject hotspots** fall inside the crop with a margin of 6 % of the crop
   width (`focus+subject:<ids>`), or `focus` when there are none. Subjects are the chapter's hotspots
@@ -650,6 +676,7 @@ renderer no longer has constants of its own.
 |---|---|---|---|---|---|
 | story-16x9 | .06H .05W .06H .05W | safe top | .78H | .88H | top-right in safe |
 | story-9x16 | .14H .12W .28H .06W | .16H | .60H | .70H | right, baseline rail − 18u |
+| screen | .05 on every side (TV overscan) | safe top | .76H | .88H | top-right in safe |
 | classic-16x9 | .05 all round (ink check only) | margin round(.055W) | | H − round(.075H) | `corner`: .8·margin from the top-left |
 | classic-9x16 | as story-9x16 | lower third above the rail | | .70H | `top-left`: ascent top at the safe top |
 
@@ -689,14 +716,17 @@ of the right edge.
   its shot, there are no hard cuts between images (a curtain may open without a dissolve only on the
   image already on screen, `from_after`), an image after a surface always dips in, every card, stat
   or end dip is as long, any dip to or from paper lasts at least `surface_dip` frames, and every
-  curtain sweep lasts at least 2 beats. Classic plans keep their own timing and are not checked.
+  curtain sweep lasts at least 2 beats. A loop plan opens with a `rise` and closes with a `dip`, each
+  at least ceil(0.34·fps) frames, and its frame count is a multiple of 2B. Classic plans keep their
+  own timing and are not checked.
 - **Luminance** (`LumaMeter`, render time, every frame of every cut): each frame is downscaled to 1/8
   (INTER_AREA), converted from sRGB to linear light and reduced to Rec.709 relative luminance on a 4×4
   grid of cells. A transition is a frame pair in which any cell changes by |ΔL| ≥ 0.10 while the
   darker value is < 0.80. The film fails if any window of `fps` frames holds more than 3
   transitions: the renderer deletes the `.part` outputs and raises `FlashError`. The meter only reads
   frames, so it never changes bytes; its result is `render.flash`
-  (`{pass, max_transitions_per_s, max_delta, frame}`).
+  (`{pass, max_transitions_per_s, max_delta, frame}`). For a loop film it also reads frame N (= frame
+  0), so the seam is measured like any other transition.
 
 ### plan.json
 
@@ -737,7 +767,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
   "checks": {"safe": [96, 54, 1824, 1026], "ink": [{"shot": "T1", "layer": "stack", "box": [598, 330, 724, 420]}],
              "outside": []},                           // NOT hashed: written by the renderer (see Layout presets)
   "encode": {"crf": 18, "preset": "slow", "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
-             "bufsize": 8030000} | null, "gop": null, "tracks": false},  // NOT hashed: bytes, not frames
+             "bufsize": 8030000} | null, "gop": null | 48, "tracks": false},  // NOT hashed: bytes, not frames
+                                                       // gop: a loop film's closed GOP, 2B frames
   "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": {"bytes": 0, "sha256": ""} | null,
              "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0467, "frame": 384},
              "ffmpeg": "6.1.1-3ubuntu5"} }             // written after the encode; null with --plan-only
@@ -778,7 +809,8 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
 - `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper), `dip`. Text roles
   `value`, `unit`, `label`, `source`.
 - `end` (`E1`): `dip`, `honesty`. Text roles `brand`, `credit`, `role`, `partner`, `link`, `fine`,
-  `honesty`.
+  `honesty`; a loop's end card has only `brand` and `url`.
+- `rise` (`R1`), `dip` (`D1`): loop films only, no extra fields and no text.
 
 Shot kinds `ortho`, `heatmap` and `insert` are reserved and refused. A text that uses a
 `do-not-print` fact is never printed in a film: it is left out (a capture label falls back to its
@@ -816,6 +848,26 @@ date, a vantage name to the masters' name) and a warning is recorded.
   (check `<slug> film <stem>-web.mp4`). Main MP4s and `film/usb/` are not budgeted; a dist without
   `film/` (`--no-film`) has no film checks.
 
+### Loop encode and --hours (film/render.py, film/loop.py)
+
+- Loop films are encoded with `-g 2B -keyint_min 2B -sc_threshold 0 -x264-params open-gop=0
+  -level:v 4.1` (`render.loop_args`) on top of the usual args: an IDR frame on every frame divisible
+  by 2B and none elsewhere, so each cycle of a repeated file starts on one. No audio stream, no
+  subtitle track, no chapters, no web copy.
+- `vantage film <slug> --film <id> --hours H` (0 < H ≤ 12; or a loop FilmSpec's `hours` when its
+  film is rendered) writes `film/usb/<slug>-<id>-<H>h.mp4` (`H` as `%g`: `1h`, `0.25h`): the cycle k
+  = ceil(H·3600 / cycle_s) times through the concat demuxer, `-map 0:v -c copy -fflags +bitexact
+  -flags:v +bitexact -map_metadata -1 -movflags +faststart`, via `.part`. The same cycle gives the
+  same bytes. cycle_s is the plan's frames / fps.
+- A loop film already in `film/` whose plan.json has the same hash and encode and whose MP4 matches
+  its render record is reused, not re-rendered, so `--hours` takes seconds.
+- When k × the cycle's bytes would exceed 3.9 GiB (FAT32 holds 4 GiB per file), it refuses and names
+  the largest H that fits.
+- `--hours` without `--film`, on a film that is not a loop, outside (0, 12] or with `--plan-only` is
+  an error before anything is planned.
+- `film/usb/` is never packaged, listed in `files`/SHA256SUMS/build.json, budgeted, hosted or
+  uploaded as a release asset (every film glob is non-recursive).
+
 ### Release gate (film/plan.py check_films; package and film --release)
 
 `package --release` runs `check_release`, rebuilds the site, then re-plans every film found in
@@ -847,8 +899,9 @@ refuses a film with text outside its safe zone (`checks.outside`).
 ```
 
 `files` and SHA256SUMS list every top-level `film/` deliverable: each MP4 and -web.mp4, plan.json and
-storyboard. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy for websites and
-uploads (under 25 MB)".
+storyboard, never `film/usb/`. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy
+for websites and uploads (under 25 MB)" and a loop film as "silent loop for an event screen; for a
+TV's USB player use film/usb/<name>-<H>h.mp4".
 
 ### Module API
 
@@ -858,7 +911,10 @@ vantage.film.plan.plan_films(project: Project, *, only: Sequence[str] | None = N
                              fast: bool | None = None) -> dict[str, FilmPlan]   # pure; hashes inputs
 vantage.film.plan.check_films(project: Project, film_dir: Path) -> list[str]    # release problems
 vantage.film.plan.film_records(project: Project, film_dir: Path) -> tuple[dict, list[str]]  # build.json films + problems
-vantage.film.render.render_film(project, out_dir, *, only=None, release=False, plan_only=False) -> list[Path]
+vantage.film.render.render_film(project, out_dir, *, only=None, release=False, plan_only=False,
+                                hours: float | None = None) -> list[Path]   # main MP4s; --hours → out_dir/usb/
+vantage.film.loop.concat_hours(mp4: Path, hours: float, out_dir: Path) -> Path   # stream copy; FAT32 guard
+vantage.film.render.check_seam(plan, film) -> None                          # loop: frame(N) == frame(0)
 vantage.film.render.film_jobs(n: int) -> int                                # worker processes for n films (VANTAGE_FILM_JOBS)
 vantage.film.storyboard.write_storyboard(plan: FilmPlan, frame_fn: Callable[[int], ndarray],
                                          facts: Mapping[str, Mapping], out: Path) -> Path
@@ -868,14 +924,15 @@ vantage.film.beat.frames_per_beat(fps, bpm) / dissolve_frames(fps, B) / bar_beat
 vantage.film.beat.hold_windows(keys, hold) / keyed(windows, values, v, mix)  # ports of runtime/js/25-stage.js
 vantage.film.layout.layout(name, width, height, *, safe=None, type_scale=1.0) -> Layout   # story-*/classic-*
 vantage.film.render.check_ink(plan: FilmPlan, film) -> list[str]            # plan.checks; text outside the safe zone
-vantage.film.plan.encode_settings(film, settings, frames, fps, *, fast) -> dict   # plan.json encode (web included)
+vantage.film.plan.encode_settings(film, settings, frames, fps, *, fast, fpb=None) -> dict   # plan.json encode (web, gop)
 vantage.film.plan.web_maxrate(duration_s: float) -> int                     # the web encode's VBV cap, bit/s
 vantage.film.story.derive_cut(project, film, index, fonts, hashes, warnings, *, fast) -> FilmPlan
 vantage.film.safety.check_plan(plan: dict) -> None                          # PlanError
 vantage.film.safety.surface_dip(fps, dissolve, night, paper) -> int          # frames of a dip to or from paper
 vantage.film.safety.LumaMeter(fps).add(frame) / .result() / .check(name)    # FlashError
-vantage.film.render.encode_frames(film, part, *, crf, preset, meter=None, web=None)  # the one encode path;
-                                                                            # web=(path, encode.web) adds the web copy
+vantage.film.render.encode_frames(film, part, *, crf, preset, meter=None, web=None, gop=None)  # the one encode
+                                                                            # path; web=(path, encode.web) adds the web copy;
+                                                                            # gop=encode.gop closes a loop's GOPs
 vantage.media.ffmpeg.FrameWriter(..., extra_outputs: Sequence[tuple[Path, Sequence[str]]] = ())  # one pipe, several encodes
 vantage.media.ffmpeg.ffmpeg_version() -> str
 ```

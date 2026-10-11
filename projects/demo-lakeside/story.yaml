@@ -245,3 +245,9 @@ chapters:
       - All imagery is simulated. Places, organizations and people are fictional.
       - Logos are original artwork made for this demo and represent no real organization.
       - Aerial frames are aligned to the 2026-09-20 flight and color-matched halfway, so the seasons still show.
+
+# Films: the derived 16x9 and 9x16 story cuts need nothing here. `screen` is the silent event-screen
+# loop (75 bpm, large type, overscan-safe), rendered only on request:
+#   uv run vantage film demo-lakeside --film screen [--hours 1]
+films:
+  screen: { preset: screen }

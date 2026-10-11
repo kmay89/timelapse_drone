@@ -4,7 +4,9 @@ every rendered frame.
 Static (plan time, an error): every transition between two images is a dissolve of at least
 ceil(0.34·fps) frames (a dip through night counts as two), there is no hard cut between images
 (a curtain may open without one only on the image the film already shows), every curtain sweep
-lasts at least 2 beats, and every dip into or out of a paper surface lasts `surface_dip` frames.
+lasts at least 2 beats, and every dip into or out of a paper surface lasts `surface_dip` frames. A
+loop film opens with a rise from night and closes with a dip to night, each at least as long as a
+dissolve, and its length is a whole number of GOPs (2 beats).
 `surface_dip` is the shortest dip from night to paper (in display gamma) in which no frame pair
 changes luminance by THRESHOLD or more, so a paper stats card never flashes.
 
@@ -98,12 +100,24 @@ def check_plan(plan: dict[str, Any]) -> None:
     def surface(shot: dict[str, Any] | None) -> str | None:
         if shot is None:
             return None
-        if shot["kind"] in ("card", "end"):
+        if shot["kind"] in ("card", "end", "dip"):
             return "night"
         return shot.get("surface") if shot["kind"] == "stat" else None
 
-    for shot in plan["shots"]:
+    shots = plan["shots"]
+    if plan.get("loop"):
+        if not shots or shots[0]["kind"] != "rise" or shots[-1]["kind"] != "dip":
+            problems.append("a loop film opens with a rise from night and closes with a dip to night")
+        if plan["frames"] % (2 * fpb):
+            problems.append(
+                f"a loop film of {plan['frames']} frames is not a whole number of GOPs ({2 * fpb})"
+            )
+    for shot in shots:
         kind, sid = shot["kind"], shot["id"]
+        if kind in ("rise", "dip") and shot["f1"] - shot["f0"] < shortest:
+            problems.append(
+                f"{sid}: a {shot['f1'] - shot['f0']}-frame {kind} is shorter than {shortest} frames"
+            )
         if kind in ("capture", "curtain"):
             d = shot.get("dissolve")
             same = prev is not None and prev["kind"] == "title" and prev.get("capture") == shot.get("capture")

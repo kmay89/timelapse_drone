@@ -259,9 +259,11 @@ class FilmDef:
     auto: bool = True
     enabled: bool = True
     hours: float | None = None
+    beats: tuple[int, int, int] = (1, 3, 4)  # capture beats: no step, a step, a step that pushes
 
 
-# The `screen` preset: the silent event-screen loop (rendered only on request).
+# The `screen` preset: the silent event-screen loop (rendered only on request). Its captures linger
+# (2 beats quiet, 4 with a step, 5 with a push), its end card is 4 beats of brand and URL.
 PRESETS: dict[str, dict[str, Any]] = {
     "screen": {
         "cut": "story",
@@ -271,8 +273,13 @@ PRESETS: dict[str, dict[str, Any]] = {
         "type_scale": 1.6,
         "safe": (0.05, 0.05, 0.05, 0.05),
         "auto": False,
+        "title_beats": 4,
+        "end_beats": 4,
+        "beats": (2, 4, 5),
     }
 }
+LOOP_BEATS = {"rise": 2, "dip": 2}  # a loop rises from night and dips back to it
+GOP_BEATS = 2  # a loop film's GOP (and its length's multiple), in beats
 
 
 def resolve_films(project: Project) -> dict[str, FilmDef]:
@@ -330,15 +337,19 @@ def web_maxrate(duration_s: float) -> int:
     return min(WEB_MAXRATE_CAP, rate // 1000 * 1000)
 
 
-def encode_settings(film: FilmDef, settings: FilmSettings, frames: int, fps: int, *, fast: bool) -> dict:
+def encode_settings(
+    film: FilmDef, settings: FilmSettings, frames: int, fps: int, *, fast: bool, fpb: int | None = None
+) -> dict:
     """plan.json `encode` (not hashed: it changes bytes, not frames). `web` is the -web.mp4 encode:
-    crf 23 under a VBV cap, null for loop films and when output.film.web is false."""
+    crf 23 under a VBV cap, null for loop films and when output.film.web is false. `gop` is a loop
+    film's closed GOP in frames (2 beats of `fpb`), else null."""
     preset = "veryfast" if fast else "slow"
     web = None
     if settings.web and not film.loop:
         rate = web_maxrate(frames / fps)
         web = {"crf": 23, "preset": preset, "maxrate": rate, "bufsize": 2 * rate}
-    return {"crf": 20 if fast else 18, "preset": preset, "web": web, "gop": None, "tracks": False}
+    gop = GOP_BEATS * fpb if film.loop and fpb else None
+    return {"crf": 20 if fast else 18, "preset": preset, "web": web, "gop": gop, "tracks": False}
 
 
 def _check_timing(project: Project) -> None:
@@ -359,8 +370,8 @@ def plan_films(
     if unknown:
         raise ValueError(f"unknown film {', '.join(map(repr, unknown))}; this project has {', '.join(films)}")
     for fid in ids:
-        if films[fid].loop:
-            raise ValueError(f"film {fid!r}: loop films (preset: screen) are not supported yet")
+        if films[fid].loop and films[fid].cut != "story":
+            raise ValueError(f"film {fid!r}: a loop film needs the story cut (cut: story)")
     index_path = project.masters_dir / "index.json"
     if not index_path.is_file():
         raise FileNotFoundError(f"no {index_path}; run `vantage process {project.slug}` first")
@@ -722,6 +733,8 @@ def check_films(project: Project, film_dir: Path) -> list[str]:
 
 __all__ = [
     "FILM_RENDERER",
+    "GOP_BEATS",
+    "LOOP_BEATS",
     "PRESETS",
     "FilmDef",
     "capture_labels",

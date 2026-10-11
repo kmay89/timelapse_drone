@@ -17,6 +17,11 @@ reveal intervals. Stats set the plan's figure on a fixed digit advance, one laye
 into a mask. Cards, stats and the end card dip to and from their surface in display gamma, like the
 classic cut. Every image pixel is a crop, a dissolve, a curtain split or a dip of registered masters;
 text, scrims and the rail are overlays.
+
+Loop films rise from pure night (frame 0 is a night fill) onto the title's image while the first
+series' rail sweeps its knob back to tick 0 (the rail then stays through the title into the first
+capture), and their closing dip eases to that same night fill on frame N, one past the last frame,
+so a player looping the file shows no seam: frame(N) == frame(0), byte for byte.
 """
 
 from __future__ import annotations
@@ -52,6 +57,7 @@ CREDIT = _Style("text", 36, 400, alpha=0.9, leading=1.35)
 ROLE = _Style("numeric", 22, 600, alpha=0.6, tracking=0.16, upper=True)
 PARTNER = _Style("text", 34, 500)
 LINK = _Style("text", 34, 500, "accent")
+URL = _Style("text", 64, 500, "accent")  # a loop's end card: the short URL, read across a room
 HONESTY = _Style("text", 38, 400, alpha=0.92, leading=1.35)
 FINE = _Style("text", 27, 400, alpha=0.62, leading=1.4)
 CURTAIN_LABEL = _Style("numeric", 44, 600, tracking=0.06, upper=True)
@@ -60,7 +66,7 @@ STAT_UNIT = _Style("text", 220 * 0.35, 500, "ink", alpha=0.8)
 STAT_LABEL = _Style("text", 44, 400, "ink", alpha=0.92, leading=1.3)
 STAT_SOURCE = _Style("text", 26, 400, "ink", alpha=0.62)
 END_STYLES = {
-    "brand": BRAND, "credit": CREDIT, "role": ROLE, "partner": PARTNER, "link": LINK,
+    "brand": BRAND, "credit": CREDIT, "role": ROLE, "partner": PARTNER, "link": LINK, "url": URL,
     "honesty": HONESTY, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
 }  # fmt: skip
 RISE = 14  # units a text block rises while it fades in
@@ -154,6 +160,7 @@ class _Cut:
         self.type = _Type(files, colors, u)
         self.night = np.array(_hex(colors["night"])[::-1], np.float32)
         self.night_bgr = tuple(int(v) for v in self.night)
+        self.night_fill = np.full((self.height, self.width, 3), self.night_bgr, np.uint8)  # loops: frame 0
         self.paper = _hex(colors["paper"])[::-1]
         self.accent = _hex(colors["accent"])[::-1]
         yy, xx = np.mgrid[0 : self.height, 0 : self.width].astype(np.float32)
@@ -185,6 +192,9 @@ class _Cut:
             words.append(f"plan {plan.hash[:6]}")
         self.tag = self._tag(words)
         self._typeset()
+        # A loop's rise shows the rail of the series that follows its title (kept through the title).
+        nxt = self.shots[2] if len(self.shots) > 2 and self.shots[0]["kind"] == "rise" else None
+        self.rise_series: int | None = nxt["series"] if nxt is not None and nxt["kind"] == "capture" else None
 
     # ------------------------------------------------------------- type --- #
 
@@ -615,6 +625,10 @@ class _Cut:
             return self._curtain(i, f)
         if kind == "stat":
             return self._stat(i, f)
+        if kind == "rise":
+            return self._rise(i, f)
+        if kind == "dip":
+            return self._dip(i, f)
         return self._card(i, f)
 
     def _split_at(self, shot: dict[str, Any], f: int) -> float:
@@ -756,6 +770,37 @@ class _Cut:
             frame = cv2.addWeighted(self._shot(i - 1, f), 1 - w, frame, w, 0)
         return frame
 
+    def _held_rail(self, frame: np.ndarray, pos: float) -> None:
+        """A loop's rail from its rise to its first capture: scrim, track and ticks, knob at `pos`."""
+        s = self.rise_series
+        if s is None:
+            return
+        _put(frame, self.rail_scrim, 1.0)
+        _put(frame, self.rail_layers[s], 1.0)
+        self._progress(frame, self.rails[s], pos, 1.0)
+
+    def _rise(self, i: int, f: int) -> np.ndarray:
+        """A loop's opening: pure night on its first frame, easing (display gamma) onto the title's
+        image at rest under the title's scrim, the rail's knob sweeping back to its first tick."""
+        shot, title = self.shots[i], self.shots[i + 1]
+        n = shot["f1"] - shot["f0"]
+        w = ramp(f, shot["f0"] + 1, n)  # 0 on the first frame, 1 one past the last
+        if w <= 0:
+            return self.night_fill.copy()
+        frame = cv2.addWeighted(self._warp(title["file"], self.camera(f)), 0.70, self.card_bg, 0.30, 0)
+        if self.rise_series is not None:
+            self._held_rail(frame, (len(self.rails[self.rise_series]) - 1) * (1 - w))
+        self._put_tag(frame)
+        return cv2.addWeighted(self.night_fill, 1 - w, frame, w, 0)
+
+    def _dip(self, i: int, f: int) -> np.ndarray:
+        """A loop's close: the end card eases (display gamma) to pure night, reached on frame N."""
+        shot = self.shots[i]
+        w = ramp(f, shot["f0"], shot["f1"] - shot["f0"] + 1)  # 1 on f1 = N, one past the last frame
+        if w >= 1:
+            return self.night_fill.copy()
+        return cv2.addWeighted(self._shot(i - 1, f), 1 - w, self.night_fill, w, 0)
+
     def _title(self, i: int, f: int) -> np.ndarray:
         shot, L = self.shots[i], self.layers[self.shots[i]["id"]]
         third, u = self.third, self.u
@@ -764,6 +809,8 @@ class _Cut:
         a = 0.30 * out
         if a > 0.002:
             frame[:] = cv2.addWeighted(frame, 1 - a, self.card_bg, a, 0)
+        if i and self.shots[i - 1]["kind"] == "rise":
+            self._held_rail(frame, 0.0)
         groups = shot["groups"]
         seen = [ramp(f, groups[g], third) for g in range(len(L["groups"]))]
         kick = ramp(f, shot["f0"], third) if L["kicker"] else 0.0
@@ -804,8 +851,11 @@ class _Cut:
         P = self.layers[prev["id"]] if within and prev is not None else None
         if intro is None:
             intro = ramp(f, shot["f0"], self.third) if prev is not None and prev["kind"] == "title" else 1.0
+        # A loop's rail is already on screen when its first capture follows the title.
+        held = prev is not None and prev["kind"] == "title" and self.rise_series == shot["series"] and i == 2
+        rail_in = 1.0 if held else intro
         # Scrims, then text.
-        _put(frame, self.rail_scrim, intro)
+        _put(frame, self.rail_scrim, rail_in)
         if P is not None:
             _put(frame, P["label_scrim"], 1 - w)
             _put(frame, L["label_scrim"], w)
@@ -829,9 +879,9 @@ class _Cut:
             if within and prev is not None and prev["series"] == shot["series"]
             else shot["rail"]
         )
-        _put(frame, self.rail_layers[shot["series"]], intro)
-        if intro > 0.002:
-            self._progress(frame, days, pos, intro)
+        _put(frame, self.rail_layers[shot["series"]], rail_in)
+        if rail_in > 0.002:
+            self._progress(frame, days, pos, rail_in)
         self._put_tag(frame)
 
     def _progress(self, frame: np.ndarray, days: list[int], pos: float, opacity: float) -> None:

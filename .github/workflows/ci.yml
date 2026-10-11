@@ -70,6 +70,12 @@ jobs:
           sha256sum --check --strict SHA256SUMS
       - name: Size budgets
         run: uv run python scripts/budgets.py dist/demo-lakeside
+      - name: Plan the event-screen loop (plan and storyboard only, no encode)
+        run: |
+          uv run vantage film demo-lakeside --film screen --plan-only
+          test -s dist/demo-lakeside/film/demo-lakeside-screen.plan.json
+          test -s dist/demo-lakeside/film/demo-lakeside-screen.storyboard.jpg
+          test ! -e dist/demo-lakeside/film/demo-lakeside-screen.mp4
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: demo-lakeside

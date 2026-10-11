@@ -12,7 +12,8 @@ Films already rendered into dist/<slug>/film are checked against the plans the c
 and facts would make (film/plan.py `film_records`): a release refuses any problem, a draft package
 logs them (a film's -web.mp4 is checked against its render record like the film itself).
 build.json records every film plan; SHA256SUMS lists each film and its -web.mp4 with its plan.json
-and storyboard.
+and storyboard. Only the top level of film/ ships: film/usb/ (a loop film repeated for a TV's USB
+player, film/loop.py) is never packaged, listed or hosted.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ import os
 import platform
 import re
 import zipfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,7 @@ from PIL import Image
 
 from vantage import __version__, log
 from vantage.config import Project
-from vantage.film.plan import PLAN_SUFFIX, STORYBOARD_SUFFIX, film_records
+from vantage.film.plan import PLAN_SUFFIX, STORYBOARD_SUFFIX, film_records, resolve_films
 from vantage.media.ffmpeg import FFmpegError, ffmpeg_version
 from vantage.site.build import ReleaseError, build_site, inside
 from vantage.site.facts import check_release
@@ -308,8 +309,10 @@ def _offline_zip(project: Project, site: Path, story: dict[str, Any], theme: str
     return out
 
 
-def _how_to_view(story: dict[str, Any], files: dict[str, Path], films: list[Path], out: Path) -> Path:
-    """Plain-language instructions that travel with the files."""
+def _how_to_view(
+    story: dict[str, Any], files: dict[str, Path], films: list[Path], out: Path, loops: Collection[str] = ()
+) -> Path:
+    """Plain-language instructions that travel with the files (`loops`: the file names of loop films)."""
     meta = story["meta"]
 
     def size(p: Path) -> str:
@@ -326,6 +329,9 @@ def _how_to_view(story: dict[str, Any], files: dict[str, Path], films: list[Path
     for film in films:
         if film.name.endswith("-web.mp4"):
             use = "a smaller copy for websites and uploads (under 25 MB)"
+        elif film.name in loops:
+            stem = film.name.removesuffix(".mp4")
+            use = f"silent loop for an event screen; for a TV's USB player use film/usb/{stem}-<H>h.mp4"
         elif "9x16" in film.name:
             use = "for phones: save to Photos or send in a message"
         else:
@@ -413,11 +419,15 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
     if project.config.output.single_file:
         files |= _single_files(project, site, story, theme, dist_dir)
     files["zip"] = _offline_zip(project, site, story, theme, dist_dir / f"{project.slug}-offline.zip")
-    films = sorted(film_dir.glob("*.mp4"))
+    films = sorted(film_dir.glob("*.mp4"))  # not recursive: film/usb/ is never packaged
+    try:
+        loops = {f"{project.slug}-{fid}.mp4" for fid, film in resolve_films(project).items() if film.loop}
+    except ValueError:
+        loops = set()
     if not films and project.config.output.film.enabled:
         log.warn(f"no films in {film_dir}; run `vantage film {project.slug}` to add them")
     ledger = sorted([*film_dir.glob(f"*{PLAN_SUFFIX}"), *film_dir.glob(f"*{STORYBOARD_SUFFIX}")])
-    files["how_to_view"] = _how_to_view(story, files, films, dist_dir / "HOW-TO-VIEW.txt")
+    files["how_to_view"] = _how_to_view(story, files, films, dist_dir / "HOW-TO-VIEW.txt", loops)
     site_files = [p for p in site.rglob("*") if p.is_file()]
     for p in site_files:
         if p.stat().st_size > HOSTED_FILE_LIMIT:

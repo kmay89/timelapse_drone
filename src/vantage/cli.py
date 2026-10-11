@@ -242,13 +242,19 @@ def _build(project: Project, out: Path | None = None, *, release: bool = False) 
 
 
 def _film(
-    project: Project, *, only: list[str] | None = None, release: bool = False, plan_only: bool = False
+    project: Project,
+    *,
+    only: list[str] | None = None,
+    release: bool = False,
+    plan_only: bool = False,
+    hours: float | None = None,
 ) -> list[Path]:
     from vantage.film.render import render_film
 
     options: dict[str, Any] = {"only": only} if only else {}
     options |= {"release": True} if release else {}
     options |= {"plan_only": True} if plan_only else {}
+    options |= {"hours": hours} if hours is not None else {}
     with log.step("plan films" if plan_only else "render films"):
         films = render_film(project, _dist(project) / "film", **options)
     log.ok(
@@ -502,7 +508,7 @@ def _check_films(project: Project, warnings: list[str]) -> None:
     except ValueError as exc:
         warnings.append(f"films: {exc}")
         return
-    story = [fid for fid, film in films.items() if film.cut == "story" and not film.loop]
+    story = [fid for fid, film in films.items() if film.cut == "story"]
     for fid in list(story):
         try:
             beat_grid(project.config.output.film.fps, films[fid].bpm)
@@ -869,9 +875,16 @@ def film_cmd(
         bool,
         typer.Option("--release", help="Refuse a draft project or {fact:…} tokens that are not releasable."),
     ] = False,
+    hours: Annotated[
+        float | None,
+        typer.Option(
+            "--hours",
+            help="Repeat a loop film (--film screen) for H hours into film/usb/ without re-encoding (0 < H ≤ 12).",
+        ),
+    ] = None,
 ) -> None:
     """Plan and render the MP4 films (16:9, plus 9:16 when enabled) with plan.json and storyboard."""
-    _film(_load(project), only=film, release=release, plan_only=plan_only)
+    _film(_load(project), only=film, release=release, plan_only=plan_only, hours=hours)
 
 
 @_command("package")

@@ -17,6 +17,12 @@
              night, dipped in and out
     end      a dip to night, then the brand, credits, URL, fine print and the honesty line
 
+A loop film (the `screen` preset) opens with a `rise` from pure night onto the title's image (the
+rail's knob sweeping back to its first tick) and closes with a `dip` back to pure night, so frame N
+(one past the last) equals frame 0. Its end card is only the brand and the short URL, its stats
+need releasable facts (unless the project is a draft), and its end card is lengthened by a beat
+when needed so the film is a whole number of GOPs (2 beats).
+
 Every shot start, dissolve start, sweep, push start and word landing is a multiple of B
 (film/beat.py). Push targets are clamped so a master is never enlarged beyond `max_upscale` and
 recentred on the hotspots that changed since the previous step. A main vantage with one or two
@@ -48,6 +54,8 @@ from vantage.film.beat import Grid, beat_grid
 from vantage.film.layout import Layout, layout
 from vantage.film.plan import (
     FILM_RENDERER,
+    GOP_BEATS,
+    LOOP_BEATS,
     SIMULATED_NOTE,
     FilmDef,
     _Printer,
@@ -370,10 +378,18 @@ def _curtain(
 
 
 def _stat_items(
-    project: Project, cid: str, ch: StatsChapter, limit: int, warnings: list[str]
+    project: Project,
+    cid: str,
+    ch: StatsChapter,
+    limit: int,
+    warnings: list[str],
+    *,
+    releasable_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Up to `limit` stats whose value is a {fact:} token, printed through the facts. Any other item,
-    and any item that uses a do-not-print fact, is left out with a warning. Values never count."""
+    and any item that uses a do-not-print fact, is left out with a warning, as is (with
+    `releasable_only`, loop films of a project that is not a draft) any item that prints a fact
+    that is not releasable. Values never count."""
     out: list[dict[str, Any]] = []
     for k, item in enumerate(ch.items):
         if len(out) >= limit:
@@ -389,6 +405,14 @@ def _stat_items(
         source = say(item.source, f"{where} source") if item.source else None
         if value is None or label is None or (item.unit and unit is None) or (item.source and source is None):
             warnings.append(f"{where}: left out of the films (it uses a do-not-print fact)")
+            continue
+        facts = project.facts.facts
+        held = [f for f in say.facts if f not in facts or not facts[f].releasable]
+        if releasable_only and held:
+            warnings.append(
+                f"{where}: left out of the loop (fact {', '.join(held)} is not releasable; "
+                f"a loop plays unattended)"
+            )
             continue
         out.append({"value": value, "unit": unit, "label": label, "source": source, "facts": list(say.facts)})
     return out
@@ -487,6 +511,7 @@ def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> di
     title = say(hero.title, "hero title") if hero and hero.title else None
     title = title or say(cfg.title, "project.yaml title") or ""
     B, third = b.grid.fpb, b.grid.third
+    f0 = b.f  # 0, or the end of a loop's rise
     shot = {
         "id": "T1",
         "kind": "title",
@@ -498,10 +523,10 @@ def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> di
         "vantage": vantage,
         "capture": cap.date,
         "file": cap.file,
-        "groups": [B, B + third, B + 2 * third],
+        "groups": [f0 + B, f0 + B + third, f0 + B + 2 * third],
     }
     b.add(shot, b.film.title_beats)
-    shot["key"] = min(shot["f1"] - third - 1, 2 * B + third)
+    shot["key"] = min(shot["f1"] - third - 1, f0 + 2 * B + third)
     return shot
 
 
@@ -647,7 +672,8 @@ def derive_cut(
     grid = beat_grid(fps, film.bpm)
     B, D, third = grid.fpb, grid.dissolve, grid.third
     width, height = film_size(settings, film.aspect, fast=fast)
-    lay = layout(f"story-{film.aspect}", width, height, safe=film.safe, type_scale=film.type_scale)
+    preset = "screen" if film.preset == "screen" and film.aspect == "16x9" else f"story-{film.aspect}"
+    lay = layout(preset, width, height, safe=film.safe, type_scale=film.type_scale)
     colors = project.brand.colors
     paper_dip = surface_dip(fps, D, colors.night, colors.paper)
     caps = _Captures(project, index, warnings)
@@ -667,7 +693,13 @@ def derive_cut(
             if c := _curtain(project, i, ch, caps, ch.vantage, size):
                 parts.append(("curtain", c))
         elif isinstance(ch, StatsChapter) and not any(k == "stats" for k, _ in parts):
-            items = _stat_items(project, ids[i], ch, film.stats, warnings) if film.stats else []
+            items = (
+                _stat_items(
+                    project, ids[i], ch, film.stats, warnings, releasable_only=film.loop and not cfg.draft
+                )
+                if film.stats
+                else []
+            )
             if items:
                 parts.append(("stats", (ids[i], ch.surface or "paper", items)))
 
@@ -715,6 +747,11 @@ def derive_cut(
                 warnings.append(text)
     first = images[0]
     first_cap = first.captures[0] if isinstance(first, _Series) else first.before
+    if film.loop:  # from pure night onto the title's image
+        rise = b.add(
+            {"id": "R1", "kind": "rise", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["rise"]
+        )
+        rise["key"] = rise["f0"] + B
     _title(b, first.vantage, first_cap, [c.date for c in every])
     cam = b.camera
     cam.hold(0, b.rest(first))
@@ -741,9 +778,10 @@ def derive_cut(
                     assert step is not None
                     step.update(push=False, reason="two captures")
                     target = None
-                beats = 1 if step is None else (4 if target else 3)
+                quiet, stepped, pushing = film.beats
+                beats = quiet if step is None else (pushing if target else stepped)
                 if total_images == 1 or id(cap) in still:
-                    beats = max(beats, 3)
+                    beats = max(beats, stepped)
                 dissolve = None if n == 1 and b.prev and b.prev["kind"] == "title" else b.entry()
                 if b.prev is not None and b.prev["kind"] not in IMAGES:
                     cam.hold(f0, rest)
@@ -831,24 +869,31 @@ def derive_cut(
     provenance = ["simulated" if cfg.simulated else "photo"]
     honesty = honesty_line(provenance)
     lines: list[dict[str, Any]] = [{"role": "brand", "text": brand.name}]
-    if brand.credit_line and (t := say(brand.credit_line, "brand.yaml credit_line")):
+    short_url = cfg.output.base_url.split("://")[-1].rstrip("/") if cfg.output.base_url else None
+    if film.loop and short_url:  # a loop's end card: the brand and the URL in large type, nothing else
+        lines.append({"role": "url", "text": short_url})
+    if not film.loop and brand.credit_line and (t := say(brand.credit_line, "brand.yaml credit_line")):
         lines.append({"role": "credit", "text": t})
-    for partner in brand.partners:
-        lines += [{"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name}]
-    if cfg.output.base_url:
-        lines.append({"role": "link", "text": cfg.output.base_url.split("://")[-1].rstrip("/")})
-    for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer")):
-        if text_ and (t := say(text_, f"brand.yaml {where}")):
-            lines.append({"role": "fine", "text": t})
-    lines.append({"role": "honesty", "text": honesty})
-    if cfg.simulated:
-        lines.append({"role": "fine", "text": SIMULATED_NOTE})
+    if not film.loop:
+        for partner in brand.partners:
+            lines += [{"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name}]
+        if short_url:
+            lines.append({"role": "link", "text": short_url})
+        for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer")):
+            if text_ and (t := say(text_, f"brand.yaml {where}")):
+                lines.append({"role": "fine", "text": t})
+        lines.append({"role": "honesty", "text": honesty})
+        if cfg.simulated:
+            lines.append({"role": "fine", "text": SIMULATED_NOTE})
     dip = b.dip("night")
     if b.prev is not None and b.prev["kind"] in IMAGES:
         cam.until(b.f + dip)
     if pushed is not None:
         cam.until(b.f)
         cam.hold(b.f + D, b.rest(images[-1]))
+    end_beats = film.end_beats
+    if film.loop:  # a whole number of GOPs: lengthen the end card
+        end_beats += -(b.f // B + end_beats + LOOP_BEATS["dip"]) % GOP_BEATS
     end = b.add(
         {
             "id": "E1",
@@ -859,9 +904,12 @@ def derive_cut(
             "dip": dip,
             "honesty": honesty,
         },
-        film.end_beats,
+        end_beats,
     )
     end["key"] = min(end["f1"] - 1, end["f0"] + dip + 2 * B)
+    if film.loop:  # back to pure night: frame N is frame 0
+        back = b.add({"id": "D1", "kind": "dip", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["dip"])
+        back["key"] = back["f0"] + B
     frames = b.f
     cam.until(frames)
 
@@ -884,7 +932,7 @@ def derive_cut(
         "height": height,
         "fps": fps,
         "frames": frames,
-        "loop": False,
+        "loop": film.loop,
         "sound": "none",
         "grid": {"bpm": grid.bpm, "fpb": B, "dissolve": D, "beats": frames // B},
         "layout": lay.record(),
@@ -915,7 +963,7 @@ def derive_cut(
         plan=plan,
         facts=fact_snapshot(project, used),
         warnings=warnings,
-        encode=encode_settings(film, settings, frames, fps, fast=fast),
+        encode=encode_settings(film, settings, frames, fps, fast=fast, fpb=B),
     )
 
 

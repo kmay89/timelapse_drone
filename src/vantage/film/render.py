@@ -5,6 +5,7 @@
     <out>/<slug>-<id>.jpg               poster
     <out>/<slug>-<id>.plan.json         its FilmPlan (film/plan.py) and the render record
     <out>/<slug>-<id>.storyboard.jpg    one tile per key frame (film/storyboard.py)
+    <out>/usb/<slug>-<id>-<H>h.mp4      a loop film repeated for H hours (film/loop.py; never packaged)
 
 A film is a title card, one section per vantage (the main vantage first; the
 vertical cut keeps only the main one) and an end card. Inside a section each
@@ -50,6 +51,7 @@ from PIL import Image, ImageDraw, ImageFont
 from vantage import log
 from vantage.config import Project
 from vantage.film.layout import Layout, outside
+from vantage.film.loop import MAX_HOURS, USB_DIR, concat_hours
 from vantage.film.plan import (
     PLAN_SUFFIX,
     ROLES,
@@ -72,7 +74,7 @@ PUSH = 0.06  # Ken-Burns zoom across a section (1.00 → 1.06)
 PAN = 0.05  # vertical cut: drift either side of the portrait focus, in image widths
 POSTER_QUALITY = 90
 INK_TOLERANCE = 1  # px of antialiasing an ink box may spill past the safe zone
-__all__ = ["SIMULATED_NOTE", "capture_labels", "check_ink", "render_film"]
+__all__ = ["SIMULATED_NOTE", "capture_labels", "check_ink", "check_seam", "render_film"]
 # BT.709 tags and matrix (players guess wrong otherwise), no timestamps → reproducible bytes,
 # and an explicit container (films are written to <name>.mp4.part, then renamed).
 _ENCODE = (
@@ -633,6 +635,15 @@ def web_args(web: Mapping[str, Any]) -> list[str]:
     ]  # fmt: skip
 
 
+def loop_args(gop: int) -> list[str]:
+    """Output options of a loop film: closed GOPs of exactly `gop` frames from frame 0 (no scene-cut
+    keyframes), so each cycle of a repeated file starts on an IDR frame."""
+    return [
+        "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0",
+        "-x264-params", "open-gop=0", "-level:v", "4.1",
+    ]  # fmt: skip
+
+
 def encode_frames(
     film: Renderable,
     part: Path,
@@ -641,12 +652,16 @@ def encode_frames(
     preset: str,
     meter: LumaMeter | None = None,
     web: tuple[Path, Mapping[str, Any]] | None = None,
+    gop: int | None = None,
 ) -> None:
     """Pipe every frame of a film to ffmpeg (and through the luminance meter, which only reads);
-    `web` (path, plan.json encode.web) adds the web encode as a second output of the same pipe."""
+    `web` (path, plan.json encode.web) adds the web encode as a second output of the same pipe;
+    `gop` (plan.json encode.gop, loop films) closes every GOP at that many frames. A loop film's
+    meter also reads frame N (= frame 0), so the seam is measured like any other cut."""
     extra_outputs = [(web[0], web_args(web[1]))] if web is not None else []
+    extra = [*loop_args(gop), *_ENCODE] if gop else list(_ENCODE)
     with FrameWriter(
-        part, film.width, film.height, fps=film.fps, crf=crf, preset=preset, extra=_ENCODE,
+        part, film.width, film.height, fps=film.fps, crf=crf, preset=preset, extra=extra,
         extra_outputs=extra_outputs,
     ) as writer:  # fmt: skip
         for k in range(film.frames):
@@ -654,6 +669,14 @@ def encode_frames(
             if meter is not None:
                 meter.add(frame)
             writer.write(frame)
+    if gop and meter is not None:
+        meter.add(film.frame_at(film.frames))
+
+
+def check_seam(plan: FilmPlan, film: Renderable) -> None:
+    """A loop film's frame N (one past the last) must equal frame 0, byte for byte."""
+    if plan.plan.get("loop") and not np.array_equal(film.frame_at(film.frames), film.frame_at(0)):
+        raise ValueError(f"film {plan.id}: frame {film.frames} differs from frame 0, so the loop would jump")
 
 
 def renderer(project: Project, plan: FilmPlan) -> Renderable:
@@ -713,6 +736,7 @@ def _render_parts(
         return parts[final]
 
     film = renderer(project, plan)
+    check_seam(plan, film)
     ink = check_ink(plan, film)
     if release and ink:
         raise ReleaseError(
@@ -732,7 +756,7 @@ def _render_parts(
             web = plan.encode.get("web")
             encode_frames(
                 film, part(mp4), crf=plan.encode["crf"], preset=plan.encode["preset"], meter=meter,
-                web=(part(web_mp4), web) if web else None,
+                web=(part(web_mp4), web) if web else None, gop=plan.encode.get("gop"),
             )  # fmt: skip
             meter.check(f"film {plan.id}")
             part(poster).write_bytes(film.poster())
@@ -840,6 +864,44 @@ def _clean(project: Project, out_dir: Path, ids: Sequence[str]) -> None:
             path.unlink()
 
 
+def _hours(
+    project: Project, only: Sequence[str] | None, hours: float | None, plan_only: bool
+) -> dict[str, float]:
+    """film id → hours of film/usb/ copy to write: `hours` for the named films (each must be a loop
+    film), else the `hours` of each loop film's FilmSpec. ValueError for --hours without --film,
+    on a film that is not a loop, out of (0, 12], or with --plan-only."""
+    films = resolve_films(project)
+    if hours is None:
+        named = only if only is not None else [f for f, film in films.items() if film.auto]
+        return {f: films[f].hours for f in named if f in films and films[f].loop and films[f].hours}  # type: ignore[misc]
+    if not only:
+        raise ValueError("--hours needs --film naming a loop film (e.g. --film screen)")
+    if not 0 < hours <= MAX_HOURS:
+        raise ValueError(f"--hours must be more than 0 and at most {MAX_HOURS:g} (got {hours:g})")
+    if plan_only:
+        raise ValueError("--hours copies a rendered loop film; drop --plan-only")
+    for fid in only:
+        if fid in films and not films[fid].loop:
+            raise ValueError(
+                f"--hours: film {fid!r} is not a loop film (only loop films, such as preset: screen)"
+            )
+    return dict.fromkeys(only, hours)
+
+
+def _current(project: Project, plan: FilmPlan, out_dir: Path) -> bool:
+    """Whether out_dir already holds this plan's film exactly as its render record says."""
+    stem = f"{project.slug}-{plan.id}"
+    plan_path, mp4 = out_dir / f"{stem}{PLAN_SUFFIX}", out_dir / f"{stem}.mp4"
+    if not (plan_path.is_file() and mp4.is_file()):
+        return False
+    try:
+        old = FilmPlan.load(plan_path)
+    except (OSError, ValueError):
+        return False
+    record = (old.render or {}).get("mp4") or {}
+    return old.hash == plan.hash and old.encode == plan.encode and record.get("sha256") == _sha256(mp4)
+
+
 def render_film(
     project: Project,
     out_dir: Path,
@@ -847,12 +909,16 @@ def render_film(
     only: Sequence[str] | None = None,
     release: bool = False,
     plan_only: bool = False,
+    hours: float | None = None,
 ) -> list[Path]:
     """Plan and render the films (all of them, or the ids in `only`) into out_dir = dist/<slug>/film:
     MP4 (+ -web.mp4) + poster + plan.json + storyboard each. `plan_only` writes the plan and
     storyboard without encoding; `release` first refuses a draft project or non-releasable facts,
-    and refuses text outside a film's safe zone. Returns the MP4s (the plan.json files with
-    plan_only)."""
+    and refuses text outside a film's safe zone. `hours` (with `only` naming loop films; else a
+    loop FilmSpec's `hours`) also repeats each loop film into out_dir/usb/ by stream copy
+    (film/loop.py), reusing a loop film already rendered from the same plan. Returns the MP4s (the
+    plan.json files with plan_only)."""
+    usb = _hours(project, only, hours, plan_only)
     if release:
         problems = check_release(project)
         if problems:
@@ -861,8 +927,16 @@ def render_film(
     out_dir.mkdir(parents=True, exist_ok=True)
     if only is None:
         _clean(project, out_dir, list(resolve_films(project)))
+    reuse = [p for p in plans.values() if hours is not None and not release and _current(project, p, out_dir)]
+    for plan in reuse:
+        log.info(f"{project.slug}-{plan.id}.mp4 matches its plan {plan.hash[:12]}; not re-rendered")
+    kept = {p.id for p in reuse}
+    todo = [p for p in plans.values() if p.id not in kept]
+    done = {p.id: p for p in _render_all(project, todo, out_dir, plan_only=plan_only, release=release)}
     outputs = []
-    for plan in _render_all(project, list(plans.values()), out_dir, plan_only=plan_only, release=release):
+    for plan in reuse:
+        outputs.append(_final(project, plan, out_dir, plan_only=False))
+    for plan in done.values():
         out = _final(project, plan, out_dir, plan_only=plan_only)
         p = plan.plan
         sections = sum(s["kind"] in ("section", "capture") for s in p["shots"])
@@ -874,4 +948,8 @@ def render_film(
         for warning in plan.warnings:
             log.warn(f"film {plan.id}: {warning}")
         outputs.append(out)
+    if not plan_only:
+        for fid, h in usb.items():
+            copy = concat_hours(out_dir / f"{project.slug}-{fid}.mp4", h, out_dir / USB_DIR)
+            log.ok(f"{fid}: {h:g} h for a USB player → {copy} ({copy.stat().st_size / 1024**2:.1f} MiB)")
     return outputs
