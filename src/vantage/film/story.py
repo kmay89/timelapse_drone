@@ -185,6 +185,7 @@ class _Series:
     captures: list[_Capture]
     geometry: Geometry
     portrait_focus: tuple[float, float]
+    masters_name: str = ""  # the fallback of a name that cannot be printed (do-not-print fact)
 
 
 def _chapter_ids(project: Project) -> list[str]:
@@ -298,7 +299,7 @@ def _series(
     name = (vantage.name if vantage else None) or caps.index.vantages[vid].name
     return _Series(
         cid, vid, name, ch.kicker, ch.title, series,
-        _geometry(project, caps.index, vid, *size), (pf[0], pf[1]),
+        _geometry(project, caps.index, vid, *size), (pf[0], pf[1]), caps.index.vantages[vid].name,
     )  # fmt: skip
 
 
@@ -308,7 +309,9 @@ def _fallback_series(project: Project, caps: _Captures, vid: str, size: tuple[in
     pf = vantage.portrait_focus if vantage and vantage.portrait_focus else (0.5, 0.5)
     name = (vantage.name if vantage else None) or caps.index.vantages[vid].name
     geo = _geometry(project, caps.index, vid, *size)
-    return _Series(None, vid, name, None, None, caps.of(vid), geo, (pf[0], pf[1]))
+    return _Series(
+        None, vid, name, None, None, caps.of(vid), geo, (pf[0], pf[1]), caps.index.vantages[vid].name
+    )
 
 
 @dataclass
@@ -324,6 +327,7 @@ class _Curtain:
     steps: list[tuple[int | None, Step | None, float]]  # (step index, step, split)
     geometry: Geometry
     portrait_focus: tuple[float, float]
+    masters_name: str = ""  # the fallback of a name that cannot be printed (do-not-print fact)
 
 
 def _vantage_info(project: Project, caps: _Captures, vid: str) -> tuple[str, tuple[float, float]]:
@@ -374,7 +378,7 @@ def _curtain(
     labels = (ch.before_label, ch.after_label) if ch else (None, None)
     return _Curtain(
         cid, vid, name, ch.kicker if ch else None, ch.title if ch else None, pair[0], pair[1], labels,
-        steps, _geometry(project, caps.index, vid, *size), pf,
+        steps, _geometry(project, caps.index, vid, *size), pf, caps.index.vantages[vid].name,
     )  # fmt: skip
 
 
@@ -623,12 +627,13 @@ def _push(
     return record, (cam if aimed["push"] else None)
 
 
-def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, name: str, vid: str):
+def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, part: _Series | _Curtain):
+    vid = part.vantage
     k, k_facts = b.said(kicker, f"chapter {chapter!r} kicker")
     t, t_facts = b.said(title, f"chapter {chapter!r} title")
     if not t:
-        t, t_facts = b.said(name, f"vantage {vid} name")
-    t = t or name
+        t, t_facts = b.said(part.name, f"vantage {vid} name")
+    t = t or part.masters_name  # the vantage name uses a do-not-print fact
     say = b.say()
     say.add([*k_facts, *t_facts])
     n = sum(s["kind"] == "card" for s in b.shots) + 1
@@ -802,7 +807,7 @@ def derive_cut(
         if kind in ("series", "curtain") and part.vantage != last_vantage:
             if b.prev is not None and b.prev["kind"] in IMAGES:
                 cam.until(b.f + b.dip("night"))
-            _card(b, part.chapter, part.kicker, part.title, part.name, part.vantage)
+            _card(b, part.chapter, part.kicker, part.title, part)
             pushed = None
         if kind == "series":
             s: _Series = part
@@ -810,7 +815,7 @@ def derive_cut(
             rest = b.rest(s)
             zmax = s.geometry.zmax(film.max_upscale * b.px)
             vname, vname_facts = b.said(s.name, f"vantage {s.vantage} name")
-            vname = vname or caps.index.vantages[s.vantage].name
+            vname = vname or s.masters_name
             heading, heading_facts = b.said(s.title, f"chapter {s.chapter!r} title")
             b.tracks.chapter(part_f0, heading or vname, heading_facts if heading else vname_facts)
             for cap in s.captures:
@@ -1179,7 +1184,7 @@ def _curtain_tracks(
     start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
     where = f"chapter {c.chapter!r}"
     vname, vname_facts = b.said(c.name, f"vantage {c.vantage} name")
-    vname = vname or c.name
+    vname = vname or c.masters_name
     heading, heading_facts = b.said(c.title, f"{where} title")
     b.tracks.chapter(part_f0, heading or f"{before} / {after}", heading_facts if heading else label_facts)
     pair = f"{before} / {after}"

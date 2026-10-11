@@ -531,6 +531,27 @@ STATS = {
 }
 
 
+def test_do_not_print_vantage_name_falls_back_to_the_masters_name(tmp_path):
+    """A vantage name that uses a do-not-print fact never prints its raw {fact:} token: the card,
+    captions, chapters and transcript use the masters' name instead."""
+    root = tmp_path / "p"
+    compare = {**COMPARE, "vantage": "overview", "kicker": None, "title": None, "id": "ov"}
+    compare = {k: v for k, v in compare.items() if v is not None}
+    tiny(root, chapters=[compare])
+    path = root / "story.yaml"
+    story = yaml.safe_load(path.read_text(encoding="utf-8"))
+    story["vantages"][0]["name"] = "Overview of {fact:secret} acres"
+    path.write_text(yaml.safe_dump(story, sort_keys=False), encoding="utf-8")
+    project = _facts(root, secret={"text": "999", "status": "do-not-print"})
+    plan = _plan(project)
+    assert any("vantage overview name: left out" in w for w in plan.warnings)
+    text = json.dumps(plan.plan)
+    assert "{fact:" not in text and "999" not in text
+    card = next(s for s in plan.plan["shots"] if s["kind"] == "card")
+    assert {"role": "title", "text": "Overview"} in card["text"]  # the masters' name
+    assert any("Split screen (Overview)," in line["text"] for line in plan.plan["transcript"]["lines"])
+
+
 def test_stats_are_facts_only(tmp_path):
     root = tmp_path / "p"
     tiny(root, chapters=[STATS])
