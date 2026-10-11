@@ -799,6 +799,18 @@ def test_push_keeps_its_subject_above_the_words(tmp_path, monkeypatch):
     assert v <= v1 + 1e-9 < p["layout"]["lead_baseline"] / p["height"], (v, v1)
 
 
+def test_poster_is_at_rest_without_words(tmp_path):
+    """The poster is the last capture at rest, before its words land: not the film's tightest push
+    with the words over its subject."""
+    steps = [STEPS[0], {**STEPS[2], "focus": [0.5, 0.5, 1.6]}]
+    p = _plan(tiny(tmp_path / "p", steps=steps)).plan
+    last = [s for s in p["shots"] if s["kind"] == "capture"][-1]
+    assert last["step"]["push"] and last["capture"] == DATES[4]
+    assert p["poster"] == last["f0"] + B - 1 < min(last["step"]["push_f0"], last["step"]["land"])
+    cut = _Cut(tiny(tmp_path / "p", steps=steps), FilmPlan(id="16x9", plan=p))
+    assert cut.camera(p["poster"])[2] == 1.0
+
+
 def test_push_eases_back_as_slowly_as_it_went_in(tmp_path):
     """Every camera move lasts at least a push (B + B/3 frames): the release after a push no longer
     snaps back inside the next dissolve; check_plan refuses a faster move."""

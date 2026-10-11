@@ -484,7 +484,7 @@ when one fails. Parallel and sequential renders give the same bytes.
                              crf 18 slow (VANTAGE_FAST: crf 20 veryfast), -threads 4
 <slug>-<id>-web.mp4          web copy ≤ 25 MiB: the same frames, crf 23 under a VBV cap (see "Web encode");
                              not for loop films, nor with output.film.web: false
-<slug>-<id>.jpg              poster (classic: the main vantage's final hold; story: the last frame of the last capture)
+<slug>-<id>.jpg              poster (classic: the main vantage's final hold; story: `plan.poster`, see plan.json)
 <slug>-<id>.plan.json        the FilmPlan plus its render record
 <slug>-<id>.storyboard.jpg   one tile per key frame
 <slug>-<id>.vtt  .srt        captions (WebVTT; SubRip for social uploads)
@@ -833,7 +833,9 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
                    "lines": [{"f0": 0, "text": "Title over the April 2025 view: …", "facts": []}]} | null,
     "shots": [ /* see below */ ],
     "hold_s": 1.0, "fade_s": 0.8, "seconds_total": 47.0, "poster_seconds": 23.65 },   // classic timing
-    // story instead: "poster": <frame> (the last frame of the last capture shot, else of the last curtain)
+    // story instead: "poster": <frame>: the latest capture at rest without its words (the frame
+    // before a step's words land, else its last frame; its dissolve over and the camera back at
+    // the rest view), else the title's key frame; never a push, never words over the picture
   "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed;
                                                        // every fact the shots and the tracks print
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed

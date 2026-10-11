@@ -1084,10 +1084,7 @@ def derive_cut(
             if file:
                 mv = index.vantages[shot["vantage"]]
                 masters[file] = {"sha256": hashes[file], "w": mv.width, "h": mv.height}
-    poster_shot = next(
-        (sh for sh in reversed(b.shots) if sh["kind"] == "capture"),
-        next((sh for sh in reversed(b.shots) if sh["kind"] == "curtain"), None),
-    )
+    poster = _poster(b, images)
     plan: dict[str, Any] = {
         "slug": project.slug,
         "cut": "story",
@@ -1120,7 +1117,7 @@ def derive_cut(
         **b.tracks.record(
             frames, title=head, subtitle=subtitle, honesty=honesty, facts=[*head_facts, *subtitle_facts]
         ),
-        "poster": poster_shot["f1"] - 1 if poster_shot else b.shots[0]["key"],
+        "poster": poster,
     }
     check_plan(plan)
     used = sorted({f for shot in b.shots for f in shot["facts"]} | set(track_facts(plan)))
@@ -1131,6 +1128,31 @@ def derive_cut(
         warnings=warnings,
         encode=encode_settings(film, settings, frames, fps, fast=fast, fpb=B, lang=iso639_2(cfg.lang)),
     )
+
+
+def _poster(b: _Builder, images: Sequence[_Series | _Curtain]) -> int:
+    """The poster frame: the latest capture shown at rest and without its words (the frame before
+    a step's words land, else its last frame), once its dissolve is over and the camera is back at
+    the rest view; else the title's key frame. A push is the most enlarged picture in a film, and
+    words over it hide the subject, so neither makes the thumbnail."""
+    from vantage.film.beat import Window, keyed, mix_cam
+
+    windows = [Window(w["a"], w["b"]) for w in b.camera.windows]
+    cams = [(w["x"], w["y"], w["zoom"]) for w in b.camera.windows]
+    rests = {p.vantage: b.rest(p) for p in images}
+    B = b.grid.fpb
+    for shot in reversed(b.shots):
+        if shot["kind"] != "capture":
+            continue
+        f = shot["f0"] + B - 1 if shot.get("step") else shot["f1"] - 1
+        d = shot["dissolve"]
+        if d is not None and f < d["f1"]:
+            continue
+        cam = keyed(windows, cams, f, mix_cam)
+        rest = rests[shot["vantage"]]
+        if abs(cam[2] - 1.0) < 1e-9 and math.hypot(cam[0] - rest[0], cam[1] - rest[1]) < 1e-9:
+            return f
+    return b.shots[0]["key"]
 
 
 def _capture_tracks(
