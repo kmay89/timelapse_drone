@@ -31,7 +31,7 @@ import yaml
 from vantage import log
 from vantage.config import FILM_ID_RE, BrandKit, FilmSettings, FontSpec, Project, ScrubChapter
 from vantage.film.layout import layout
-from vantage.film.tracks import Tracks, iso639_2, sentence, track_facts
+from vantage.film.tracks import SUFFIXES, Tracks, iso639_2, sentence, track_facts, track_texts
 from vantage.models import FilmPlan, MastersIndex
 from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
@@ -728,17 +728,41 @@ def _unreleasable(project: Project, ids: Sequence[str]) -> list[str]:
     return [f for f in ids if f not in facts or not facts[f].releasable]
 
 
+# Files of one film under film/, by suffix (the longest first: .chapters.vtt before .vtt).
+_FILM_SUFFIXES = tuple(
+    sorted({".mp4", "-web.mp4", ".jpg", PLAN_SUFFIX, STORYBOARD_SUFFIX, *SUFFIXES}, key=len, reverse=True)
+)
+
+
+def _stem(name: str) -> str | None:
+    """'<slug>-<id>' of a film file name (any output `vantage film` writes), else None."""
+    suffix = next((s for s in _FILM_SUFFIXES if name.endswith(s)), None)
+    return name[: -len(suffix)] if suffix else None
+
+
 def film_records(project: Project, film_dir: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
-    """(build.json `films` entries by id, every release problem) for the films in film_dir."""
+    """(build.json `films` entries by id, every release problem) for the films in film_dir.
+
+    Each entry's `files` lists the film/ files that ship with it (MP4, web copy, plan, storyboard,
+    tracks), each one checked: packaging ships those and nothing else from film/. A file that belongs
+    to no current film (an old id, an orphaned web copy or sidecar) is a problem and never ships."""
     slug, records, problems = project.slug, {}, []
     if not film_dir.is_dir():
         return {}, []
+    if not project.config.output.film.enabled:
+        log.warn(f"output.film.enabled is false: the files in {film_dir} are not packaged")
+        return {}, []
     films = resolve_films(project)
-    names = sorted(
-        {p.name.removesuffix(".mp4") for p in film_dir.glob("*.mp4") if not p.name.endswith("-web.mp4")}
-        | {p.name.removesuffix(PLAN_SUFFIX) for p in film_dir.glob(f"*{PLAN_SUFFIX}")}
-    )
+    present = sorted(p.name for p in film_dir.iterdir() if p.is_file())
+    names = sorted({stem for n in present if (stem := _stem(n)) is not None})
     ids = {name: film_id(slug, name) for name in names}
+
+    def again(fid: str | None) -> str:
+        film = films.get(fid or "")
+        return (
+            f"`vantage film {slug}`" if film is None or film.auto else f"`vantage film {slug} --film {fid}`"
+        )
+
     current: dict[str, FilmPlan] = {}
     try:
         current = plan_films(project, only=sorted({i for i in ids.values() if i in films}))
@@ -747,57 +771,104 @@ def film_records(project: Project, film_dir: Path) -> tuple[dict[str, dict[str, 
     approved = _approved(project) if project.config.output.film.require_approval else set()
     for name in names:
         fid, mp4, plan_path = ids[name], film_dir / f"{name}.mp4", film_dir / f"{name}{PLAN_SUFFIX}"
+        web_mp4 = film_dir / f"{name}-web.mp4"
+        own_files = [n for n in present if _stem(n) == name]
         if fid not in films:
-            shown = f"film/{name}.mp4" if mp4.is_file() else f"film/{name}{PLAN_SUFFIX}"
             problems.append(
-                f"{shown}: film {fid or name!r} is not in the current film set "
-                f"({', '.join(films)}): remove it, or run `vantage film {slug}`"
+                f"film/{own_files[0]}: film {fid or name!r} is not in the current film set "
+                f"({', '.join(films)}): remove film/{name}.*, or run `vantage film {slug}`"
             )
             continue
         if not plan_path.is_file():
+            shown = f"film/{name}.mp4" if mp4.is_file() else f"film/{own_files[0]}"
             problems.append(
-                f"film/{name}.mp4 has no {name}{PLAN_SUFFIX} (rendered by an older engine?): "
-                f"run `vantage film {slug}`"
+                f"{shown} has no {name}{PLAN_SUFFIX} (rendered by an older engine, or left over?): "
+                f"remove film/{name}.*, or run {again(fid)}"
             )
             continue
         own: list[str] = []
         try:
             plan = FilmPlan.load(plan_path)
         except (OSError, ValueError) as exc:
-            problems.append(f"film/{name}{PLAN_SUFFIX}: cannot read it ({exc}): run `vantage film {slug}`")
+            problems.append(f"film/{name}{PLAN_SUFFIX}: cannot read it ({exc}): run {again(fid)}")
+            continue
+        if not mp4.is_file() and not films[fid].auto:  # an on-demand film that was only planned
+            log.info(f"film/{name}{PLAN_SUFFIX}: planned only (no MP4), so film {fid!r} is not packaged")
             continue
         fresh = current.get(fid)
         if fresh is not None and fresh.hash != plan.hash:
             keys = sorted(
                 k for k in fresh.plan.keys() | plan.plan.keys() if fresh.plan.get(k) != plan.plan.get(k)
             )
+            size = (plan.plan.get("width"), plan.plan.get("height"))
             hint = (
                 " (rendered with a different VANTAGE_FAST?)"
-                if set(keys) <= {"width", "height", "layout"}
+                if size != (fresh.plan.get("width"), fresh.plan.get("height"))
                 else ""
             )
             own.append(
                 f"film/{name}.mp4 is stale: plan {plan.hash[:12]} ≠ current {fresh.hash[:12]} "
-                f"(differs in {', '.join(keys)}){hint}: run `vantage film {slug}`"
+                f"(differs in {', '.join(keys)}){hint}: run {again(fid)}"
+            )
+        elif fresh is not None and fresh.encode != plan.encode:
+            keys = sorted(
+                k
+                for k in fresh.encode.keys() | plan.encode.keys()
+                if fresh.encode.get(k) != plan.encode.get(k)
+            )
+            own.append(
+                f"film/{name}.mp4 was encoded with other settings (encode differs in {', '.join(keys)}): "
+                f"run {again(fid)}"
             )
         if plan.plan.get("draft"):
             own.append(f"film/{name}.mp4 is a draft (plan.draft is true): set draft: false and re-render")
+        web_ok = False
         if not mp4.is_file():
-            own.append(f"film/{name}{PLAN_SUFFIX} has no rendered film: run `vantage film {slug}`")
+            own.append(f"film/{name}{PLAN_SUFFIX} has no rendered film: run {again(fid)}")
         elif plan.render is None:
-            own.append(f"film/{name}.mp4 has no render record in its plan: run `vantage film {slug}`")
+            own.append(f"film/{name}.mp4 has no render record in its plan: run {again(fid)}")
         else:
-            for key, path in (("mp4", mp4), ("web", film_dir / f"{name}-web.mp4")):
+            for key, path in (("mp4", mp4), ("web", web_mp4)):
                 record = plan.render.get(key)
                 if record is None:
                     continue
                 if not path.is_file() or _sha256(path) != record.get("sha256"):
                     own.append(
                         f"film/{path.name} does not match its render record (replaced by hand?): "
-                        f"run `vantage film {slug}`"
+                        f"run {again(fid)}"
                     )
+                elif key == "web":
+                    web_ok = True
             if not (plan.render.get("flash") or {}).get("pass", False):
                 own.append(f"film/{name}.mp4 failed the flash check")
+        if web_mp4.is_file() and not (
+            web_ok and plan.encode.get("web") and (fresh or plan).encode.get("web")
+        ):
+            own.append(
+                f"film/{web_mp4.name} is not the web copy of the current film (left from an earlier "
+                f"render?): run {again(fid)}, or remove it"
+            )
+        checks = plan.checks or {}
+        if "outside" not in checks:
+            own.append(f"film/{name}{PLAN_SUFFIX} has no ink checks: run {again(fid)}")
+        elif checks["outside"]:
+            own.append(
+                f"film/{name}.mp4 has text outside its safe zone ({len(checks['outside'])} layer(s); "
+                f"see the plan warnings)"
+            )
+        tracks = track_texts(plan)
+        sidecars = []
+        for suffix in SUFFIXES:
+            path = film_dir / f"{name}{suffix}"
+            if suffix not in tracks:
+                if path.is_file():
+                    own.append(f"film/{path.name} is not a track of the current film: remove it")
+            elif not path.is_file():
+                own.append(f"film/{path.name} is missing: run {again(fid)}")
+            elif path.read_text(encoding="utf-8") != tracks[suffix]:
+                own.append(f"film/{path.name} does not match its plan (edited by hand?): run {again(fid)}")
+            else:
+                sidecars.append(path.name)
         used = sorted((fresh or plan).facts)
         bad = _unreleasable(project, used)
         own += [f"film/{name}.mp4 prints fact {f!r}, which is not releasable" for f in bad]
@@ -808,12 +879,20 @@ def film_records(project: Project, film_dir: Path) -> tuple[dict[str, dict[str, 
                 f"(list it under approvals[].films in approvals.yaml)"
             )
         problems += own
+        shipped = [
+            *([mp4.name] if mp4.is_file() else []),
+            *([web_mp4.name] if web_mp4.is_file() and web_ok else []),
+            plan_path.name,
+            *([f"{name}{STORYBOARD_SUFFIX}"] if (film_dir / f"{name}{STORYBOARD_SUFFIX}").is_file() else []),
+            *sidecars,
+        ]
         records[fid] = {
             "mp4": f"film/{name}.mp4" if mp4.is_file() else None,
             "plan": f"film/{name}{PLAN_SUFFIX}",
             "hash": plan.hash,
             "cut": plan.plan.get("cut"),
             "preset": plan.plan.get("preset"),
+            "loop": bool(plan.plan.get("loop")),
             "width": plan.plan.get("width"),
             "height": plan.plan.get("height"),
             "fps": plan.plan.get("fps"),
@@ -823,6 +902,7 @@ def film_records(project: Project, film_dir: Path) -> tuple[dict[str, dict[str, 
             "facts": used,
             "unreleasable": bad,
             "problems": own,
+            "files": sorted(f"film/{n}" for n in shipped),
         }
     return records, problems
 

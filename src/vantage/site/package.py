@@ -10,9 +10,11 @@ dist/<slug>/HOW-TO-VIEW.txt  SHA256SUMS  build.json
 
 Films already rendered into dist/<slug>/film are checked against the plans the current YAML, masters
 and facts would make (film/plan.py `film_records`): a release refuses any problem, a draft package
-logs them (a film's -web.mp4 is checked against its render record like the film itself).
+logs them (a film's -web.mp4 and its tracks are checked against its plan like the film itself).
 build.json records every film plan; SHA256SUMS lists each film and its -web.mp4 with its plan.json,
-storyboard and tracks (.vtt, .srt, .chapters.vtt, .txt). Only the top level of film/ ships: film/usb/ (a loop film repeated for a TV's USB
+storyboard and tracks (.vtt, .srt, .chapters.vtt, .txt): only the files `film_records` accepted for a
+current film (`files`), so a left-over web copy or sidecar, a planned-only on-demand film and every
+film when output.film.enabled is false stay out. film/usb/ (a loop film repeated for a TV's USB
 player, film/loop.py) is never packaged, listed or hosted.
 """
 
@@ -38,7 +40,7 @@ from PIL import Image
 
 from vantage import __version__, log
 from vantage.config import Project
-from vantage.film.plan import PLAN_SUFFIX, STORYBOARD_SUFFIX, film_records, resolve_films
+from vantage.film.plan import film_records
 from vantage.media.ffmpeg import FFmpegError, ffmpeg_version
 from vantage.site.build import ReleaseError, build_site, inside
 from vantage.site.facts import check_release
@@ -431,15 +433,13 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
     if project.config.output.single_file:
         files |= _single_files(project, site, story, theme, dist_dir)
     files["zip"] = _offline_zip(project, site, story, theme, dist_dir / f"{project.slug}-offline.zip")
-    films = sorted(film_dir.glob("*.mp4"))  # not recursive: film/usb/ is never packaged
-    try:
-        loops = {f"{project.slug}-{fid}.mp4" for fid, film in resolve_films(project).items() if film.loop}
-    except ValueError:
-        loops = set()
+    shipped = sorted(dist_dir / f for record in film_info.values() for f in record["files"])
+    films = [p for p in shipped if p.suffix == ".mp4"]  # checked by film_records; never film/usb/
+    loops = {Path(record["mp4"]).name for record in film_info.values() if record["loop"] and record["mp4"]}
     if not films and project.config.output.film.enabled:
         log.warn(f"no films in {film_dir}; run `vantage film {project.slug}` to add them")
-    tracks = sorted(p for pattern in ("*.vtt", "*.srt", "*.txt") for p in film_dir.glob(pattern))
-    ledger = sorted([*film_dir.glob(f"*{PLAN_SUFFIX}"), *film_dir.glob(f"*{STORYBOARD_SUFFIX}"), *tracks])
+    tracks = [p for p in shipped if p.suffix in (".vtt", ".srt", ".txt")]
+    ledger = [p for p in shipped if p.suffix != ".mp4"]
     files["how_to_view"] = _how_to_view(
         story, files, films, dist_dir / "HOW-TO-VIEW.txt", loops, tracks=bool(tracks)
     )

@@ -221,3 +221,21 @@ def test_cli_hours(tmp_path):
     ok = runner.invoke(app, [*base, "--film", "screen", "--hours", "0.01"])
     assert ok.exit_code == 0, ok.output
     assert (tmp_path / "dist" / "tiny-site" / "film" / "usb" / "tiny-site-screen-0.01h.mp4").is_file()
+
+
+def test_planned_only_screen_does_not_block_a_release(tmp_path, monkeypatch):
+    """`--film screen --plan-only` (the approval step) leaves a plan without an MP4: a release skips
+    it and ships none of its files; a stale rendered screen film names `--film screen` in its remedy."""
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    root, dist = tmp_path / "p", tmp_path / "dist"
+    film_dir = dist / "film"
+    project = _project(root)
+    render_film(project, film_dir, only=["screen"], plan_only=True)
+    render_film(project, film_dir)  # the auto films
+    files = package_project(project, dist, release=True)
+    sums = files["checksums"].read_text()
+    assert "tiny-site-16x9.mp4" in sums and "tiny-site-screen" not in sums
+    render_film(project, film_dir, only=["screen"])
+    project = tiny(root, films={"screen": {"preset": "screen", "bpm": 80}})
+    with pytest.raises(Exception, match=r"vantage film tiny-site --film screen"):
+        package_project(project, dist, release=True)

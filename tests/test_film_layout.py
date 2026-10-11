@@ -100,6 +100,9 @@ def test_ink_outside_safe_is_a_warning_and_a_release_error(tmp_path, monkeypatch
     with pytest.raises(ReleaseError, match="outside the safe zone"):
         render_film(tight, tmp_path / "out", release=True)
     assert not list((tmp_path / "out").glob("*.mp4"))
+    # Rendered without --release, the same film is refused by the package gate too.
+    render_film(tight, tmp_path / "out")
+    assert any("text outside its safe zone" in p for p in check_films(tight, tmp_path / "out"))
 
 
 def test_custom_safe_override(tmp_path):
@@ -220,3 +223,60 @@ def test_no_web_copy_when_disabled(tmp_path, monkeypatch):
     assert not (tmp_path / "out" / "tiny-site-16x9-web.mp4").exists()
     plan = json.loads((tmp_path / "out" / "tiny-site-16x9.plan.json").read_text())
     assert plan["encode"]["web"] is None and plan["render"]["web"] is None
+
+
+def test_stale_web_copy_and_orphans_never_ship(tmp_path, monkeypatch):
+    """Render with a web copy, turn it off and re-render: the old web copy is deleted, and one put
+    back (or any file of no current film) is a release problem that packaging never lists."""
+    from test_film_story import _facts
+    from vantage.config import load_project
+    from vantage.site.package import package_project
+
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    root, dist = tmp_path / "p", tmp_path / "dist"
+    film_dir = dist / "film"
+    tiny(root, film={"web": True})
+    project = _facts(root)
+    render_film(project, film_dir)
+    web = film_dir / "tiny-site-16x9-web.mp4"
+    old_web = web.read_bytes()
+    assert check_films(project, film_dir) == []
+
+    _edit_film(root, web=False)
+    project = load_project(root)
+    assert any("tiny-site-16x9-web.mp4 is not the web copy" in p for p in check_films(project, film_dir))
+    render_film(project, film_dir)
+    assert not web.exists()  # the re-render removed it
+    assert check_films(project, film_dir) == []
+    web.write_bytes(old_web)  # put back by hand, or left by an older engine
+    (film_dir / "tiny-site-old.txt").write_text("orphan\n", encoding="utf-8")
+    problems = check_films(project, film_dir)
+    assert any("tiny-site-16x9-web.mp4 is not the web copy" in p for p in problems)
+    assert any("tiny-site-old.txt: film 'old' is not in the current film set" in p for p in problems)
+    with pytest.raises(ReleaseError, match="not the web copy"):
+        package_project(project, dist, release=True)
+    files = package_project(project, dist)  # a draft package logs them and leaves them out
+    sums = files["checksums"].read_text()
+    assert "tiny-site-16x9.mp4" in sums and "-web.mp4" not in sums and "tiny-site-old.txt" not in sums
+
+    # Encode-only drift (lang is not hashed) is caught, and a disabled film set ships nothing.
+    _edit_film(root, web=False, lang="fr")
+    web.unlink()
+    (film_dir / "tiny-site-old.txt").unlink()
+    project = load_project(root)
+    assert any("encode differs in lang" in p for p in check_films(project, film_dir))
+    _edit_film(root, web=False, enabled=False)
+    project = load_project(root)
+    assert check_films(project, film_dir) == []
+    assert "film/" not in package_project(project, dist)["checksums"].read_text()
+
+
+def _edit_film(root: Path, *, lang: str | None = None, **film: object) -> None:
+    import yaml
+
+    path = root / "project.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["output"]["film"].update(film)
+    if lang:
+        data["lang"] = lang
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")

@@ -496,7 +496,8 @@ A loop film's MP4 has closed GOPs of 2 beats (`encode.gop`), no web copy and no 
 - Film ids match `[a-z0-9][a-z0-9-]{0,31}` and never end in `-web`. The film set is `16x9`, plus
   `9x16` when `output.film.vertical`; those ids keep the file names films had before plans.
 - Every output of a film is written to `*.part` and renamed only once all of them exist (the plan
-  last). Packaging ships only finished `*.mp4` files.
+  last). Packaging ships only the files the release gate accepted for a current film (build.json
+  `films.<id>.files`), never a `.part`.
 - A full `vantage film` run (no `--film`) deletes `<slug>-*` files whose id is no longer in the film
   set, and stray `*.part` files.
 - `--plan-only` writes plan.json (with `render: null`), the storyboard and the track sidecars, but no
@@ -940,39 +941,58 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
 
 ### Release gate (film/plan.py check_films; package and film --release)
 
-`package --release` runs `check_release`, rebuilds the site, then re-plans every film found in
-`film/` and refuses with one line per problem:
+`package --release` runs `check_release`, rebuilds the site, then re-plans every film that has a file
+in `film/` (any output `vantage film` writes: MP4, -web.mp4, poster, plan.json, storyboard, tracks)
+and refuses with one line per problem. The remedy names `vantage film <slug> --film <id>` for a film
+that is not `auto` (such as `screen`).
 
-1. `film/<name>.mp4` has no `<name>.plan.json` (rendered by an older engine?): run `vantage film <slug>`.
-2. Its id is not in the current film set: remove it, or run a full `vantage film`.
+1. A film file has no `<name>.plan.json` (rendered by an older engine, or left over): remove it, or
+   re-render.
+2. Its id is not in the current film set (an old id, an orphaned web copy or sidecar): remove it, or
+   run a full `vantage film`.
 3. It is stale: the plan hash differs from the re-planned hash. The message names the differing
-   top-level plan keys, and hints at VANTAGE_FAST when only the size differs.
+   top-level plan keys, and hints at VANTAGE_FAST when the size differs. With an equal hash, a
+   different `encode` (web, lang, tracks, crf, preset, gop) is a problem too.
 4. `plan.draft` is true.
 5. The MP4 (or its -web.mp4) sha256 differs from the `render` record, `render` is null, or a plan
-   has no MP4.
+   of an `auto` film has no MP4. A `-web.mp4` that is not the current film's web copy (`render.web`
+   or the re-planned `encode.web` is null: the web copy was turned off) is a problem; `vantage film`
+   deletes it when `encode.web` is null.
 6. A fact it prints (as re-planned, on screen or in its tracks) is not releasable under the current
-   facts.yaml.
+   facts.yaml. Every film text comes from YAML that `check_release` already scans, so in
+   `package --release` this is a second line behind it; `check_films` and build.json
+   `films.<id>.unreleasable` report it on their own.
 7. `render.flash.pass` is false (every cut is metered; a failing film is never written).
 8. `require_approval` is on and neither the hash nor its first 12 characters is listed in any
    `approvals.yaml` `approvals[].films`.
+9. Text outside the safe zone: `checks.outside` is not empty, or the plan has no `checks`. (`vantage
+   film --release` refuses the same before encoding.)
+10. A track sidecar (`.vtt`, `.srt`, `.chapters.vtt`, `.txt`) differs from `track_texts(plan)`
+    (edited by hand), is missing, or exists when the plan has no tracks.
 
-No films at all is allowed (with a warning). A non-release `package` logs the same problems as
-warnings. `vantage film --release` runs `check_release` and refuses a draft before planning, and
-refuses a film with text outside its safe zone (`checks.outside`).
+A plan of a film that is not `auto` with no MP4 (`--film screen --plan-only`, the approval step) is
+skipped: it is not a problem and none of its files ship. With `output.film.enabled: false` nothing
+in `film/` is checked or shipped (a warning says so). No films at all is allowed (with a warning). A
+non-release `package` logs the same problems as warnings and ships only the files of each film that
+passed their own check (`files`). `vantage film --release` runs `check_release` and refuses a draft
+before planning, and refuses a film with text outside its safe zone (`checks.outside`).
 
 ### build.json additions
 
 ```jsonc
 "tools": {"vantage": …, "python": …, "pillow": …, "ffmpeg": "6.1.1-3ubuntu5"},
 "films": {"16x9": {"mp4": "film/demo-lakeside-16x9.mp4", "plan": "film/demo-lakeside-16x9.plan.json",
-          "hash": "…", "cut": "classic", "preset": null, "width": 1920, "height": 1080, "fps": 30,
-          "frames": 1410, "fresh": true, "draft": false, "facts": [], "unreleasable": [], "problems": []}}
+          "hash": "…", "cut": "classic", "preset": null, "loop": false, "width": 1920, "height": 1080,
+          "fps": 30, "frames": 1410, "fresh": true, "draft": false, "facts": [], "unreleasable": [],
+          "problems": [],
+          "files": ["film/demo-lakeside-16x9-web.mp4", "film/demo-lakeside-16x9.mp4", "…"]}}
 ```
 
-`files` and SHA256SUMS list every top-level `film/` deliverable: each MP4 and -web.mp4, plan.json,
-storyboard and tracks (`.vtt`, `.srt`, `.chapters.vtt`, `.txt`), never `film/usb/`. release.yml
-uploads `film/*.mp4 film/*.vtt film/*.srt film/*.txt`. HOW-TO-VIEW.txt adds "Captions (.srt, .vtt)
-and a timed text transcript (.txt) come with each film" when there are tracks. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy
+`files` and SHA256SUMS list every top-level `film/` deliverable the gate accepted (each film's
+`files`): its MP4 and -web.mp4, plan.json, storyboard and tracks (`.vtt`, `.srt`, `.chapters.vtt`,
+`.txt`), never a poster or `film/usb/`. release.yml uploads `film/*.mp4 film/*.vtt film/*.srt
+film/*.txt` from the files SHA256SUMS lists. HOW-TO-VIEW.txt adds "Captions (.srt, .vtt) and a timed
+text transcript (.txt) come with each film" when there are tracks. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy
 for websites and uploads (under 25 MB)" and a loop film as "silent loop for an event screen; for a
 TV's USB player use film/usb/<name>-<H>h.mp4".
 

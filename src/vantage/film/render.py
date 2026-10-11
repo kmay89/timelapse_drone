@@ -949,6 +949,8 @@ def render_film(
         if not track_texts(plan):  # tracks turned off (or a loop film): no stale sidecars
             for suffix in SUFFIXES:
                 (out_dir / f"{project.slug}-{plan.id}{suffix}").unlink(missing_ok=True)
+        if not plan.encode.get("web"):  # web copy turned off (or a loop film): no stale web copy
+            (out_dir / f"{project.slug}-{plan.id}-web.mp4").unlink(missing_ok=True)
         out = _final(project, plan, out_dir, plan_only=plan_only)
         p = plan.plan
         sections = sum(s["kind"] in ("section", "capture") for s in p["shots"])

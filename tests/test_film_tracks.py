@@ -279,3 +279,18 @@ def test_package_lists_tracks(tmp_path, monkeypatch):
         "August 2025",
         "January 2026",
     ]
+
+
+def test_sidecars_are_checked_against_the_plan(tmp_path):
+    """A hand-edited caption file, or a sidecar of no current film, is a release problem."""
+    root = tmp_path / "p"
+    project = tiny(root, simulated=True)
+    out = tmp_path / "dist" / "film"
+    render_film(project, out, plan_only=True)
+    assert ["has no rendered film" in p for p in check_films(project, out)] == [True]  # plan only
+    srt = out / "tiny-site-16x9.srt"
+    srt.write_text(srt.read_text(encoding="utf-8") + "\n99\n00:00:01,000 --> 00:00:02,000\n42 acres\n")
+    (out / "tiny-site-gone.vtt").write_text("WEBVTT\n", encoding="utf-8")
+    problems = check_films(project, out)
+    assert any("tiny-site-16x9.srt does not match its plan" in p for p in problems)
+    assert any("tiny-site-gone.vtt: film 'gone' is not in the current film set" in p for p in problems)

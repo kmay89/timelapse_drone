@@ -25,7 +25,7 @@ from vantage.cli import check_project
 from vantage.config import Project, load_project
 from vantage.film import beat
 from vantage.film.cut import _Cut
-from vantage.film.plan import SIMULATED_NOTE, plan_films, resolve_films
+from vantage.film.plan import SIMULATED_NOTE, check_films, plan_films, resolve_films
 from vantage.film.render import _render_one, film_jobs, render_film
 from vantage.film.safety import LumaMeter, PlanError, check_plan
 from vantage.film.story import HONESTY, Geometry
@@ -651,8 +651,25 @@ def test_release_gate_on_story_film(tmp_path, monkeypatch):
     render_film(project, dist / "film")
     plan = FilmPlan.load(dist / "film" / "tiny-site-16x9.plan.json")
     assert plan.facts["area"]["releasable"] is False
+    # The film gate itself (check_release, which runs first in package --release, also names 'area').
+    assert "film/tiny-site-16x9.mp4 prints fact 'area', which is not releasable" in check_films(
+        project, dist / "film"
+    )
+    info = json.loads(package_project(project, dist)["build_json"].read_text())
+    assert info["films"]["16x9"]["unreleasable"] == ["area"]
     with pytest.raises(ReleaseError, match="area"):
         package_project(load_project(root), dist, release=True)
+
+
+def test_gate_hints_at_vantage_fast(tmp_path, monkeypatch):
+    """A film planned at the VANTAGE_FAST size is stale at full size, and the gate says why, even
+    though a story cut's shots (px) differ too."""
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    project = tiny(tmp_path / "p", film={"width": 1920, "height": 1080})
+    render_film(project, tmp_path / "film", plan_only=True)
+    monkeypatch.delenv("VANTAGE_FAST")
+    stale = [p for p in check_films(project, tmp_path / "film") if "is stale" in p]
+    assert len(stale) == 1 and "(rendered with a different VANTAGE_FAST?)" in stale[0], stale
 
 
 @pytest.mark.slow
