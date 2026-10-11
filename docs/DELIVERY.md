@@ -67,6 +67,29 @@ but do not show until asked.
 The full-quality films (the demo's 16:9 film is about 31 MiB) go to R2 or GitHub Releases, not to a
 static host.
 
+Embedding a film on a web page (the client's site, a news post): films are not part of the Vantage
+site, so its reduced-motion handling does not reach them. Give the client this markup, with
+controls, no autoplay, the captions and chapters as tracks and a visible link to the transcript
+(the film's text alternative):
+
+```html
+<video controls playsinline preload="metadata" width="1920" height="1080"
+       poster="<slug>-16x9.jpg" style="max-width:100%;height:auto">
+  <source src="<slug>-16x9-web.mp4" type="video/mp4">
+  <track kind="captions" srclang="en" label="English" src="<slug>-16x9.vtt">
+  <track kind="chapters" srclang="en" src="<slug>-16x9.chapters.vtt">
+</video>
+<p><a href="<slug>-16x9.txt">Read the film as text (transcript)</a></p>
+```
+
+- Never `autoplay loop muted` on its own: the pushes and dissolves would play for people who ask for
+  reduced motion, with no way to pause them (WCAG 2.2.2). If a page must start the film by itself,
+  do it in script only when `matchMedia("(prefers-reduced-motion: no-preference)").matches`, and keep
+  `controls`.
+- Use the film's own `srclang` (project.yaml `lang`). The poster is `film/<slug>-16x9.jpg` in
+  `dist/<slug>/` (it is not in the package; leave `poster` out if you do not send it).
+- The event-screen loop has no tracks and is not for the web.
+
 Serve video from the site's own origin (or route `/media/*` to R2 through a Worker): cross-origin
 opaque responses cannot be range-sliced by the service worker.
 

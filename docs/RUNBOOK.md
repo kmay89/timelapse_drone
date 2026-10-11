@@ -115,7 +115,8 @@ uv run vantage film <slug> --film screen --hours 2      # film/usb/<slug>-screen
 - Copy the file onto a USB stick formatted **exFAT or FAT32**. FAT32 holds at most 4 GiB per file:
   `--hours` refuses anything over 3.9 GiB and names the largest H that fits. Bring a spare stick.
 - Never embed the loop on the site and never upload `film/usb/`: it is not packaged, hosted or
-  released. Use the 16:9 film (or its `-web.mp4`) online.
+  released. Use the 16:9 film (or its `-web.mp4`) online, with the embed markup in
+  [DELIVERY.md](DELIVERY.md#hosting-options) (controls, captions, transcript link, no autoplay).
 
 ## When something goes wrong
 
