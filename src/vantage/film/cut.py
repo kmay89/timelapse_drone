@@ -263,6 +263,62 @@ def stat_run(
     return StatRun(place, tuple(sets), ride_s, tuple(ride_lines), ride_bases, box, blocks)
 
 
+# --------------------------------------------------------------------------- #
+# Step words: where a step's lead words sit (shared with film/story.py, which chooses the zone)
+# --------------------------------------------------------------------------- #
+
+# The zones a step's words may take, by the film's orientation; the first is the default. `low`: on
+# the lead baseline from the left margin; `low-right`: on the lead baseline, the ink ending on the
+# right text edge; `high`: from the left margin, the ink top WORDS_GAP units under the label line.
+WORDS_ZONES = {"portrait": ("low", "high"), "landscape": ("low", "low-right", "high")}
+WORDS_GAP = 44.0  # units between the label line (the date label's or curtain labels' baseline) and the words
+WORDS_SCRIM = 0.5  # the words' scrim at its peak
+WORDS_PAD = (26.0, 18.0)  # units: the words' scrim padding (x, y)
+
+
+def words_zones(lay: Layout) -> tuple[str, ...]:
+    """The zones a step's words may take in this layout (the first is the default)."""
+    return WORDS_ZONES["portrait" if lay.height > lay.width else "landscape"]
+
+
+@dataclasses.dataclass(frozen=True)
+class WordsSet:
+    """A step's words as set in a zone: style, the text's origin (x, baseline) and its ink box."""
+
+    zone: str
+    style: _Style
+    x: float
+    baseline: float
+    box: Box4  # x0, y0, x1, y1 of the ink, at rest (it rises RISE units into place from below)
+
+
+def words_set(t: _Type, lay: Layout, words: str, zone: str, label_base: float) -> WordsSet:
+    """Lead words in `zone` (shrunk to fit between the margins, overhangs included). `label_base`:
+    the baseline of the label line a `high` zone hangs under."""
+    size = 1.0
+    w = t.width(words, LEAD)
+    if w > lay.text_width:
+        size = lay.text_width / w
+    style = _Style(LEAD.role, LEAD.size * size, LEAD.weight)
+    for _ in range(4):  # the ink (overhangs included) fits too, at the font's whole px size
+        ink = t.font(style).getbbox(words, anchor="ls")[2]
+        if ink <= lay.text_width:
+            break
+        style = _Style(LEAD.role, style.size * lay.text_width / ink * 0.995, LEAD.weight)
+    font = t.font(style)
+    left, top, right, bottom = font.getbbox(words, anchor="ls")
+    x = float(lay.margin)
+    if zone == "low-right":  # the ink, not the advance, ends on the right text edge
+        x = lay.right - right
+    if zone == "high":  # every high line on one baseline: the ascender top of 'Hdl' under the label
+        baseline = label_base + WORDS_GAP * t.unit - font.getbbox("Hdl", anchor="ls")[1]
+    elif zone in ("low", "low-right"):
+        baseline = float(lay.lead_baseline)
+    else:
+        raise ValueError(f"unknown words zone {zone!r}")
+    return WordsSet(zone, style, x, baseline, (x + left, baseline + top, x + right, baseline + bottom))
+
+
 def stat_subject_box(lay: Layout, run: StatRun) -> tuple[float, float, float, float]:
     """Where a stat's push may put its hotspot (u0, u1, v0, v1 as frame fractions): inside the safe
     zone and clear of the run's panel (above it when the run is low, below it when high)."""
@@ -533,7 +589,8 @@ class _Cut:
                 entry: dict[str, Any] = {"label": label, "label_scrim": self._scrim(box, 0.42)}
                 words = text.get("words")
                 if words:
-                    entry["words"], entry["words_scrim"] = self._words(words, sid)
+                    zone = (shot.get("step") or {}).get("words_zone")
+                    entry["words"], entry["words_scrim"] = self._words(words, sid, zone, cap_top)
                 self.layers[sid] = entry
             elif kind in ("card", "end"):
                 self.layers[sid] = {"stack": self._stack(shot["text"], sid)}
@@ -560,24 +617,20 @@ class _Cut:
             k = KNOB * u
             self._note(None, "rail", (self.rail_ends[0] - k, y - k, self.rail_ends[1] + k, y + k))
 
-    def _words(self, words: str, sid: str | None = None) -> tuple[_Layer, _Layer]:
-        """Lead words at the lead baseline (shrunk to fit between the margins) and their scrim."""
-        lay, u, t = self.lay, self.u, self.type
-        size = 1.0
-        w = t.width(words, LEAD)
-        if w > lay.text_width:
-            size = lay.text_width / w
-        style = _Style(LEAD.role, LEAD.size * size, LEAD.weight)
-        for _ in range(4):  # the ink (overhangs included) fits too, at the font's whole px size
-            ink = t.font(style).getbbox(words, anchor="ls")[2]
-            if ink <= lay.text_width:
-                break
-            style = _Style(LEAD.role, style.size * lay.text_width / ink * 0.995, LEAD.weight)
+    def _words(
+        self, words: str, sid: str | None, zone: str | None, label_base: float
+    ) -> tuple[_Layer, _Layer]:
+        """A step's words in their zone (`words_set`; plans before zones: low) and their scrim."""
+        u = self.u
+        ws = words_set(self.type, self.lay, words, zone or "low", label_base)
         layer, box = self._ink(
-            [(lay.margin, lay.lead_baseline, words, style, "l")], shadow=0.8, blur=7,
-            note=(sid, "words"), rise=RISE * u,
-        )  # fmt: skip
-        return layer, self._scrim(box, 0.5, RISE * u)
+            [(ws.x, ws.baseline, words, ws.style, "l")],
+            shadow=0.8,
+            blur=7,
+            note=(sid, "words"),
+            rise=RISE * u,
+        )
+        return layer, self._scrim(box, WORDS_SCRIM, RISE * u, pad=WORDS_PAD)
 
     def _typeset_curtain(self, shot: dict[str, Any]) -> None:
         lay = self.lay
@@ -593,7 +646,7 @@ class _Cut:
         words, word_scrims, index = [], [], {}
         for k, step in enumerate(shot["steps"]):
             if step.get("words"):
-                layer, scrim = self._words(step["words"], sid)
+                layer, scrim = self._words(step["words"], sid, step.get("words_zone"), cap_top)
                 index[k] = len(words)
                 words.append(layer)
                 word_scrims.append(scrim)
@@ -996,14 +1049,25 @@ class _Cut:
             vis = self._reveal(shot, side, f) * opacity
             _put(frame, L["label_scrims"][side], vis, clip=clip)
             _put(frame, L["labels"][side], vis, clip=clip)
-        steps, index = shot["steps"], self.curtain_words[shot["id"]]
-        for k, step in enumerate(steps):
-            if k not in index or f < step["land"]:
-                continue
-            e = ramp(f, step["land"], self.third)
-            out = 1 - ramp(f, steps[k + 1]["f0"], self.third) if k + 1 < len(steps) else 1.0
+        index = self.curtain_words[shot["id"]]
+        for k in index:
+            e, out = self._line(shot, k, f)
             _put(frame, L["words_scrims"][index[k]], e * out * opacity)
             _put(frame, L["words"][index[k]], e * out * opacity, RISE * u * (1 - e))
+
+    def _line(self, shot: dict[str, Any], k: int, f: int) -> tuple[float, float]:
+        """(fade in, fade out) of curtain step k's line at frame f: in over B/3 from its landing, out
+        over B/3 from the next sweep's downbeat, or, when the next step has a line too, over the B/3
+        before it, so the next one lands on a clear zone (never two lines over each other)."""
+        steps, index = shot["steps"], self.curtain_words[shot["id"]]
+        land = steps[k].get("land")
+        if land is None or f < land:
+            return 0.0, 0.0
+        out = 1.0
+        if k + 1 < len(steps):
+            nxt = steps[k + 1]["f0"]
+            out = 1 - ramp(f, nxt - self.third if k + 1 in index else nxt, self.third)
+        return ramp(f, land, self.third), out
 
     def _curtain(self, i: int, f: int) -> np.ndarray:
         shot, prev = self.shots[i], self.shots[i - 1] if i else None

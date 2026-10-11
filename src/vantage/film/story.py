@@ -7,7 +7,8 @@
     capture  one per capture of each scrub chapter (from..to, minus `exclude`d captures): 1 beat
              for a quiet capture, 3 for a step, 4 for a step that pushes in. Every capture but the
              film's first image opens with a dissolve; the step's words (film.line, else its
-             leading **bold** run) land on beat 1 and a push reaches its target at beat 2⅓
+             leading **bold** run) land on beat 1, in the zone (`_Placer`: low or high, or low-right
+             in 16:9) clear of the step's subject, and a push reaches its target at beat 2⅓
     curtain  one per compare chapter: an entry beat at split 0 (a dissolve to `after` unless it is
              already on screen), then 2 beats of sweep and 2 of hold per step with a split; the
              labels show only while the rule is 8 px clear of their ink (`reveal`)
@@ -37,6 +38,7 @@ captures degrades to title → capture (→ curtain) → stats → end. Dips to 
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 from collections import Counter
@@ -241,6 +243,7 @@ class _Capture:
     step: Step | None = None
     step_index: int | None = None
     subjects: list[Hotspot] = field(default_factory=list)
+    before: str | None = None  # the vantage's previous capture's file (what changed comes from it)
 
 
 @dataclass
@@ -313,7 +316,8 @@ class _Captures:
                 self.warnings,
                 releasable_only=self.strict,
             )
-            out.append(_Capture(c.date, c.file, label, list(say.facts), i, note, note_facts))
+            before = caps[i - 1].file if i else None
+            out.append(_Capture(c.date, c.file, label, list(say.facts), i, note, note_facts, before=before))
         return out
 
 
@@ -532,6 +536,7 @@ class _Builder:
     f: int = 0  # the next shot's first frame (always on the grid)
     camera: _Camera = field(default_factory=_Camera)
     tracks: Tracks = field(default_factory=lambda: Tracks(1, enabled=False))
+    placer: _Placer | None = None  # chooses the words' zones (None: always the default zone)
 
     @property
     def strict(self) -> bool:
@@ -653,11 +658,13 @@ def _aim_step(
     rest: Cam,
     zmax: float,
     label: str,
+    box: Box | None = None,
 ) -> tuple[Cam, dict[str, Any]]:
-    """A step's camera target, clamped by max_upscale (with warnings), and its plan record."""
+    """A step's camera target, clamped by max_upscale (with warnings), and its plan record. `box`:
+    where its subjects may land (default: above the low words, `subject_box`)."""
     cam, target = aim(
         geo, requested, zmax, [] if explicit else subjects, explicit=explicit, rest=rest,
-        box=subject_box(b.layout),
+        box=subject_box(b.layout) if box is None else box,
     )  # fmt: skip
     if target.startswith("focus, subject off-frame"):
         b.warnings.append(
@@ -686,9 +693,10 @@ def _aim_step(
 
 
 def _push(
-    b: _Builder, series: _Series, cap: _Capture, rest: Cam, zmax: float
+    b: _Builder, series: _Series, cap: _Capture, rest: Cam, zmax: float, box: Box | None = None
 ) -> tuple[dict[str, Any] | None, Cam | None]:
-    """The step record of a capture and its push target (None without a push)."""
+    """The step record of a capture and its push target (None without a push); `box`: where the
+    push may put its subjects (the words' zone decides it)."""
     step = cap.step
     if step is None:
         return None, None
@@ -714,34 +722,153 @@ def _push(
         "reason": None if requested else "no focus",
     }
     if not requested:
-        _under_words(b, series.geometry, rest, cap, words, f"{series.chapter} {cap.date}")
         return record, None
     explicit = bool(step.film and step.film.focus)
     cam, aimed = _aim_step(
-        b, series.geometry, requested, explicit, cap.subjects, rest, zmax, f"{series.chapter} {cap.date}"
+        b, series.geometry, requested, explicit, cap.subjects, rest, zmax, f"{series.chapter} {cap.date}", box
     )
     record.update(aimed)
-    _under_words(
-        b, series.geometry, cam if aimed["push"] else rest, cap, words, f"{series.chapter} {cap.date}"
-    )
     return record, (cam if aimed["push"] else None)
 
 
-def _under_words(b: _Builder, geo: Geometry, cam: Cam, cap: _Capture, words: str | None, label: str) -> None:
-    """Warn when a step's subject sits under its lead words on screen (the camera at `cam`)."""
-    if not words or not cap.subjects:
-        return
-    lay = b.layout
-    u0, u1, _, v1 = subject_box(lay)
+# --------------------------------------------------------------------------- #
+# Where a step's words sit
+# --------------------------------------------------------------------------- #
+
+# How much of the subject on screen a zone's words cover for their size (film/subject.py `under`; 1:
+# as much as anywhere on screen): a zone is clear at most WORDS_CLEAR, and the words keep their zone
+# unless another one covers WORDS_MARGIN less (so lines do not hop between zones for a few
+# per cent); words over more than WORDS_ON of it sit on the subject.
+WORDS_CLEAR, WORDS_MARGIN, WORDS_ON = 0.5, 0.25, 1.0
+WORDS_CONTRAST = 3.0  # WCAG 1.4.3 for large text: the words (120 units) over the picture behind their scrim
+
+
+def _crop(geo: Geometry, cam: Sequence[float]) -> tuple[float, float, float, float]:
+    """The part of the master a camera shows, as master fractions (x0, y0, x1, y1)."""
     hw, hh = geo.half(cam[2])
-    cx, cy = geo.centre(*cam)
-    below = (lay.lead_baseline + 30 * lay.unit) / lay.height
-    for h in cap.subjects:
-        u, v = (h.x - (cx - hw)) / (2 * hw), (h.y - (cy - hh)) / (2 * hh)
-        if u0 <= u <= u1 and v1 < v < below:
-            warning = f"{label}: subject {h.id} sits under the words {words!r} ({b.film.id})"
-            if warning not in b.warnings:
-                b.warnings.append(warning)
+    cx, cy = geo.centre(cam[0], cam[1], cam[2])
+    return cx - hw, cy - hh, cx + hw, cy + hh
+
+
+def _path(windows: list[dict[str, Any]], geo: Geometry, f0: int, f1: int, step: int) -> list[Any]:
+    """The crops a camera (hold windows) shows on frames f0, f0 + step, … and f1 − 1."""
+    from vantage.film.beat import Window, keyed, mix_cam
+
+    wins = [Window(w["a"], w["b"]) for w in windows]
+    cams = [(w["x"], w["y"], w["zoom"]) for w in windows]
+    frames = sorted({*range(f0, f1, max(1, step)), f1 - 1})
+    return [_crop(geo, keyed(wins, cams, f, mix_cam)) for f in frames]
+
+
+class _Placer:
+    """Chooses each step's words zone (`cut.words_set`) from where its subject is on screen while
+    the words are up (film/subject.py), and the contrast they keep over the picture."""
+
+    def __init__(self, project: Project, fonts: dict[str, Any], lay: Layout) -> None:
+        from vantage.film.cut import DATE, _cap_of, words_zones
+        from vantage.film.render import _hex
+        from vantage.film.subject import Seen
+
+        self.lay = lay
+        self.t = _stat_type(project, fonts, lay)
+        self.seen = Seen(project.masters_dir)
+        self.zones = words_zones(lay)
+        self.label_base = lay.label_top + _cap_of(self.t, DATE)  # a capture's date label baseline
+        c = project.brand.colors
+        self.paper, self.night = _hex(c.paper), _hex(c.night)
+
+    def curtain_base(self, label_top: float, scale: float) -> float:
+        """The baseline of a curtain's labels (film/cut.py `_typeset_curtain`)."""
+        from vantage.film.cut import CURTAIN_LABEL, _cap_of
+
+        return label_top + _cap_of(
+            self.t, dataclasses.replace(CURTAIN_LABEL, size=CURTAIN_LABEL.size * scale)
+        )
+
+    def set(self, words: str, zone: str, label_base: float) -> Any:
+        from vantage.film.cut import words_set
+
+        return words_set(self.t, self.lay, words, zone, label_base)
+
+    def aim_box(self, words: str, zone: str, label_base: float) -> Box:
+        """Where a push may put its subjects with the words in `zone`: above the low words
+        (`subject_box`), or below the high words and above the rail."""
+        from vantage.film.cut import RISE
+
+        if zone != "high":
+            return subject_box(self.lay)
+        lay, u = self.lay, self.lay.unit
+        u0, u1, _, _ = subject_box(lay)
+        bottom = self.set(words, zone, label_base).box[3]
+        return u0, u1, (bottom + (RISE + 40) * u) / lay.height, (lay.rail_y - 40 * u) / lay.height
+
+    def box(self, words: str, zone: str, label_base: float) -> tuple[float, float, float, float]:
+        """The words' ink in `zone` with their scrim's padding and rise, as frame fractions."""
+        from vantage.film.cut import RISE, WORDS_PAD
+
+        lay, u = self.lay, self.lay.unit
+        x0, y0, x1, y1 = self.set(words, zone, label_base).box
+        px, py = WORDS_PAD[0] * u, WORDS_PAD[1] * u
+        return (
+            (x0 - px) / lay.width, (y0 - py) / lay.height,
+            (x1 + px) / lay.width, (y1 + py + RISE * u) / lay.height,
+        )  # fmt: skip
+
+    def choose(
+        self,
+        b: _Builder,
+        label: str,
+        words: str,
+        label_base: float,
+        subject: Any,
+        files: Sequence[str],
+        paths: dict[str, list[Any]],
+        default: str,
+    ) -> dict[str, Any]:
+        """The zone for a step's words and why: `default` (the step before's zone, else the first)
+        while it is clear (`under` at most WORDS_CLEAR) or within WORDS_MARGIN of the least, else
+        the zone over the least of the subject (ties: zone order); a zone whose words keep less
+        than WORDS_CONTRAST over the picture is chosen only when every zone does. `paths`: the
+        crops the camera shows in each zone while the words are up; `files`: the pictures under
+        them. Warns when even that zone sits on the subject (`under` over WORDS_ON) or misses the
+        contrast."""
+        from vantage.film.cut import WORDS_SCRIM
+        from vantage.film.subject import contrast, under
+
+        on, ratio = {}, {}
+        for zone in self.zones:
+            box = self.box(words, zone, label_base)
+            on[zone] = round(under(subject, paths[zone], box), 3)
+            ratio[zone] = round(
+                min(
+                    contrast(self.seen, f, paths[zone], box, self.paper, self.night, WORDS_SCRIM)
+                    for f in files
+                ),
+                2,
+            )
+        legible = [z for z in self.zones if ratio[z] >= WORDS_CONTRAST] or list(self.zones)
+        order = {z: k for k, z in enumerate(self.zones)}
+        if subject is None:
+            zone, reason = (default if default in legible else legible[0]), "no subject"
+        else:
+            best = min(legible, key=lambda z: (on[z], order[z]))
+            if default in legible and on[default] <= WORDS_CLEAR:
+                zone, reason = default, "clear"
+            elif default in legible and on[default] <= on[best] + WORDS_MARGIN:
+                zone, reason = default, "near least subject"
+            else:
+                zone, reason = best, "least subject"
+        if on[zone] > WORDS_ON:
+            b.warnings.append(
+                f"{label}: the words {words!r} sit on the subject in every zone ({b.film.id}; "
+                f"{zone} covers {on[zone]:.1f}× its share of it)"
+            )
+        if ratio[zone] < WORDS_CONTRAST:
+            b.warnings.append(
+                f"{label}: the words {words!r} keep {ratio[zone]:.1f}:1 over the picture "
+                f"({b.film.id}; WCAG 1.4.3 asks {WORDS_CONTRAST:g}:1 of large text)"
+            )
+        return {"words_zone": zone, "words_reason": reason, "words_subject": on, "words_contrast": ratio}
 
 
 def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, part: _Series | _Curtain):
@@ -1184,6 +1311,7 @@ def derive_cut(
     px = width / film_size(settings, film.aspect, fast=False)[0]
     b = _Builder(project, film, grid, lay, warnings, paper_dip, px)
     b.tracks = Tracks(fps, enabled=has_tracks(film, settings))
+    b.placer = _Placer(project, fonts, lay)
     for part in images:
         geo = part.geometry
         if geo.s0 / b.px > film.max_upscale + 1e-9:
@@ -1228,28 +1356,19 @@ def derive_cut(
             vname = vname or s.masters_name
             heading, heading_facts = b.said(s.title, f"chapter {s.chapter!r} title")
             b.tracks.chapter(part_f0, heading or vname, heading_facts if heading else vname_facts)
+            last_zone: str | None = None  # a series' words keep their zone while it is clear
             for cap in s.captures:
                 n += 1
                 f0 = b.f
-                step, target = _push(b, s, cap, rest, zmax)
-                if id(cap) in still and target is not None:
-                    assert step is not None
-                    step.update(push=False, reason="two captures")
-                    target = None
-                quiet, stepped, pushing = film.beats
-                beats = quiet if step is None else (pushing if target else stepped)
-                if total_images == 1 or id(cap) in still:
-                    beats = max(beats, stepped)
+                step, target, beats, zone = _capture_step(
+                    b, s, cap, rest, zmax, pushed, still, total_images, last_zone
+                )
                 dissolve = None if n == 1 and b.prev and b.prev["kind"] == "title" else b.entry()
-                if b.prev is not None and not is_image(b.prev):
-                    cam.hold(f0, rest)
-                if pushed is not None and target is None:  # the previous push eases back from the
-                    cam.until(f0)  # dissolve on, as slowly as it went in (b.ease frames)
-                    cam.hold(f0 + b.ease, rest)
-                # (pushed and target: the camera glides from the last subject to this one)
-                if target is not None:
-                    cam.until(f0 + B)
-                    cam.hold(f0 + B + b.ease, target, f0 + beats * B)
+                _capture_camera(b, cam, f0, rest, pushed, target, beats)
+                if zone is not None:
+                    assert step is not None
+                    step.update(zone)
+                    last_zone = zone["words_zone"]
                 pushed = target
                 facts = list(dict.fromkeys([*cap.label_facts, *(step["facts"] if step else [])]))
                 text = [{"role": "label", "text": cap.label}]
@@ -1388,6 +1507,105 @@ def derive_cut(
     )
 
 
+def _capture_camera(
+    b: _Builder, cam: _Camera, f0: int, rest: Cam, pushed: Cam | None, target: Cam | None, beats: int
+) -> None:
+    """A capture's camera from its first frame: back to rest after a card or stat, easing back from
+    the previous push, or pushing in to `target` from beat 1."""
+    B = b.grid.fpb
+    if b.prev is not None and not is_image(b.prev):
+        cam.hold(f0, rest)
+    if pushed is not None and target is None:  # the previous push eases back from the
+        cam.until(f0)  # dissolve on, as slowly as it went in (b.ease frames)
+        cam.hold(f0 + b.ease, rest)
+    # (pushed and target: the camera glides from the last subject to this one)
+    if target is not None:
+        cam.until(f0 + B)
+        cam.hold(f0 + B + b.ease, target, f0 + beats * B)
+
+
+def _capture_step(
+    b: _Builder,
+    s: _Series,
+    cap: _Capture,
+    rest: Cam,
+    zmax: float,
+    pushed: Cam | None,
+    still: set[int],
+    total_images: int,
+    default: str | None = None,
+) -> tuple[dict[str, Any] | None, Cam | None, int, dict[str, Any] | None]:
+    """A capture's step record, push target, beats and (with words) its words zone record. Each
+    zone aims the push with its own subject box; the zone is chosen (`_Placer.choose`, keeping
+    `default`, the series' last words zone, while it is clear) from where the subject is on screen
+    from the words' landing (beat 1) to the shot's end along that camera path."""
+    film, B = b.film, b.grid.fpb
+
+    def plan(box: Box | None) -> tuple[dict[str, Any] | None, Cam | None, int]:
+        step, target = _push(b, s, cap, rest, zmax, box)
+        if id(cap) in still and target is not None:
+            assert step is not None
+            step.update(push=False, reason="two captures")
+            target = None
+        quiet, stepped, pushing = film.beats
+        beats = quiet if step is None else (pushing if target else stepped)
+        if total_images == 1 or id(cap) in still:
+            beats = max(beats, stepped)
+        return step, target, beats
+
+    placer = b.placer
+    words = cap.step and _push_words(b, s, cap)
+    if placer is None or not words or cap.step is None:
+        return (*plan(None), None)
+    from vantage.film.subject import subject_map
+
+    f0 = b.f
+    keep = b.warnings
+    paths: dict[str, list[Any]] = {}
+    for zone in placer.zones:  # dry runs: their warnings are dropped, the chosen zone's kept below
+        b.warnings = []
+        try:
+            _, target, beats = plan(placer.aim_box(words, zone, placer.label_base))
+        finally:
+            b.warnings = keep
+        scratch = _Camera()
+        scratch.windows = [dict(w) for w in b.camera.windows]
+        _capture_camera(b, scratch, f0, rest, pushed, target, beats)
+        scratch.until(f0 + beats * B)
+        paths[zone] = _path(scratch.windows, s.geometry, f0 + B, f0 + beats * B, b.grid.third)
+    requested = cap.step.film.focus if cap.step.film and cap.step.film.focus else cap.step.focus
+    points = [(h.x, h.y) for h in cap.subjects]
+    if requested:
+        points.insert(0, (requested[0], requested[1]))
+    subject = subject_map(placer.seen, cap.file, cap.before, points)
+    zone = placer.choose(
+        b,
+        f"{s.chapter} {cap.date}",
+        words,
+        placer.label_base,
+        subject,
+        [cap.file],
+        paths,
+        default or placer.zones[0],
+    )
+    step, target, beats = plan(placer.aim_box(words, zone["words_zone"], placer.label_base))
+    return step, target, beats, zone
+
+
+def _push_words(b: _Builder, s: _Series, cap: _Capture) -> str | None:
+    """The words a capture's step prints (as `_push` resolves them), without warnings."""
+    assert cap.step is not None
+    raw, _ = lead_words(cap.step)
+    if not raw:
+        return None
+    keep = b.warnings
+    b.warnings = []
+    try:
+        return b.say()(raw, "words")
+    finally:
+        b.warnings = keep
+
+
 def _poster(b: _Builder, images: Sequence[_Series | _Curtain]) -> int:
     """The poster frame: the latest capture shown at rest and without its words (the frame before
     a step's words land, else its last frame), once its dissolve is over and the camera is back at
@@ -1491,6 +1709,10 @@ def _curtain_shot(
     steps: list[dict[str, Any]] = []
     t = f0 + B
     target = rest
+    tagged = project.config.simulated or project.config.draft
+    scale, label_top, (wb, wa) = _curtain_labels(project, fonts, lay, [before_label, after_label], tagged)
+    placer = b.placer
+    zone = placer.zones[0] if placer is not None else None  # each line keeps the last line's zone if clear
     for j, step, split in c.steps:
         record: dict[str, Any] = {"index": j, "split": split, "f0": t, "words": None, "words_from": None}
         target = rest
@@ -1513,12 +1735,17 @@ def _curtain_shot(
                     target = aimed_cam
         cam.until(t)
         cam.hold(t + 2 * B, target, t + 4 * B)
+        if placer is not None and zone is not None and record["words"]:
+            record.update(
+                _curtain_zone(
+                    b, c, f"{c.chapter} step {j}", step, record["words"], placer, (scale, label_top), t, zone
+                )
+            )
+            zone = record["words_zone"]
         keys.append({"a": t + 2 * B, "b": t + 4 * B, "split": split})
         steps.append(record)
         t += 4 * B
     # Labels show only while the rule (3 units wide) is at least 8 px clear of their ink.
-    tagged = project.config.simulated or project.config.draft
-    scale, label_top, (wb, wa) = _curtain_labels(project, fonts, lay, [before_label, after_label], tagged)
     ink = [lay.margin + wb, lay.right - wa]
     half = 1.5 * lay.unit
     from vantage.film.beat import Window, keyed, lerp
@@ -1564,6 +1791,32 @@ def _curtain_shot(
         if file not in hashes:
             hashes[file] = _sha256(project.masters_dir / file)
     return None if target == rest else target
+
+
+def _curtain_zone(
+    b: _Builder,
+    c: _Curtain,
+    label: str,
+    step: Step | None,
+    words: str,
+    placer: _Placer,
+    labels: tuple[float, float],
+    t: int,
+    default: str,
+) -> dict[str, Any]:
+    """The zone of a curtain step's line, up from the sweep's downbeat `t` to the next sweep (4
+    beats), over the camera's path; its subject is the step's focus and what changed from before to
+    after (a curtain shows both: the contrast is the least over either picture)."""
+    from vantage.film.subject import subject_map
+
+    B = b.grid.fpb
+    base = placer.curtain_base(labels[1], labels[0])
+    path = _path(b.camera.windows, c.geometry, t, t + 4 * B, b.grid.third)
+    requested = (step.film.focus if step.film and step.film.focus else step.focus) if step else None
+    points = [(requested[0], requested[1])] if requested else []
+    subject = subject_map(placer.seen, c.after.file, c.before.file, points)
+    paths = dict.fromkeys(placer.zones, path)  # a curtain's push has no subjects: one path for all zones
+    return placer.choose(b, label, words, base, subject, [c.before.file, c.after.file], paths, default)
 
 
 def _curtain_tracks(

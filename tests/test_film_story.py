@@ -980,10 +980,11 @@ def test_push_target_shows_subject(tmp_path):
             assert abs(cx - rx) <= MAX_TRAVEL * 2 * geo.half(1.0)[0] + 1e-9
 
 
-def test_push_keeps_its_subject_above_the_words(tmp_path, monkeypatch):
-    """In 9:16 the lead words sit at .60H: a push puts its subject above them, not at the centre."""
+def test_push_keeps_its_subject_clear_of_the_words(tmp_path, monkeypatch):
+    """A push frames its subject inside its words zone's subject box: above the low words (9:16
+    lead baseline .60H), or below the high words and above the rail."""
     import test_film
-    from vantage.film.story import subject_box
+    from vantage.film.story import _Placer
 
     big = (1280, 800)
     monkeypatch.setattr(test_film, "SIZE", big)
@@ -999,8 +1000,11 @@ def test_push_keeps_its_subject_above_the_words(tmp_path, monkeypatch):
     _, cy = geo.centre(x, y, z)
     hh = geo.half(z)[1]
     v = (0.7 - (cy - hh)) / (2 * hh)
-    v1 = subject_box(Layout.from_record(p["width"], p["height"], p["layout"]))[3]
-    assert v <= v1 + 1e-9 < p["layout"]["lead_baseline"] / p["height"], (v, v1)
+    placer = _Placer(project, p["inputs"]["fonts"], Layout.from_record(p["width"], p["height"], p["layout"]))
+    _, _, v0, v1 = placer.aim_box(step["words"], step["words_zone"], placer.label_base)
+    words = placer.box(step["words"], step["words_zone"], placer.label_base)
+    assert v0 - 1e-9 <= v <= v1 + 1e-9, (v, v0, v1, step["words_zone"])
+    assert not words[1] <= v <= words[3], (v, words)
 
 
 def test_poster_is_at_rest_without_words(tmp_path):
@@ -1015,15 +1019,122 @@ def test_poster_is_at_rest_without_words(tmp_path):
     assert cut.camera(p["poster"])[2] == 1.0
 
 
-def test_subject_under_the_words_is_a_warning(tmp_path):
-    """When the camera cannot lift a subject above the 9:16 lead words (no zoom to spare), the plan
-    says so."""
-    steps = [STEPS[0], {**STEPS[1], "focus": [0.5, 0.58, 1.4]}]
-    hotspots = [{"id": "pad", "x": 0.5, "y": 0.58, "label": "The pad", "to": DATES[1]}]
-    plan = _plan(tiny(tmp_path / "p", steps=steps, hotspots=hotspots, film={"vertical": True}), "9x16")
-    assert any("subject pad sits under the words 'Demolition.' (9x16)" in w for w in plan.warnings), (
-        plan.warnings
+def _changed_at(root: Path, spots: dict[str, list[tuple[float, float]]]) -> None:
+    """Masters that are one textured picture on every date, plus a bright square (0.12 × 0.10 of the
+    master) at each (x, y) listed for a date and every date after it: what changes is only there."""
+    rng = np.random.default_rng(7)
+    base = np.empty((SIZE[1], SIZE[0], 3), np.float32)
+    base[:] = (70, 110, 90)
+    base += rng.normal(0, 6, base.shape).astype(np.float32)
+    shown: list[tuple[float, float]] = []
+    for date in DATES:
+        shown += spots.get(date, [])
+        img = base.copy()
+        for x, y in shown:
+            x0, y0 = round((x - 0.06) * SIZE[0]), round((y - 0.05) * SIZE[1])
+            img[y0 : y0 + round(0.10 * SIZE[1]), x0 : x0 + round(0.12 * SIZE[0])] = (235, 240, 245)
+        cv2.imwrite(str(root / "masters" / "site" / f"{date}.jpg"), np.clip(img, 0, 255).astype(np.uint8))
+
+
+QUIET_STEPS = [STEPS[0], {"capture": DATES[2], "text": "**Demolition.** In ten weeks the slides are gone."}]
+
+
+def _words_step(plan: FilmPlan) -> dict[str, Any]:
+    return next(
+        s["step"] for s in plan.plan["shots"] if s.get("step") and s["step"]["words"] == "Demolition."
     )
+
+
+@pytest.mark.parametrize(("y", "zone"), [(0.62, "high"), (0.24, "low")])
+def test_words_sit_clear_of_what_changed(tmp_path, y, zone):
+    """In 9:16 a step's words go high when what changed since the previous capture is under the low
+    zone, and stay low (the default) when it is up top. No focus, no hotspot: the change alone."""
+    root = tmp_path / "p"
+    project = tiny(root, steps=QUIET_STEPS, film={"vertical": True}, simulated=True)
+    _changed_at(root, {DATES[2]: [(0.5, y)]})
+    plan = _plan(project, "9x16")
+    step = _words_step(plan)
+    assert step["words_zone"] == zone, step
+    assert step["words_reason"] == ("least subject" if zone == "high" else "clear"), step
+    assert step["words_subject"]["low" if zone == "high" else "high"] > 1.0, step  # the other is on it
+    assert step["words_subject"][zone] < 0.5 and step["words_contrast"][zone] >= 3.0, step
+    assert not any("sit on the subject" in w for w in plan.warnings), plan.warnings
+    # The renderer sets them there: under the date label in the high zone, at the lead baseline in
+    # the low one, inside the safe zone either way.
+    cut = _Cut(project, plan)
+    shot = next(s for s in plan.plan["shots"] if s.get("step") is step)
+    ink = next(i["box"] for i in cut.ink if i["shot"] == shot["id"] and i["layer"] == "words")
+    label = next(i["box"] for i in cut.ink if i["shot"] == shot["id"] and i["layer"] == "label")
+    lay = cut.lay
+    assert ink[1] > label[1] + label[3]  # below the date label
+    if zone == "high":
+        assert ink[1] + ink[3] < 0.4 * cut.height, ink
+    else:
+        assert ink[1] < lay.lead_baseline < ink[1] + ink[3], ink
+    x0, y0, x1, y1 = lay.rect
+    assert x0 - 1 <= ink[0] and ink[0] + ink[2] <= x1 + 1 and y0 - 1 <= ink[1] and ink[1] + ink[3] <= y1 + 1
+
+
+def test_landscape_words_move_off_a_low_left_subject(tmp_path):
+    """16:9 has three zones (low, low-right, high): a change under the low-left words moves them to
+    the zone over the least of it, and the plan records every zone's measure."""
+    root = tmp_path / "p"
+    project = tiny(root, steps=QUIET_STEPS)
+    _changed_at(root, {DATES[2]: [(0.12, 0.8)]})
+    step = _words_step(_plan(project, "16x9"))
+    assert set(step["words_subject"]) == {"low", "low-right", "high"}, step
+    assert step["words_zone"] in ("low-right", "high") and step["words_subject"]["low"] > 1.0, step
+
+
+def test_words_on_the_subject_in_every_zone_is_a_warning(tmp_path):
+    """A change under both 9:16 zones: the words take the zone over the least of it, with a warning."""
+    root = tmp_path / "p"
+    project = tiny(root, steps=QUIET_STEPS, film={"vertical": True})
+    _changed_at(root, {DATES[2]: [(0.45, 0.25), (0.45, 0.6)]})
+    plan = _plan(project, "9x16")
+    assert any(
+        "the words 'Demolition.' sit on the subject in every zone (9x16" in w for w in plan.warnings
+    ), plan.warnings
+
+
+def test_curtain_line_sits_clear_of_its_push(tmp_path):
+    """A curtain step's line goes high in 9:16 when its push's subject (the step's focus, low on
+    screen) and what changed are under the low zone."""
+    root = tmp_path / "p"
+    compare = {**COMPARE, "steps": [{"text": "The pad.", "split": 0.5, "focus": [0.5, 0.62, 1.3]}]}
+    project = tiny(root, steps=QUIET_STEPS, chapters=[compare], film={"vertical": True})
+    _changed_at(root, {DATES[4]: [(0.5, 0.64)]})
+    curtain = next(s for s in _plan(project, "9x16").plan["shots"] if s["kind"] == "curtain")
+    step = curtain["steps"][0]
+    assert step["words"] == "The pad." and step["words_zone"] == "high", step
+
+
+def test_curtain_lines_hand_off_without_overlap(tmp_path):
+    """Consecutive curtain lines share a zone: the first is out by the downbeat the next lands on."""
+    compare = {
+        **COMPARE,
+        "steps": [{"text": "Then.", "split": 0.8}, {"text": "Now.", "split": 0.3}],
+    }
+    project = tiny(tmp_path / "p", chapters=[compare])
+    plan = _plan(project)
+    curtain = next(s for s in plan.plan["shots"] if s["kind"] == "curtain")
+    first, second = curtain["steps"]
+    assert (first["words"], second["words"]) == ("Then.", "Now.")
+    cut = _Cut(project, plan)
+    land = second["land"]
+    assert cut._line(curtain, 0, land - cut.third - 1) == (1.0, 1.0)  # whole until B/3 before
+    assert 0.0 < cut._line(curtain, 0, land - cut.third)[1] < 1.0
+    assert cut._line(curtain, 0, land - 1)[1] == 0.0  # out the frame before the next one lands
+    for f in range(land, land + cut.third + 1):  # out while the next one fades in
+        assert cut._line(curtain, 0, f)[1] == 0.0, f
+    assert cut._line(curtain, 1, land - 1) == (0.0, 0.0) and cut._line(curtain, 1, land + cut.third)[0] == 1.0
+
+
+def test_words_plan_is_deterministic(tmp_path):
+    root = tmp_path / "p"
+    project = tiny(root, steps=QUIET_STEPS, film={"vertical": True})
+    _changed_at(root, {DATES[2]: [(0.5, 0.62)]})
+    assert _plan(project, "9x16").hash == _plan(project, "9x16").hash
 
 
 def test_push_eases_back_as_slowly_as_it_went_in(tmp_path):
@@ -1139,8 +1250,8 @@ def test_gate_hints_at_vantage_fast(tmp_path, monkeypatch):
 def test_demo_story_cut(tmp_path):
     """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 74 beats,
     the 9:16 72 (the fast masters clamp a push the full-size ones make),
-    the Demolition push frames the slide tower in 16:9 and keeps its reach in 9:16, and the stats
-    print exactly the three figures the cut chooses."""
+    the Demolition push frames the slide tower in 16:9 and keeps its reach in 9:16, the stats
+    print exactly the three figures the cut chooses, and "The beach." sits clear of the beach."""
     import shutil
 
     from vantage.demo import synth
@@ -1195,3 +1306,7 @@ def test_demo_story_cut(tmp_path):
         assert hows[2] == "focus+subject:beach" or fid == "9x16", hows
         end = p["shots"][-1]
         assert end["ride"] and end["f1"] - end["f0"] <= 6 * p["fps"] and end["f1"] == p["frames"]
+        # "The beach." leaves the beach and splash pad it names: in 9:16 it goes up over the water.
+        beach = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["words"] == "The beach.")
+        assert beach["words_subject"][beach["words_zone"]] <= 0.5, beach
+        assert beach["words_zone"] == "high" or fid == "16x9", beach

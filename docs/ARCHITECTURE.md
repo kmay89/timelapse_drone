@@ -64,6 +64,8 @@ src/vantage/
                          end; degrade for 1–2 captures; subject-aware push targets and zoom clamps
     cut.py               renders story plans: pure frame(f) (pyramid warps, dissolves, words, rail, tag,
                          curtain splits, tabular stat figures, surface dips)
+    subject.py           where a step's subject is on a master (its focus, changed hotspots and what changed
+                         since the previous capture) and how much of it, and what contrast, a box keeps on screen
     safety.py            photosensitivity: static plan check and the per-frame luminance (flash) meter
     render.py            renders plans to MP4 + web copy + poster (classic `_Film`, shared drawing code, the
                          encode, ink checks, films side by side in worker processes)
@@ -608,7 +610,7 @@ clamp a push).
   - Words: `film.line`, else the step's leading `**bold**` run, resolved through the facts (a
     do-not-print fact drops the words with a warning). They land at beat 1 (`step.land`; on the
     film's first image too, so the picture plays clean for a beat after the title), rise 14 units while fading in over B/3 frames, and fade out with the next
-    dissolve.
+    dissolve. Where they sit is chosen per step (see **Words zones**).
   - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`) and holds
     to the end of the shot. It eases back as slowly as it went in: over B + B/3 frames from the next
     shot's first frame (through its dissolve), or, when the next shot pushes too, the camera glides
@@ -634,6 +636,11 @@ clamp a push).
   - Words (landing on the sweep's downbeat, out at the next sweep): `film.line`, else the step's
     `**bold**` lead, else its first sentence when that prints at most 40 characters
     (`story.curtain_words`), so the centrepiece is not silent; the full step text is for the tracks.
+    A line followed by another fades out over the B/3 frames before the next downbeat instead, so
+    two lines are never on screen over each other (`cut._line`). Each line's zone is chosen like a
+    capture step's (see **Words zones**): its subject is the step's focus and what changed from
+    before to after, along the camera from its landing to the next sweep; it keeps the previous
+    line's zone while that is clear.
   - Labels: `before_label` / `after_label` (else the capture labels) at the top-left and top-right,
     44 units, shrunk (`label_scale`) so each fits between its text edge and a rule at the centre, and
     set under the tag when the tag is top-right (`label_top`). `label_ink` holds the inner ink edges
@@ -752,8 +759,31 @@ clamp a push).
   subject far outside the portrait crop at rest), the push aims at the step's focus, capped to the
   reach (`focus, subject off-frame:<ids>`, with a plan warning) rather than whipping across the
   master to a subject the viewer never saw.
-  A step whose subject still sits under its lead words on screen (between the subject box and
-  30 units below the lead baseline: no zoom to spare to lift it) gets a plan warning.
+  The subject box follows the step's words zone: in the `high` zone it runs from the high words'
+  ink bottom + 54 units (their rise and a gap) to the rail − 40 units, so a push frames its subjects
+  below the words instead.
+- **Words zones** (`cut.words_set`, `cut.WORDS_ZONES`; chosen by `story._Placer`): a step's words
+  sit in one of the layout's zones. 9:16: `low` (the lead baseline .60H, the default) or `high` (from
+  the left margin, the ink top of "Hdl" 44 units under the label line: the date label's baseline,
+  or the curtain labels'; .20–.26H at 1080 × 1920, inside the safe zone and clear of the label and
+  rail). 16:9 and the screen: `low`, `low-right` (the lead baseline, the ink ending on the right
+  text edge) or `high`. For each zone the push is aimed with that zone's subject box, and the
+  camera path from the words' landing to the shot's end (every B/3 frames) is projected onto the
+  step's **subject** (film/subject.py): Gaussian spots (σ = 0.03 of the master's width) on the step's
+  focus point and its subject hotspots (half the weight), plus the region that changed between the
+  vantage's previous capture and this one (the other half: the CIELAB difference of the two masters
+  at 256 px wide, blurred by σ = 0.02 of the width, less its median, clipped at 0; a change
+  everywhere frames nothing). `words_subject[zone]` is how much of the subject on screen the words'
+  box (their ink plus the scrim's padding and the rise) covers for its size (1: as much as anywhere
+  on screen, 0: none), averaged over the path; `words_contrast[zone]` the least contrast ratio of the
+  words' colour over the picture under that box behind its 0.5 night scrim (mixed in display gamma)
+  against the 95th-percentile luminance under it, along the path (both pictures of a curtain). A
+  zone under 3:1 (WCAG 1.4.3, large text) is taken only when every zone is. The step keeps its
+  default zone (a series' or curtain's previous words zone, else the first) while it covers at most
+  0.5 (`words_reason: clear`) or within 0.25 of the least (`near least subject`); else it moves to
+  the zone over the least (`least subject`; ties: zone order). No focus, hotspot or change: the
+  default (`no subject`). When even the chosen zone covers more than 1.0, the plan warns that the
+  words sit on the subject in every zone; under 3:1, that the words miss the contrast.
 - **Zoom clamp**: s0 = max(W/mw, H/mh); z_eff = clamp(z, 1, max(1, max_upscale/s0)). Warnings when
   z_eff < z ("push clamped"), s0·z_eff > 1.25 ("soft push") and s0 > max_upscale ("master upscaled
   even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a
@@ -938,14 +968,17 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
   <curtain or stat id> | "night" | "paper", f0, f1}` or null on the film's first image), `series` (ordinal), `rail` (index on the
   series' rail), `step` (null or `{index, words, words_from: film.line | lead | null,
   focus_requested, focus [x, y, z_eff], target, subjects, z_eff, upscale, push, reason, land,
-  push_f0, push_f1}`). Text roles `label`, `words`.
+  push_f0, push_f1}`, and with words `words_zone` (low | high | low-right), `words_reason` (clear |
+  near least subject | least subject | no subject), `words_subject` and `words_contrast` ({zone:
+  measure}); see **Words zones**). Text roles `label`, `words`.
 - `card` (`K1…`): `vantage`, `dip` (frames). Text roles `kicker`, `title`.
 - `curtain` (`C1…`): `vantage`, `before`, `after` (dates), `before_file`, `after_file`, `labels`
   [before, after], `label_scale`, `label_top` (cap-top px), `label_ink` [right edge of the before
   label, left edge of the after label] (px), `reveal` [[[f0, f1], …] per label], `dissolve` (as a
   capture's, or null), `from_after`, `keys` [{a, b, split}], `steps` [{index, split, f0 (sweep start),
   words, words_from: film.line | lead | sentence | null, land, focus_requested, and when focused: focus, target,
-  subjects, z_eff, upscale, push, reason}]. Text roles `before`, `after`, `words`.
+  subjects, z_eff, upscale, push, reason; with words `words_zone`, `words_reason`, `words_subject`,
+  `words_contrast`}]. Text roles `before`, `after`, `words`.
 - `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper: the panel's tint, or
   the plain card's surface), `backdrop` (picture | plain), with a picture `vantage`, `capture`,
   `file`; `place` (low | high), `dissolve` (as a capture's: the first of a run over a picture, else
