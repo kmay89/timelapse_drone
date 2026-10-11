@@ -17,8 +17,12 @@
              a panel tinted by the chapter's surface; the first dissolves in, the next start on the
              beat and only their text crossfades; a stat whose fact a hotspot prints pushes toward
              it. The figure is the fact's text and never counts. (`stats_surface`: a plain card.)
-    card     between consecutive images of different vantages: the chapter's kicker and title on
-             night, dipped in and out
+    montage  one per gallery chapter on a drone vantage other than the main one: up to `montage` (5)
+             of its captures spread evenly from first to last, 2 beats each, dissolving on the beat
+             with no card; its kicker (or film.line, or title) lands over the first picture on beat
+             1; no push, a 4 % drift over the run
+    card     between consecutive series or curtains of different vantages: the chapter's kicker and
+             title on night, dipped in and out
     end      one card: a dip to night, then the brand, credits, URL, the honesty line and fine
              print, at most END_MAX_S with its dip when it reads in that time; else the honesty
              line rides under the stats
@@ -28,6 +32,9 @@ rail's knob sweeping back to its first tick) and closes with a `dip` back to pur
 (one past the last) equals frame 0. Its end card is only the brand and the short URL, every text
 it prints needs releasable facts (unless the project is a draft), and its end card is lengthened by a beat
 when needed so the film is a whole number of GOPs (2 beats).
+
+Where a montage or a stat run dissolves in from another vantage's picture, that picture keeps its
+last framing through the dissolve (`dissolve.cam`) and the camera cuts to the new rest view.
 
 Every shot start, dissolve start, sweep, push start and word landing is a multiple of B
 (film/beat.py). Push targets are clamped so a master is never enlarged beyond `max_upscale` and
@@ -50,6 +57,7 @@ from vantage.config import (
     FACT_TOKEN_RE,
     CaptureNote,
     CompareChapter,
+    GalleryChapter,
     HeroChapter,
     Hotspot,
     Project,
@@ -274,15 +282,20 @@ def main_vantage(project: Project, index: MastersIndex) -> str | None:
 
 
 def in_scope(project: Project, film: FilmDef, index: MastersIndex, warnings: list[str]) -> list[int]:
-    """Indices of the chapters a film uses: all, main (the main vantage's chapters plus stats) or ids."""
+    """Indices of the chapters a film uses: all, main (the main vantage's chapters, stats and gallery
+    chapters, whose montages show other vantages) or ids."""
     ids = _chapter_ids(project)
     chapters = project.story.chapters
     if film.chapters == "all":
         return list(range(len(chapters)))
-    if film.chapters == "main":
+    if film.chapters == "main":  # plus the montages of the other vantages' gallery chapters
         main = main_vantage(project, index)
         return [
-            i for i, ch in enumerate(chapters) if getattr(ch, "vantage", None) == main or ch.type == "stats"
+            i
+            for i, ch in enumerate(chapters)
+            if getattr(ch, "vantage", None) == main
+            or ch.type == "stats"
+            or (isinstance(ch, GalleryChapter) and ch.vantage is not None)
         ]
     wanted = list(film.chapters)
     unknown = [c for c in wanted if c not in ids]
@@ -388,6 +401,61 @@ def _fallback_series(project: Project, caps: _Captures, vid: str, size: tuple[in
     return _Series(
         None, vid, name, None, None, caps.of(vid), geo, (pf[0], pf[1]), caps.index.vantages[vid].name
     )
+
+
+@dataclass
+class _Montage(_Series):
+    """A gallery chapter of another drone vantage as a montage: `captures` spread evenly over the
+    chapter's captures (first and last included), and the words over its first picture."""
+
+    words: str | None = None  # raw: film.line, else the kicker, else the title
+    words_from: str | None = None  # film.line | kicker | title
+
+
+def _montage(
+    project: Project,
+    chapter_index: int,
+    ch: GalleryChapter,
+    caps: _Captures,
+    size: tuple[int, int],
+    *,
+    main: str | None,
+    count: int,
+) -> _Montage | None:
+    """A gallery chapter's montage, or None: no vantage, the main vantage (it plays as the scrub),
+    `film.skip`, a montage cap of 0, a vantage films do not show (not a drone) or one with fewer than
+    two captures (a warning)."""
+    vid = ch.vantage
+    if vid is None or vid == main or count < 2 or (ch.film is not None and ch.film.skip):
+        return None
+    vantage = next((v for v in project.story.vantages if v.id == vid), None)
+    if vantage is not None and vantage.kind != "drone":
+        return None  # film_vantages has warned
+    where = f"chapter {_chapter_ids(project)[chapter_index]!r}"
+    if vid not in caps.index.vantages:
+        caps.warnings.append(f"{where}: vantage {vid!r} has no masters; left out of the films")
+        return None
+    every = caps.of(vid)
+    if ch.captures and every:
+        dates = [c.date for c in every]
+        every = [every[k] for k in sorted({resolve_capture_ref(r, dates) for r in ch.captures})]
+    if len(every) < 2:
+        caps.warnings.append(f"{where}: fewer than two captures for a montage; left out of the films")
+        return None
+    n = min(count, len(every))
+    last = len(every) - 1
+    picks = sorted({(2 * k * last + n - 1) // (2 * (n - 1)) for k in range(n)})  # k·last/(n−1), half up
+    words, source = ch.title, "title"
+    if ch.film is not None and ch.film.line:
+        words, source = ch.film.line, "film.line"
+    elif ch.kicker:
+        words, source = ch.kicker, "kicker"
+    name, pf = _vantage_info(project, caps, vid)
+    return _Montage(
+        _chapter_ids(project)[chapter_index], vid, name, ch.kicker, ch.title, [every[k] for k in picks],
+        _geometry(project, caps.index, vid, *size), pf, caps.index.vantages[vid].name,
+        words=words, words_from=source if words else None,
+    )  # fmt: skip
 
 
 @dataclass
@@ -522,6 +590,20 @@ class _Camera:
     def until(self, f: int) -> None:
         self.windows[-1]["b"] = max(self.windows[-1]["b"], f)
 
+    def at(self, f: int) -> Cam:
+        """The camera on frame f (as film/cut.py evaluates it)."""
+        from vantage.film.beat import Window, keyed, mix_cam
+
+        wins = [Window(w["a"], w["b"]) for w in self.windows]
+        cam = keyed(wins, [(w["x"], w["y"], w["zoom"]) for w in self.windows], f, mix_cam)
+        return cam[0], cam[1], cam[2]
+
+    def cut(self, f: int, cam: Cam) -> None:
+        """Cut to `cam` on frame f: the windows before hold through f − 1, so no frame shows a
+        camera in between (only on a dissolve between two vantages, see `_Builder.cross`)."""
+        self.until(f - 1)
+        self.hold(f, cam)
+
 
 @dataclass
 class _Builder:
@@ -593,6 +675,17 @@ class _Builder:
             "f0": f0,
             "f1": f0 + D,
         }
+
+    def cross(self, vantage: str, dissolve: dict[str, Any] | None, rest: Cam) -> bool:
+        """A dissolve from another vantage's picture: that picture keeps the framing of its last frame
+        through the dissolve (`dissolve.cam`), and the camera cuts to this shot's `rest` on its
+        first frame, so one vantage's push never frames the other. Returns whether it did."""
+        prev = self.prev
+        if dissolve is None or not is_image(prev) or prev is None or prev.get("vantage") in (None, vantage):
+            return False
+        dissolve["cam"] = list(self.camera.at(self.f - 1))
+        self.camera.cut(self.f, rest)
+        return True
 
     def dip(self, surface: str) -> int:
         """Frames of the dip into a `surface` shot starting now."""
@@ -1048,6 +1141,7 @@ def _stats(
                 cam.until(f0 + dip)
         elif k == 0:
             dissolve = b.entry()
+            b.cross(on.vantage, dissolve, rest)  # from another vantage: the camera cuts to rest
         entry = dissolve["f1"] - dissolve["f0"] if dissolve else dip
         # The first figure lands on the first beat after its entry; the next ones on their first
         # frame, as the text before them crossfades out. Label and source fade in with the figure
@@ -1254,6 +1348,10 @@ def derive_cut(
         elif isinstance(ch, CompareChapter):
             if c := _curtain(project, i, ch, caps, ch.vantage, size):
                 parts.append(("curtain", c))
+        elif isinstance(ch, GalleryChapter):
+            main_vid = main_vantage(project, index)
+            if m := _montage(project, i, ch, caps, size, main=main_vid, count=film.montage):
+                parts.append(("montage", m))
         elif isinstance(ch, StatsChapter) and not any(k == "stats" for k, _ in parts):
             items = (
                 _stat_items(project, ids[i], ch, film.stats, warnings, releasable_only=strict)
@@ -1280,7 +1378,7 @@ def derive_cut(
     if not every:
         raise FileNotFoundError(f"no masters to film in {project.masters_dir}; run `vantage process` first")
     assert main is not None
-    stats = [p for p in parts if p[0] == "stats"]
+    stats = [p for p in parts if p[0] in ("stats", "montage")]  # kept, in story order, when degrading
     still: set[int] = set()  # id() of captures that must not push (the two-capture cut's before)
     if len(every) <= 2:
         series = next((s for k, s in parts if k == "series" and s.vantage == main), None)
@@ -1304,6 +1402,7 @@ def derive_cut(
     elif not any(k in ("series", "curtain") for k, _ in parts):
         parts.insert(0, ("series", _fallback_series(project, caps, main, size)))
     images = [p for k, p in parts if k in ("series", "curtain")]
+    montages: list[_Montage] = [p for k, p in parts if k == "montage"]
     total_images = sum(len(p.captures) if isinstance(p, _Series) else 1 for p in images)
 
     # Pushes are clamped at the full size (max_upscale is in full-size output px), so a VANTAGE_FAST
@@ -1312,7 +1411,7 @@ def derive_cut(
     b = _Builder(project, film, grid, lay, warnings, paper_dip, px)
     b.tracks = Tracks(fps, enabled=has_tracks(film, settings))
     b.placer = _Placer(project, fonts, lay)
-    for part in images:
+    for part in [*images, *montages]:
         geo = part.geometry
         if geo.s0 / b.px > film.max_upscale + 1e-9:
             text = (
@@ -1411,6 +1510,10 @@ def derive_cut(
         elif kind == "curtain":
             pushed = _curtain_shot(b, part, fonts, hashes, part_f0)
             last_vantage = part.vantage
+        elif kind == "montage":
+            series_no += 1
+            n, pushed = _montage_shots(b, part, hashes, n, series_no)
+            last_vantage = part.vantage
         else:
             cid, tint, items, heading, heading_facts, plain = part
             b.tracks.chapter(part_f0, heading, heading_facts)
@@ -1461,7 +1564,7 @@ def derive_cut(
             if file:
                 mv = index.vantages[shot["vantage"]]
                 masters[file] = {"sha256": hashes[file], "w": mv.width, "h": mv.height}
-    poster = _poster(b, images)
+    poster = _poster(b, [*images, *montages])
     plan: dict[str, Any] = {
         "slug": project.slug,
         "cut": "story",
@@ -1640,14 +1743,16 @@ def _capture_tracks(
     vname_facts: Sequence[str],
     *,
     first: bool,
+    words_facts: Sequence[str] = (),
 ) -> None:
     """A capture's caption cue ('<label>. <words>', plus its note when that still reads at 17
-    characters per second) and transcript line (the step's full text, else the note)."""
+    characters per second) and transcript line (the step's full text, else the note). `words_facts`:
+    the facts of words that are not a step's (a montage's)."""
     d = shot["dissolve"]
     start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
     step = shot["step"]
     words = step["words"] if step else None
-    words_facts: list[str] = []
+    words_facts = list(words_facts) if words else []
     if words and cap.step is not None:
         raw, _ = lead_words(cap.step)
         _, words_facts = b.said(raw, f"chapter {s.chapter!r} step {cap.step_index} film words")
@@ -1667,6 +1772,110 @@ def _capture_tracks(
         on = f" on {' and '.join(labels)}" if labels else ""
         line = sentence(line, f"The camera moves in{on}.")
     b.tracks.line(start, line, facts)
+
+
+MONTAGE_BEATS = 2  # a montage picture's beats (at least the film's quiet capture beats)
+
+
+def _montage_shots(
+    b: _Builder, m: _Montage, hashes: dict[str, str], n: int, series_no: int
+) -> tuple[int, Cam | None]:
+    """A gallery chapter's montage: one capture shot (`montage: true`) per picture, MONTAGE_BEATS
+    each, every one dissolving in on its first beat, no card (from another vantage the outgoing
+    picture keeps its framing, `_Builder.cross`). The words (film.line, else the kicker, else the
+    title) land on the first picture's beat 1, in the zone clear of what changes over the montage,
+    and it lasts until they read; no push, only a drift in of DRIFT from the rest view over the
+    whole run. Returns the last shot number and the camera the run ends on."""
+    project, film, B, third = b.project, b.film, b.grid.fpb, b.grid.third
+    cam, geo = b.camera, m.geometry
+    rest = b.rest(m)
+    f0 = b.f
+    quiet = max(MONTAGE_BEATS, film.beats[0])
+    words, words_facts = b.said(m.words, f"chapter {m.chapter!r} film words")
+    first = quiet
+    if words:  # the words land on beat 1 and stay until they read at 17 characters a second
+        first = max(quiet, -(-(B + third + cue_frames(words, b.grid.fps)) // B))
+    beats = [first] + [quiet] * (len(m.captures) - 1)
+    end = f0 + sum(beats) * B
+    dissolve = b.entry()
+    if not b.cross(m.vantage, dissolve, rest):
+        if is_image(b.prev):  # the same vantage: ease back from where it was
+            cam.until(f0)
+            cam.hold(f0 + b.ease, rest)
+        else:
+            cam.hold(f0, rest)
+    zmax = geo.zmax(film.max_upscale * b.px)
+    drift: Cam = (rest[0], rest[1], min(DRIFT, zmax))
+    if drift[2] > 1.0 + 1e-6 and end - cam.windows[-1]["b"] >= b.ease:
+        cam.hold(end, drift)
+    vname, vname_facts = b.said(m.name, f"vantage {m.vantage} name")
+    vname = vname or m.masters_name
+    heading, heading_facts = b.said(m.title, f"chapter {m.chapter!r} title")
+    b.tracks.chapter(f0, heading or vname, heading_facts if heading else vname_facts)
+    for k, (cap, length) in enumerate(zip(m.captures, beats, strict=True)):
+        n += 1
+        s0 = b.f
+        if k:
+            dissolve = b.entry()
+        step: dict[str, Any] | None = None
+        text = [{"role": "label", "text": cap.label}]
+        if k == 0 and words:
+            step = {
+                "index": None, "words": words, "words_from": m.words_from, "focus_requested": None,
+                "focus": None, "target": None, "subjects": [], "z_eff": None, "upscale": None,
+                "push": False, "reason": "montage", "land": s0 + B,
+            }  # fmt: skip
+            text.append({"role": "words", "text": words})
+            if b.placer is not None:
+                step.update(_montage_zone(b, m, words, s0 + B, s0 + length * B))
+        shot = b.add(
+            {
+                "id": f"S{n:02d}",
+                "kind": "capture",
+                "chapter": m.chapter,
+                "text": text,
+                "facts": list(dict.fromkeys([*cap.label_facts, *(words_facts if step else [])])),
+                "vantage": m.vantage,
+                "capture": cap.date,
+                "label": cap.label,
+                "file": cap.file,
+                "dissolve": dissolve,
+                "series": series_no,
+                "rail": k,
+                "step": step,
+                "montage": True,
+            },
+            length,
+        )
+        shot["key"] = s0 + 2 * B if step else shot["f1"] - 1
+        if cap.file not in hashes:
+            hashes[cap.file] = _sha256(project.masters_dir / cap.file)
+        _capture_tracks(b, shot, cap, m, vname, vname_facts, first=k == 0, words_facts=words_facts)
+    held = cam.at(b.f - 1)
+    return n, None if held == rest else held
+
+
+def _montage_zone(b: _Builder, m: _Montage, words: str, land: int, f1: int) -> dict[str, Any]:
+    """The montage words' zone (`_Placer.choose`): its subject is what changes from the montage's
+    first picture to its last, seen along the camera from the words' landing to the first shot's
+    end, over the first two pictures (the words fade out over the second's dissolve)."""
+    from vantage.film.subject import subject_map
+
+    placer = b.placer
+    assert placer is not None
+    first, last = m.captures[0], m.captures[-1]
+    path = _path(b.camera.windows, m.geometry, land, f1, b.grid.third)
+    subject = subject_map(placer.seen, first.file, last.file, [])
+    return placer.choose(
+        b,
+        f"{m.chapter} montage",
+        words,
+        placer.label_base,
+        subject,
+        [c.file for c in m.captures[:2]],
+        {zone: path for zone in placer.zones},
+        placer.zones[0],
+    )
 
 
 def _curtain_shot(

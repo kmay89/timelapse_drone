@@ -299,6 +299,7 @@ class FilmDef:
     bpm: float = 100.0
     chapters: str | tuple[str, ...] = "all"  # all | main | chapter ids
     stats: int = 3
+    montage: int = 5  # captures in a gallery chapter's montage (0: none)
     stats_surface: Literal["night", "paper"] | None = None  # None: over a picture (the chapter tints)
     title_beats: int = 4
     end_beats: int = 6

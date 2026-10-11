@@ -976,10 +976,11 @@ class _Cut:
             frame[:, :x] = self._warp(shot["before_file"], cam)[:, :x]
         return frame
 
-    def _bare(self, i: int, f: int) -> np.ndarray:
-        """Image shot i at frame f without its overlays or its own dissolve (what a dissolve leaves)."""
+    def _bare(self, i: int, f: int, cam: Sequence[float] | None = None) -> np.ndarray:
+        """Image shot i at frame f without its overlays or its own dissolve (what a dissolve leaves),
+        through `cam` when given (a dissolve to another vantage keeps the outgoing framing)."""
         shot = self.shots[i]
-        cam = self.camera(f)
+        cam = self.camera(f) if cam is None else tuple(cam)
         if shot["kind"] == "curtain":
             return self._composite(shot, cam, self._split_at(shot, f))
         if shot["kind"] == "stat" and not shot.get("file"):
@@ -1163,7 +1164,7 @@ class _Cut:
         intro = 1.0
         if mixed and d is not None:
             if w < 1:
-                frame = _mix(self._bare(i - 1, f), frame, w)
+                frame = _mix(self._bare(i - 1, f, d.get("cam")), frame, w)
             half = max(1, (d["f1"] - d["f0"]) // 2)
             if prev is not None and prev["kind"] in ("capture", "curtain", "stat"):
                 self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
@@ -1239,7 +1240,7 @@ class _Cut:
         w = ramp(f, d["f0"], d["f1"] - d["f0"]) if d else 1.0
         mixed = d is not None and d["from"] not in SURFACES
         if mixed and w < 1:
-            frame = _mix(self._bare(i - 1, f), frame, w)
+            frame = _mix(self._bare(i - 1, f, d.get("cam")), frame, w)
         within = mixed and prev is not None and prev["kind"] == "capture"
         intro = None
         if mixed and d is not None and prev is not None and prev["kind"] in ("curtain", "stat"):
@@ -1282,11 +1283,12 @@ class _Cut:
             _put(frame, L["words"], e, RISE * u * (1 - e))
         # Rail: track and ticks, accent up to the knob, lit ticks passed, the knob.
         days = self.rails[shot["series"]]
-        pos = (
-            shot["rail"] - 1 + w
-            if within and prev is not None and prev["series"] == shot["series"]
-            else shot["rail"]
-        )
+        same = within and prev is not None and prev["series"] == shot["series"]
+        pos = shot["rail"] - 1 + w if same else shot["rail"]
+        if within and not same and prev is not None:  # another series' rail crossfades out
+            _put(frame, self.rail_layers[prev["series"]], rail_in * (1 - w))
+            self._progress(frame, self.rails[prev["series"]], prev["rail"], rail_in * (1 - w))
+            rail_in *= w
         _put(frame, self.rail_layers[shot["series"]], rail_in)
         if rail_in > 0.002:
             self._progress(frame, days, pos, rail_in)

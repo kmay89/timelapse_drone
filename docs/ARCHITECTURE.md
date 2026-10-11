@@ -535,10 +535,12 @@ films:                       # optional; id → FilmSpec; merged over the derive
   9x16: {chapters: main}     # derived when output.film.vertical (aspect from the id)
   screen: {preset: screen}   # the event loop (auto: false) → render it with --film screen
 # FilmSpec fields (all optional): preset (screen) · cut · aspect (16x9|9x16) · bpm · chapters (all | main | [chapter ids])
-#   · stats (0–6, default 3) · stats_surface (night | paper: a plain stat card; default: over a picture) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
+#   · stats (0–6, default 3) · stats_surface (night | paper: a plain stat card; default: over a picture)
+#   · montage (captures per gallery montage: 0 = none, else 2–8; default 5) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
 #   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
 #   · enabled (true) · hours (loop films)
 steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare steps
+chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's words, or no montage
 ```
 
 - Film ids match `[a-z0-9][a-z0-9-]{0,31}`, do not end in `-web` and are unique as typed (`1080` and
@@ -557,14 +559,19 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
   the same pushes and has the same beats, captions, chapters and poster frame as the full-size film;
   only its pixel sizes differ.
 - `chapters: main` keeps the chapters whose vantage is the main vantage (the first scrub's with
-  masters, else the first compare's), plus stats. Unknown ids in a list are ignored with a warning.
+  masters, else the first compare's), plus stats and the gallery chapters with a vantage, whose
+  montages show the other drone vantages. Unknown ids in a list are ignored with a warning.
+- A gallery chapter's `film.line` sets its montage's words (default: its kicker, else its title);
+  `film.skip` leaves the montage out of films. `montage` caps a film's montages at that many
+  captures each; 0 turns them off.
 - `film.line` sets a step's words on screen; `film.focus` its push target (used as given, only
   clamped); `film.skip` leaves the step out of films (its capture still plays as a quiet beat).
 - `vantage validate` warns about words over 40 characters, unknown chapter ids in
   `films.<id>.chapters`, "bpm too fast for fps", (with masters) clamped or soft pushes, and numbers
   outside `{fact:}` tokens in the text films print (`cli.bare_numbers`: digits and number words
   other than "one", in project.yaml title, subtitle and kicker, step text and `film.line`, capture
-  notes, stat labels and units, and hero, scrub, compare and stats titles and kickers; the flights'
+  notes, stat labels and units, hero, scrub, compare, stats and gallery titles and kickers, and a
+  gallery's `film.line`; the flights'
   own years are not counted). It is a warning, not a release error: the facts gate decides what is
   releasable, and a reworded sentence is often the better fix.
 
@@ -585,11 +592,12 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
 
 Shots come from the chapters in scope, in story order: the first hero → title; each scrub chapter →
 a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots; then
-the end card. Gallery, explore, text, timeline and video chapters are not used. A film with no scrub
-or compare chapter in scope plays the main vantage's captures as one quiet series. For the demo
-both cuts are 74 beats (44.4 s at 100 bpm; 5.4 s of it on night, the end card) at full size, with
-or without VANTAGE_FAST; from the CI-sized demo footage the 9:16 cut is 72 (its smaller masters
-clamp a push).
+the end card; each gallery chapter on a drone vantage other than the main one → a montage. Explore,
+text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
+plays the main vantage's captures as one quiet series. For the demo both cuts are 85 beats (51.0 s
+at 100 bpm; 5.4 s of it on night, the end card, after the shoreline montage) at full size, with or
+without VANTAGE_FAST; from the CI-sized demo footage the 9:16 cut is 83 (its smaller masters clamp
+a push).
 
 - **title** (at least `title_beats`, 4): the first image (the first series capture, else the first
   curtain's before image) at rest under a 30 % night
@@ -620,6 +628,28 @@ clamp a push).
     (`push_f1` = beat 3): the unattended screen moves calmly, and at full size a 1.8× pull back over
     B + B/3 swept a bright path through one meter region 4 times in a second.
   - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
+- **montage** (capture shots with `montage: true`, numbered on from the series; one run per gallery
+  chapter with a `vantage` that is a drone vantage other than the main one, unless its `film.skip`
+  or the film's `montage` is 0; with fewer than two captures it is left out with a warning): up to
+  `montage` (5) of the chapter's captures (its `captures`, else all of the vantage's, after
+  exclusions), spread evenly from the first to the last (index round(k·(N − 1)/(n − 1)), halves
+  up). No card: the first picture dissolves in from the image before it on its first frame (from
+  a stat, the panel and text leave over the first half, as into a capture), the next ones on their
+  first beat, D frames each, the date label swapping at each dissolve's midpoint and the knob easing
+  along the montage's own rail (ticks at its dates; another series' rail crossfades out over the
+  first dissolve). 2 beats a picture (`MONTAGE_BEATS`, at least the film's quiet capture beats), so
+  no region sees two dissolves within a second: a snow flight between two summer ones stays within
+  the flash margin. Words (`film.line`, else the kicker, else the title; `step.words_from`
+  film.line | kicker | title, `reason: montage`) land on the first picture's beat 1 in the zone
+  clear of what changes from the montage's first picture to its last (see **Words zones**; the
+  contrast is measured over the first two pictures), and the first picture lasts until they read
+  at 17 characters a second (3 beats for "From the water"); they fade out with the next dissolve. No
+  push: the camera cuts to the vantage's rest view on the run's first frame and drifts in by 4 %
+  (`DRIFT`, within `max_upscale`) to its last frame, held through the dip into what follows.
+- **Vantage change without a card** (a montage, or a stat run over the main vantage's picture after
+  another vantage's image): the outgoing picture keeps the framing of its last frame through the
+  dissolve (`dissolve.cam` [x, y, zoom]) and the camera cuts to the new shot's rest view on the
+  dissolve's first frame, so one vantage's push never frames the other.
 - **card** (4 beats): inserted when consecutive image shots (captures, curtains) change vantage. The
   chapter kicker and title (else the vantage name) on night. A dip (`dip`) from the image in display
   gamma; the next image dips in from night.
@@ -858,7 +888,9 @@ of the right edge.
   image already on screen, `from_after`; a stat over a picture is an image, and the next stat of
   its run shows the same picture with no dissolve), an image after a surface always dips in, every
   card, plain stat or end dip is as long, any dip to or from paper lasts at least `surface_dip` frames, and every
-  curtain sweep lasts at least 2 beats. The title's last word group is fully in before its fade
+  curtain sweep lasts at least 2 beats. No camera move is faster than a push (B + B/3 frames), except
+  a cut on the first frame of a dissolve that carries `cam` (between two vantages), with no frame
+  between the two windows. The title's last word group is fully in before its fade
   starts, and a card, plain stat or end card's dip leaves at least one beat of the shot for its text (a
   long dip from paper can need more `end_beats` than the minimum). A loop plan opens with a `rise` and closes with a `dip`, each
   at least ceil(0.34·fps) frames, and its frame count is a multiple of 2B. Classic plans keep their
@@ -965,8 +997,10 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
 - `title` (`T1`): `vantage`, `capture` (date), `file`, `groups` (the frames the title's word groups
   start rising). Text roles `kicker`, `title`.
 - `capture` (`S01…`): `vantage`, `capture` (date), `label`, `file`, `dissolve` (`{from: <date> |
-  <curtain or stat id> | "night" | "paper", f0, f1}` or null on the film's first image), `series` (ordinal), `rail` (index on the
-  series' rail), `step` (null or `{index, words, words_from: film.line | lead | null,
+  <curtain or stat id> | "night" | "paper", f0, f1}`, plus `cam` [x, y, zoom] when the image before
+  is another vantage's, or null on the film's first image), `series` (ordinal; a montage has its
+  own), `rail` (index on the series' rail), `montage` (true on a montage's shots), `step` (null or
+  `{index, words, words_from: film.line | lead | kicker | title | null,
   focus_requested, focus [x, y, z_eff], target, subjects, z_eff, upscale, push, reason, land,
   push_f0, push_f1}`, and with words `words_zone` (low | high | low-right), `words_reason` (clear |
   near least subject | least subject | no subject), `words_subject` and `words_contrast` ({zone:
@@ -982,7 +1016,7 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
 - `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper: the panel's tint, or
   the plain card's surface), `backdrop` (picture | plain), with a picture `vantage`, `capture`,
   `file`; `place` (low | high), `dissolve` (as a capture's: the first of a run over a picture, else
-  null), `dip` (frames; plain cards), `land` (the frame the figure starts to slide in), `text_in`
+  null; with `cam` after another vantage's image), `dip` (frames; plain cards), `land` (the frame the figure starts to slide in), `text_in`
   (the frame unit, label and source fade in), `honesty` (the riding honesty line, or null), `move`
   (null on a plain card, else `{how: focus+subject:<id> | drift | hold[, subject off-frame:<id>],
   subjects, focus [x, y, zoom] | null, upscale, f0, f1}`). Text roles `value`, `unit`, `label`,
@@ -1002,7 +1036,7 @@ date, a vantage name to the masters' name) and a warning is recorded.
   capture's hold, then the poster frame (`P1`). Story: one per shot `key` (the title once its words
   are in, a capture at its words or push hold, else the end of its hold, a card's middle, a curtain
   holding the split nearest 0.5, a stat a beat after its figure lands, the end card once its text
-  is in). A curtain's date reads `<before>|<after>`. 8 columns of 320 px tiles for landscape films, 10 columns of
+  is in). A curtain's date reads `<before>|<after>`; a montage's tiles are of kind `montage`. 8 columns of 320 px tiles for landscape films, 10 columns of
   192 px for portrait ones.
 - Under each tile: `m:ss.ff · f<frame>` (prefixed with `bar.beat` on a beat grid), then
   `<shot id> <kind> <date>`, then one chip per fact: green releasable, amber needs-client or

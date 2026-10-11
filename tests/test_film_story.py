@@ -75,10 +75,15 @@ def tiny(
     hotspots: list[dict[str, Any]] | None = None,
     chapters: list[dict[str, Any]] | None = None,
     captures: list[dict[str, Any]] | None = None,
+    extra: dict[str, list[str]] | None = None,
     **config: Any,
 ) -> Project:
     story: dict[str, Any] = {
-        "vantages": [{"id": "overview", "name": "Overview"}, {"id": "site", "name": "The site"}],
+        "vantages": [
+            {"id": "overview", "name": "Overview"},
+            {"id": "site", "name": "The site"},
+            *({"id": vid, "name": vid.title()} for vid in extra or {}),
+        ],
         "chapters": [
             {"type": "hero", "id": "opening", "kicker": "Testville · 2025", "title": "A Tiny Site Grows Up"},
             {
@@ -98,7 +103,11 @@ def tiny(
     if films is not None:
         story["films"] = films
     make_project(
-        root, film={**STORY_FILM, **(film or {})}, story=story, extra={"site": list(DATES)}, **config
+        root,
+        film={**STORY_FILM, **(film or {})},
+        story=story,
+        extra={"site": list(DATES), **(extra or {})},
+        **config,
     )
     _masters(root)
     return load_project(root)
@@ -1246,10 +1255,168 @@ def test_gate_hints_at_vantage_fast(tmp_path, monkeypatch):
     assert len(stale) == 1 and "(rendered with a different VANTAGE_FAST?)" in stale[0], stale
 
 
+# --------------------------------------------------------------------------- #
+# Montage: a gallery chapter of another drone vantage
+# --------------------------------------------------------------------------- #
+
+WATER = ("2025-02-01", "2025-04-01", "2025-06-01", "2025-08-01", "2025-10-01", "2025-12-01", "2026-02-01")
+GALLERY = {
+    "type": "gallery",
+    "id": "from-the-water",
+    "kicker": "From the water",
+    "title": "Every flight, seen from the lake",
+    "vantage": "water",
+}
+FIGURE = {
+    "type": "stats",
+    "id": "numbers",
+    "items": [{"value": "{fact:area}", "unit": "sq ft", "label": "of old pool", "source": "Site plan"}],
+}
+
+
+def _montage(project: Project, fid: str = "16x9") -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    p = _plan(project, fid).plan
+    return p, [s for s in p["shots"] if s.get("montage")]
+
+
+def test_montage_shows_the_other_vantage(tmp_path):
+    """A gallery chapter on another drone vantage plays as a montage, in story order and in both
+    cuts: five captures spread evenly from its first to its last, dissolving on the beat with no
+    card, the date label per capture, the chapter's kicker over the first picture for as long as it
+    takes to read, no push, and the outgoing vantage keeping its own framing through the dissolve."""
+    project = tiny(
+        tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)}, film={"vertical": True},
+        simulated=True,
+    )  # fmt: skip
+    project = _facts(project.root, area=AREA)
+    for fid in ("16x9", "9x16"):
+        p, run = _montage(project, fid)
+        kinds = [s["kind"] for s in p["shots"]]
+        assert "card" not in kinds and kinds[-1] == "end", kinds
+        assert kinds.index("stat") < p["shots"].index(run[0]), kinds  # story order: after the stats
+        assert [s["capture"] for s in run] == [WATER[k] for k in (0, 2, 3, 5, 6)], fid
+        assert {s["vantage"] for s in run} == {"water"} and all(s["kind"] == "capture" for s in run)
+        assert [s["label"] for s in run] == [s["text"][0]["text"] for s in run]
+        assert [s["rail"] for s in run] == [0, 1, 2, 3, 4] and len({s["series"] for s in run}) == 1
+        beats = [(s["f1"] - s["f0"]) // B for s in run]
+        assert beats[1:] == [2, 2, 2, 2], beats
+        for s in run:
+            assert s["f0"] % B == 0 and s["dissolve"]["f0"] == s["f0"]
+            assert s["dissolve"]["f1"] - s["dissolve"]["f0"] == D
+        assert [s["dissolve"]["from"] for s in run[1:]] == [s["capture"] for s in run[:-1]]
+        first = run[0]
+        prev = p["shots"][p["shots"].index(first) - 1]
+        assert first["dissolve"]["from"] == prev["id"] and prev["kind"] == "stat"
+        # The stat's picture keeps its own camera through the dissolve; the camera cuts to the
+        # montage's rest view on its first frame and then drifts in by at most 4 %.
+        cut = _Cut(project, FilmPlan(id=fid, plan=p))
+        assert first["dissolve"]["cam"] == list(cut.camera(first["f0"] - 1))
+        assert cut.camera(first["f0"]) == (0.5, 0.5, 1.0)  # the water vantage's rest view
+        zooms = [cut.camera(f)[2] for f in range(first["f0"], run[-1]["f1"])]
+        assert all(b >= a for a, b in itertools.pairwise(zooms)) and zooms[-1] <= 1.04 + 1e-9
+        assert zooms[-1] > 1.0 or fid == "9x16"  # the tiny 9:16 masters are at max_upscale at rest
+        step = first["step"]
+        assert first["text"][1] == {"role": "words", "text": "From the water"}
+        assert step["words"] == "From the water" and step["words_from"] == "kicker" and not step["push"]
+        assert step["land"] == first["f0"] + B and step["words_zone"] in ("low", "high", "low-right")
+        assert first["f1"] - step["land"] >= round(B / 3) + math.ceil(len("From the water") * 12 / 17)
+        assert all(s["step"] is None for s in run[1:])
+        check_plan(p)
+        # Captions, chapters and transcript include it.
+        heads = [c for c in p["chapters"] if c["f0"] == first["f0"]]
+        assert heads and heads[0]["title"] == "Every flight, seen from the lake", p["chapters"]
+        said = " ".join(c["text"] for c in p["captions"])
+        assert "From the water" in said and all(s["label"] in said for s in run)
+        lines = [ln["text"] for ln in p["transcript"]["lines"] if ln["f0"] >= first["f0"]]
+        assert lines[0].startswith("Aerial view (Water)"), lines
+    # The storyboard names the montage's tiles.
+    from vantage.film.storyboard import tiles
+
+    assert [t.kind for t in tiles(_plan(project)) if t.shot == run[0]["id"]] == ["montage"]
+
+
+def test_montage_frames(tmp_path):
+    """Rendered: no jump into the dissolve (the stat's picture keeps its framing), each montage
+    picture is the capture it names, and the kicker is on the first one."""
+    project = tiny(tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)})
+    project = _facts(project.root, area=AREA)
+    p, run = _montage(project)
+    cut = _Cut(project, FilmPlan(id="16x9", plan=p))
+    f0, stat = run[0]["f0"], p["shots"][p["shots"].index(run[0]) - 1]
+    held = tuple(run[0]["dissolve"]["cam"])
+    assert held[2] > 1.0 and held == cut.camera(f0 - 1)  # the stat drifted in
+    warps: list[tuple[str, tuple[float, ...]]] = []
+    warp = cut._warp
+    cut._warp = lambda file, cam: warps.append((file, tuple(cam))) or warp(file, cam)  # type: ignore[method-assign]
+    for f in range(f0, f0 + D):
+        cut.frame_at(f)
+    assert {c for file, c in warps if file == stat["file"]} == {held}  # no jump into the dissolve
+    assert max(c[2] for file, c in warps if file == run[0]["file"]) < 1.001  # its own rest, drifting
+    cut._warp = warp  # type: ignore[method-assign]
+    from test_film import HUES as WATER_HUES
+
+    for s in run:
+        k = WATER.index(s["capture"])
+        f = s["f1"] - 1
+        centre = cut.frame_at(f)[80:110, 130:190].reshape(-1, 3).astype(np.float32).mean(axis=0)
+        assert np.abs(centre - WATER_HUES[k % len(WATER_HUES)]).max() < 40, (s["capture"], centre)
+    assert any(i["shot"] == run[0]["id"] and i["layer"] == "words" for i in cut.ink)
+
+
+@pytest.mark.parametrize(
+    ("gallery", "films", "extra", "count"),
+    [
+        ({}, None, None, 5),
+        ({"film": {"skip": True}}, None, None, 0),
+        ({}, {"16x9": {"montage": 0}}, None, 0),
+        ({}, {"16x9": {"montage": 3}}, None, 3),
+        ({"film": {"line": "Seen from the lake"}}, None, None, 5),
+        ({"captures": ["2025-04-01", "2025-08-01", "latest"]}, None, None, 3),
+        ({"vantage": "site"}, None, None, 0),  # the main vantage already plays as the scrub
+        ({}, None, {"kind": "ground"}, 0),  # films show drone vantages only
+    ],
+)
+def test_montage_opt_outs_and_cap(tmp_path, gallery, films, extra, count):
+    root = tmp_path / "p"
+    project = tiny(root, chapters=[{**GALLERY, **gallery}], films=films, extra={"water": list(WATER)})
+    if extra:
+        data = yaml.safe_load((root / "story.yaml").read_text())
+        data["vantages"][-1].update(extra)
+        (root / "story.yaml").write_text(yaml.safe_dump(data, sort_keys=False))
+        project = load_project(root)
+    _, run = _montage(project)
+    assert len(run) == count
+    if count:
+        assert run[0]["capture"] == ((gallery.get("captures") and "2025-04-01") or WATER[0])
+        assert run[-1]["capture"] == WATER[-1]
+        assert run[0]["step"]["words"] == (gallery.get("film") or {}).get("line", "From the water")
+
+
+def test_montage_needs_two_captures(tmp_path):
+    with pytest.raises(ValidationError, match="montage"):
+        tiny(tmp_path / "p", films={"16x9": {"montage": 1}})
+
+
+def test_cross_vantage_dissolve_may_cut_the_camera(tmp_path):
+    """check_plan lets the camera cut only on the first frame of a dissolve between two vantages
+    whose outgoing picture keeps its own framing (`dissolve.cam`)."""
+    project = tiny(tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)})
+    p, run = _montage(_facts(project.root, area=AREA))
+    check_plan(p)
+    bad = json.loads(json.dumps(p))
+    shot = next(s for s in bad["shots"] if s["id"] == run[0]["id"])
+    del shot["dissolve"]["cam"]
+    k = next(i for i, w in enumerate(bad["camera"]) if w["a"] == run[0]["f0"])
+    bad["camera"][k]["zoom"] = 1.2  # a jump the dissolve does not cover
+    with pytest.raises(PlanError, match="faster than a push"):
+        check_plan(bad)
+
+
 @pytest.mark.slow
 def test_demo_story_cut(tmp_path):
-    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 74 beats,
-    the 9:16 72 (the fast masters clamp a push the full-size ones make),
+    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 85 beats,
+    the 9:16 83 (the fast masters clamp a push the full-size ones make), both closing on a montage of
+    the shoreline gallery,
     the Demolition push frames the slide tower in 16:9 and keeps its reach in 9:16, the stats
     print exactly the three figures the cut chooses, and "The beach." sits clear of the beach."""
     import shutil
@@ -1280,7 +1447,7 @@ def test_demo_story_cut(tmp_path):
     assert tower.id == "slide-tower"
     for fid, plan in plans.items():
         p = plan.plan
-        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 74, "9x16": 72}[fid], (fid, p["grid"])
+        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 85, "9x16": 83}[fid], (fid, p["grid"])
         check_plan(p)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
         step = shot["step"]
@@ -1300,12 +1467,20 @@ def test_demo_story_cut(tmp_path):
         # prints it. The fast masters leave the 9:16 cut no zoom to spare, and the meadow sits on the
         # master's bottom edge (only the full-size 16:9 film zooms in far enough to lift it clear of
         # the panel), so those figures drift or hold, saying which hotspot they could not frame.
-        assert {s["file"] for s in stats} == {p["shots"][-5]["after_file"]}
+        curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
+        assert {s["file"] for s in stats} == {curtain["after_file"]}
         hows = [s["move"]["how"] for s in stats]
         assert hows[1].endswith("off-frame:meadow") and hows[2].endswith("beach"), hows
         assert hows[2] == "focus+subject:beach" or fid == "9x16", hows
         end = p["shots"][-1]
         assert end["ride"] and end["f1"] - end["f0"] <= 6 * p["fps"] and end["f1"] == p["frames"]
+        # The shoreline gallery closes the film as a montage after the stats, with no card.
+        run = [s for s in p["shots"] if s.get("montage")]
+        assert [s["capture"] for s in run] == [
+            "2025-04-12", "2025-09-05", "2026-01-31", "2026-05-09", "2026-09-20",
+        ], run  # fmt: skip
+        assert {s["vantage"] for s in run} == {"shoreline"} and p["shots"][-2] is run[-1]
+        assert run[0]["step"]["words"] == "From the water" and "card" not in [s["kind"] for s in p["shots"]]
         # "The beach." leaves the beach and splash pad it names: in 9:16 it goes up over the water.
         beach = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["words"] == "The beach.")
         assert beach["words_subject"][beach["words_zone"]] <= 0.5, beach

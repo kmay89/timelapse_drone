@@ -96,7 +96,8 @@ def is_image(shot: dict[str, Any] | None) -> bool:
 
 def check_plan(plan: dict[str, Any]) -> None:
     """Raise PlanError when a story plan cuts between images (a stat over a picture is one; the next
-    stat of its run shows the same picture and needs no dissolve), dissolves faster than 0.34 s, sweeps a
+    stat of its run shows the same picture and needs no dissolve), moves the camera faster than a
+    push (except a cut on the first frame of a dissolve between vantages), dissolves faster than 0.34 s, sweeps a
     curtain in under 2 beats, dips into or out of paper faster than `surface_dip`, ends its title
     before its words are all in, or dips into a card, stat or end card for so long that less than
     a beat of the shot is left for its text.
@@ -180,9 +181,14 @@ def check_plan(plan: dict[str, Any]) -> None:
         prev = shot
     third = max(1, round(fpb / 3))  # beat.Grid.third
     cams = plan.get("camera") or []
+    # A dissolve between two vantages may cut the camera on its first frame: the outgoing picture
+    # keeps its own framing (`dissolve.cam`), so no frame shows the camera in between.
+    cuts = {s["f0"] for s in shots if (s.get("dissolve") or {}).get("cam") is not None}
     for w0, w1 in pairwise(cams):
         n = w1["a"] - w0["b"]
         moved = (w0["x"], w0["y"], w0["zoom"]) != (w1["x"], w1["y"], w1["zoom"])
+        if moved and n <= 1 and w1["a"] in cuts:
+            continue
         if moved and n < fpb + third:
             problems.append(
                 f"camera: a {n}-frame move at frame {w0['b']} is faster than a push ({fpb + third} "

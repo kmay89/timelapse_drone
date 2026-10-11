@@ -541,6 +541,16 @@ class GalleryImage(Model):
     alt: str | None = None
 
 
+class GalleryFilm(Model):
+    """How a gallery chapter reads in story films: a short montage of its vantage (film/story.py)."""
+
+    line: str | None = Field(
+        None,
+        description="Words over the montage's first image (default: the chapter's kicker, else its title).",
+    )
+    skip: bool = Field(False, description="Leave the chapter's montage out of films.")
+
+
 class GalleryChapter(_Chapter):
     """A dated filmstrip: every capture of a vantage, and/or standalone images with credits."""
 
@@ -550,6 +560,10 @@ class GalleryChapter(_Chapter):
         default_factory=list, description="Default: all captures of the vantage."
     )
     images: list[GalleryImage] = Field(default_factory=list)
+    film: GalleryFilm | None = Field(
+        None,
+        description="Story films: the montage's words, or skip (a drone vantage other than the main one).",
+    )
 
 
 class ExploreChapter(_Chapter):
@@ -598,9 +612,17 @@ class FilmSpec(Model):
     aspect: Literal["16x9", "9x16"] | None = None
     bpm: float | None = Field(None, ge=60, le=160)
     chapters: Literal["all", "main"] | list[str] | None = Field(
-        None, description="all | main (the first scrub's vantage, plus stats) | [chapter ids]."
+        None,
+        description="all | main (the first scrub's vantage, plus stats and other vantages' gallery montages) "
+        "| [chapter ids].",
     )
     stats: int | None = Field(None, ge=0, le=6, description="Stats shown (default 3).")
+    montage: int | None = Field(
+        None,
+        ge=0,
+        le=8,
+        description="Captures in each gallery chapter's montage (default 5; at least 2; 0: no montages).",
+    )
     stats_surface: Literal["night", "paper"] | None = Field(
         None,
         description="Set it to put the film's stats on a plain card of this surface. By default they sit "
@@ -620,6 +642,13 @@ class FilmSpec(Model):
     auto: bool | None = Field(None, description="Rendered by `vantage film` without --film (default true).")
     enabled: bool | None = None
     hours: float | None = Field(None, gt=0, le=12, description="Loop films: --hours default.")
+
+    @field_validator("montage")
+    @classmethod
+    def _montage(cls, v: int | None) -> int | None:
+        if v == 1:
+            raise ValueError("montage must be 0 (no montages) or 2–8 captures: a montage spans first to last")
+        return v
 
     @field_validator("safe")
     @classmethod
