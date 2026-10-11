@@ -19,9 +19,9 @@ vantages:
     hint: { lat: 40.950086, lon: -82.044208, alt_m: 74, heading_deg: -164, gimbal_pitch_deg: -45 }
 
 captures:
-  - { date: 2025-04-12, label: April 2025, note: "Before. The park as it was left in 2007." }
+  - { date: 2025-04-12, label: April 2025, note: "Before. The park as it was left in {fact:last-season}." }
   - { date: 2025-05-30, label: May 2025, note: "Fences go up; the first machines arrive." }
-  - { date: 2025-07-18, label: July 2025, note: "The slides, the lazy river and two buildings are gone." }
+  - { date: 2025-07-18, label: July 2025, note: "The slides, the lazy river and the outbuildings are gone." }
   - { date: 2025-09-05, label: September 2025, note: "The wave pool is broken up and backfilled." }
   - { date: 2025-10-24, label: October 2025, note: "Graded from curb to shore; half the lot is torn out." }
   - { date: 2025-12-12, label: December 2025, note: "First snow. The promenades and the plaza are poured." }
@@ -65,8 +65,8 @@ chapters:
 
   - type: scrub
     id: twelve-flights
-    kicker: Twelve flights
-    title: Eighteen months, one frame
+    kicker: "{fact:flights} flights"
+    title: Every flight, one frame
     body: Every flight is aligned to the last one, so the camera holds still and only the site changes.
     vantage: overview
     from: earliest
@@ -75,11 +75,11 @@ chapters:
     steps:
       - capture: "2025-04-12"
         text: >-
-          **Before.** Weeds split the old lot. The wave pool is dry except for its deep end, and four
+          **Before.** Weeds split the old lot. The wave pool is dry except for its deep end, and the
           slide tubes still coil off a single concrete tower.
       - capture: "2025-07-18"
         text: >-
-          **Demolition.** In ten weeks the slides, the lazy river and two buildings are gone. Concrete is sorted
+          **Demolition.** By midsummer the slides, the lazy river and the outbuildings are gone. Concrete is sorted
           into piles to be crushed on site; it will go back under the new paths.
         focus: [0.62, 0.54, 1.6]
       - capture: "2025-10-24"
@@ -132,8 +132,8 @@ chapters:
   - type: compare
     id: before-after
     kicker: Before and after
-    title: Seventeen months apart
-    body: April 2025 against September 2026, from the same point in the sky.
+    title: The same point in the sky
+    body: April 2025 against September 2026, from one point over the lake.
     vantage: overview
     mode: curtain
     before: earliest
@@ -141,7 +141,7 @@ chapters:
     before_label: April 2025
     after_label: September 2026
     steps:
-      - text: The old park, as it was left in 2007.
+      - text: "The old park, as it was left in {fact:last-season}."
         split: 0.85
       - text: The fan of the wave pool survives as the outline of the beach.
         split: 0.5
@@ -160,7 +160,7 @@ chapters:
     surface: paper
     items:
       # Values print from facts.yaml, whose sources are numbered in the notes.
-      - { value: "{fact:flights}", label: "drone flights, every six to seven weeks", source: Flight logs }
+      - { value: "{fact:flights}", label: "drone flights from the same points in the sky", source: Flight logs }
       - { value: "{fact:stalls-to-meadow}", label: parking spaces returned to meadow, source: Site plan }
       - { value: "{fact:wave-pool-area}", unit: sq ft, label: "of wave pool, now beach and splash pad", source: Site plan }
       - { value: "{fact:new-paths}", unit: m, label: of new paths and promenade, source: Site plan }

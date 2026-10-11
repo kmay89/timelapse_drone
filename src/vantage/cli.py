@@ -469,6 +469,66 @@ def _check_outputs(project: Project, warnings: list[str]) -> None:
 
 
 FILM_WORDS_MAX = 40  # characters of on-screen words a step may put in a film
+_NUMBER_WORDS = (
+    "two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
+    "seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|"
+    "thousand|million|billion|dozen"
+)
+_BARE_NUMBER = re.compile(rf"\d[\d,.]*\d|\d|\b(?:{_NUMBER_WORDS})\b", re.IGNORECASE)
+
+
+def bare_numbers(text: str | None, years: tuple[str, ...] | set[str] = ()) -> list[str]:
+    """Numbers (digits or number words; not 'one') in `text` outside its {fact:} tokens. Years in
+    `years` (the flights' own, from the footage) are not counted."""
+    from vantage.config import FACT_TOKEN_RE
+
+    if not text:
+        return []
+    return [m for m in _BARE_NUMBER.findall(FACT_TOKEN_RE.sub(" ", text)) if m not in years]
+
+
+def _film_numbers(project: Project, warnings: list[str]) -> None:
+    """Warn about numbers outside {fact:} tokens in the text films print (on screen, in captions or
+    in the transcript): project.yaml title, subtitle and kicker, step text and film.line, capture
+    notes, stat labels and units, and the hero, scrub, compare and stats titles and kickers. Invariant 4: such figures belong in facts.yaml."""
+    from vantage.config import CompareChapter, HeroChapter, ScrubChapter, StatsChapter
+    from vantage.models import MastersIndex
+
+    years = {n.date.isoformat()[:4] for n in project.story.captures}
+    masters = project.masters_dir / "index.json"
+    if masters.is_file():
+        index = MastersIndex.load(masters)
+        years |= {c.date[:4] for v in index.vantages.values() for c in v.captures}
+    cfg = project.config
+    texts: list[tuple[str, str | None]] = [
+        ("project.yaml title", cfg.title),
+        ("project.yaml subtitle", cfg.subtitle),
+        ("project.yaml kicker", cfg.kicker),
+    ]
+    for n in project.story.captures:
+        texts.append((f"story.yaml captures {n.date.isoformat()} note", n.note))
+    for i, ch in enumerate(project.story.chapters):
+        cid = ch.id or f"{ch.type}-{i + 1}"
+        if isinstance(ch, HeroChapter | ScrubChapter | CompareChapter | StatsChapter):
+            texts += [(f"story.yaml {cid} kicker", ch.kicker), (f"story.yaml {cid} title", ch.title)]
+        if isinstance(ch, ScrubChapter | CompareChapter):
+            for j, step in enumerate(ch.steps):
+                texts.append((f"story.yaml {cid} step {j}", step.text))
+                if step.film is not None:
+                    texts.append((f"story.yaml {cid} step {j} film.line", step.film.line))
+        if isinstance(ch, StatsChapter):
+            for j, item in enumerate(ch.items):
+                texts += [
+                    (f"story.yaml {cid} stat {j} label", item.label),
+                    (f"story.yaml {cid} stat {j} unit", item.unit),
+                ]
+    for where, text in texts:
+        found = bare_numbers(text, years)
+        if found:
+            warnings.append(
+                f"{where}: {', '.join(map(repr, dict.fromkeys(found)))} outside a {{fact:}} token "
+                "(films print it on screen, in captions or in the transcript: make it a fact, or reword)"
+            )
 
 
 def _check_films(project: Project, warnings: list[str]) -> None:
@@ -487,6 +547,8 @@ def _check_films(project: Project, warnings: list[str]) -> None:
                 f"story.yaml vantage {v.id} (kind: {v.kind}): left out of the films, which show only "
                 "drone vantages (no honesty line or on-image tag for this kind yet)"
             )
+    if project.config.output.film.enabled:
+        _film_numbers(project, warnings)
     notes = FactNotes(project.facts.facts)
     ids = [ch.id or f"{ch.type}-{i + 1}" for i, ch in enumerate(project.story.chapters)]
     for cid, ch in zip(ids, project.story.chapters, strict=True):

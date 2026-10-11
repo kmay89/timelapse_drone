@@ -556,7 +556,12 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
 - `film.line` sets a step's words on screen; `film.focus` its push target (used as given, only
   clamped); `film.skip` leaves the step out of films (its capture still plays as a quiet beat).
 - `vantage validate` warns about words over 40 characters, unknown chapter ids in
-  `films.<id>.chapters`, "bpm too fast for fps", and (with masters) clamped or soft pushes.
+  `films.<id>.chapters`, "bpm too fast for fps", (with masters) clamped or soft pushes, and numbers
+  outside `{fact:}` tokens in the text films print (`cli.bare_numbers`: digits and number words
+  other than "one", in project.yaml title, subtitle and kicker, step text and `film.line`, capture
+  notes, stat labels and units, and hero, scrub, compare and stats titles and kickers; the flights'
+  own years are not counted). It is a warning, not a release error: the facts gate decides what is
+  releasable, and a reworded sentence is often the better fix.
 
 ### Beat grid (film/beat.py)
 
@@ -792,7 +797,7 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
       "colors": {"night": "#…", "paper": "#…", "ink": "#…", "accent": "#…"} },
     "camera": [],                                      // story: [{"a": 0, "b": 162, "x": 0.5, "y": 0.5, "zoom": 1.0}, …]
     "captions": [{"f0": 36, "f1": 90, "text": "April 2025. Before.", "facts": []}],   // see "Tracks"; [] for loop films
-    "chapters": [{"f0": 0, "title": "Eighteen months, one frame", "facts": []}],
+    "chapters": [{"f0": 0, "title": "Every flight, one frame", "facts": []}],
     "transcript": {"title": "…", "subtitle": "…", "honesty": "…", "facts": [],
                    "lines": [{"f0": 0, "text": "Title over the April 2025 view: …", "facts": []}]} | null,
     "shots": [ /* see below */ ],

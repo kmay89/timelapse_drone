@@ -324,6 +324,17 @@ def test_validate_warns_about_films(tmp_path):
     assert any("film words are" in w for w in warnings)
     assert any("films.teaser.chapters" in w and "nope" in w for w in warnings)
     assert any("bpm too fast" in w for w in warnings)  # 160 bpm at 12 fps: 4-frame beats < 5
+    # STEPS[1] says "In ten weeks": a figure films print outside a {fact:} token.
+    assert any("flights step 1: 'ten' outside a {fact:} token" in w for w in warnings), warnings
+
+
+def test_bare_numbers():
+    from vantage.cli import bare_numbers
+
+    assert bare_numbers("In ten weeks, 132 stalls and {fact:area} sq ft; one frame") == ["ten", "132"]
+    assert bare_numbers("Opened in 2025, closed in 2007.", {"2025"}) == ["2007"]
+    assert bare_numbers("{fact:flights} flights over Twelve months") == ["Twelve"]
+    assert bare_numbers(None) == []
 
 
 def test_honesty_line(tmp_path):
