@@ -232,6 +232,27 @@ def test_screen_prints_only_releasable_facts(tmp_path, monkeypatch):
         render_film(project, tmp_path / "film", only=["screen"], hours=0.01)
 
 
+def test_loop_discloses_on_every_shot(tmp_path):
+    """A simulated loop keeps its 'Simulated imagery' tag on stats (paper) and the end card (night):
+    it has no end-card disclaimer and no tracks."""
+    root = tmp_path / "p"
+    stats = {**STATS, "items": [STATS["items"][2]]}
+    tiny(root, films=SCREEN, chapters=[stats], simulated=True)
+    project = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
+    plan = _screen(project)
+    assert plan.plan["tag"] == ["Simulated imagery"]
+    cut = _Cut(project, plan)
+    keys = {s["kind"]: s["key"] for s in plan.plan["shots"] if s["kind"] in ("stat", "end")}
+    assert set(keys) == {"stat", "end"}
+    tagged = {kind: cut.frame_at(k) for kind, k in keys.items()}
+    cut.tag_on_paper = None  # what the stat and end card looked like before
+    for kind, k in keys.items():
+        diff = np.abs(tagged[kind].astype(int) - cut.frame_at(k).astype(int)).sum(axis=2)
+        ys, xs = np.nonzero(diff > 30)
+        assert len(xs) > 20, kind  # the tag's ink ...
+        assert xs.min() > cut.width / 2 and ys.max() < cut.height / 4, kind  # ... top right
+
+
 def test_cli_hours(tmp_path):
     from typer.testing import CliRunner
 

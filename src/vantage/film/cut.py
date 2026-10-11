@@ -191,6 +191,11 @@ class _Cut:
         if p.get("draft"):
             words.append(f"plan {plan.hash[:6]}")
         self.tag = self._tag(words)
+        # A loop plays unattended with no end-card disclaimer: its tag stays on cards, stats and the
+        # end card too, in ink on paper (no scrim) and as usual on night.
+        self.tag_on_paper: _Layer | None = None
+        if p.get("loop") and self.tag is not None:
+            self.tag_on_paper = self._tag(words, dataclasses.replace(TAG, color="ink"), scrim=False)
         self._typeset()
         # A loop's rise shows the rail of the series that follows its title (kept through the title).
         nxt = self.shots[2] if len(self.shots) > 2 and self.shots[0]["kind"] == "rise" else None
@@ -245,15 +250,17 @@ class _Cut:
         a = np.ascontiguousarray(mask[..., None])
         return _Layer(X0, Y0, np.ascontiguousarray(self.night * a), a)
 
-    def _tag(self, words: Sequence[str]) -> _Layer | None:
+    def _tag(self, words: Sequence[str], tag: _Style = TAG, *, scrim: bool = True) -> _Layer | None:
         if not words:
             return None
         lay, text = self.lay, " · ".join(words)
-        style = TAG
-        if (w := self.type.width(text, TAG)) > lay.text_width:  # shrink to fit between the margins
-            style = dataclasses.replace(TAG, size=TAG.size * lay.text_width / w * 0.98)
+        style = tag
+        if (w := self.type.width(text, tag)) > lay.text_width:  # shrink to fit between the margins
+            style = dataclasses.replace(tag, size=tag.size * lay.text_width / w * 0.98)
         top = lay.tag == "top-right"
         base = lay.top + self._cap(style) if top else lay.rail_y - 18 * self.u
+        if not scrim:  # the paper variant: same place and box as the tag, recorded once
+            return self._ink([(lay.right, base, text, style, "r")], shadow=0.0)[0]
         layer, box = self._ink([(lay.right, base, text, style, "r")], shadow=0.6, blur=3, note=(None, "tag"))
         self.tag_scrim = self._scrim(box, 0.3)
         return layer
@@ -262,6 +269,14 @@ class _Cut:
         if self.tag is not None:
             _put(frame, self.tag_scrim, 1.0)
             _put(frame, self.tag, 1.0)
+
+    def _surface_tag(self, frame: np.ndarray, surface: str) -> None:
+        """A loop film's tag on a card, stat or end card (night or paper); other films carry their
+        disclaimer on the end card instead."""
+        if surface == "paper" and self.tag_on_paper is not None:
+            _put(frame, self.tag_on_paper, 1.0)
+        elif surface != "paper" and self.tag_on_paper is not None:
+            self._put_tag(frame)
 
     def _wrap_groups(
         self, groups: Sequence[str], style: _Style, width: float
@@ -763,6 +778,7 @@ class _Cut:
         e = ramp(f, f0 + B, third)
         for layer in L["rest"]:
             _put(frame, layer, e * out)
+        self._surface_tag(frame, shot["surface"])
         prev = self.shots[i - 1] if i else None
         dip = shot.get("dip", self.d)
         if prev is not None and f < f0 + dip:
@@ -910,6 +926,7 @@ class _Cut:
         if shot["kind"] == "card":
             opacity *= 1 - ramp(f, shot["f1"] - third, third)
         _put(frame, L["stack"], opacity)
+        self._surface_tag(frame, "night")
         prev = self.shots[i - 1] if i else None
         if prev is not None and f < shot["f0"] + dip:
             w = ramp(f, shot["f0"], dip)

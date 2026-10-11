@@ -657,6 +657,8 @@ two pushes), with or without VANTAGE_FAST.
   - The end card (`end_beats`, 4) prints only the brand name and, when `output.base_url` is set, the
     short URL in large type (text role `url`, 64 units × type_scale); no credits, partners, fine
     print or honesty line (the `honesty` field is still recorded). No QR code in v1.
+  - With no disclaimer on its end card and no tracks, a loop keeps its `tag` ("Simulated imagery",
+    "Preview") on every shot: on cards, stats and the end card too, in ink without a scrim on paper.
   - The end card is lengthened by a beat when needed so the film's length is a whole number of GOPs
     (2B frames): N % 2B == 0.
   - A `dip` (`D1`, 2 beats) closes the film: the end card eases in display gamma to the night fill,
