@@ -545,7 +545,10 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
   Loop films have no web encode and no embedded tracks. A loop film needs the story cut.
 - `vantage film` (no `--film`) plans and renders the `auto` films; `--film ID` names any enabled film.
 - The 16:9 size is `output.film.width × height`; the 9:16 size is `short × short·16/9`. `VANTAGE_FAST=1`
-  caps the long edge at 960 px, which changes the size and so the plan hash.
+  caps the long edge at 960 px, which changes the size and so the plan hash. `max_upscale` (and the
+  soft-push warning) is measured in output px of the full-size film, so a VANTAGE_FAST plan clamps
+  the same pushes and has the same beats, captions, chapters and poster frame as the full-size film;
+  only its pixel sizes differ.
 - `chapters: main` keeps the chapters whose vantage is the main vantage (the first scrub's with
   masters, else the first compare's), plus stats. Unknown ids in a list are ignored with a warning.
 - `film.line` sets a step's words on screen; `film.focus` its push target (used as given, only
@@ -572,7 +575,8 @@ Shots come from the chapters in scope, in story order: the first hero → title;
 a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots; then
 the end card. Gallery, explore, text, timeline and video chapters are not used. A film with no scrub
 or compare chapter in scope plays the main vantage's captures as one quiet series. For the demo
-both derived cuts are 62 beats (37.2 s at 100 bpm).
+the 16:9 cut is 62 beats (37.2 s at 100 bpm) and the 9:16 cut 60 beats (its narrower crop clamps
+two pushes), with or without VANTAGE_FAST.
 
 - **title** (`title_beats`, 4): the first image (the first series capture, else the first curtain's
   before image) at rest under a 30 % night

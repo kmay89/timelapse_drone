@@ -661,6 +661,25 @@ def test_release_gate_on_story_film(tmp_path, monkeypatch):
         package_project(load_project(root), dist, release=True)
 
 
+def test_fast_preview_makes_the_same_cut(tmp_path, monkeypatch):
+    """max_upscale is judged at the full size: a VANTAGE_FAST plan clamps the same pushes, so its
+    beats, captions and poster frame match the full-size film's."""
+    import test_film
+
+    big = (1280, 800)
+    monkeypatch.setattr(test_film, "SIZE", big)
+    monkeypatch.setitem(globals(), "SIZE", big)
+    steps = [{"capture": DATES[2], "text": "**Middle.**", "focus": [0.5, 0.5, 1.4]}]
+    project = tiny(tmp_path / "p", steps=steps, film={"width": 1920, "height": 1080, "max_upscale": 1.55})
+    fast, full = (plan_films(project, only=["16x9"], fast=f)["16x9"] for f in (True, False))
+    assert (fast.plan["width"], full.plan["width"]) == (960, 1920)
+    step = next(s["step"] for s in full.plan["shots"] if s.get("step"))
+    assert step["push"] is False and step["reason"] == "clamped"  # 1.55 / 1.5 < MIN_ZOOM at full size
+    for key in ("grid", "frames", "captions", "chapters", "transcript", "poster"):
+        assert fast.plan[key] == full.plan[key], key
+    assert [s["step"]["push"] for s in fast.plan["shots"] if s.get("step")] == [False]
+
+
 def test_gate_hints_at_vantage_fast(tmp_path, monkeypatch):
     """A film planned at the VANTAGE_FAST size is stale at full size, and the gate says why, even
     though a story cut's shots (px) differ too."""
@@ -705,7 +724,7 @@ def test_demo_story_cut(tmp_path):
     assert tower.id == "slide-tower"
     for fid, plan in plans.items():
         p = plan.plan
-        assert p["cut"] == "story" and p["grid"]["beats"] == 62, (fid, p["grid"])
+        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 62, "9x16": 60}[fid], (fid, p["grid"])
         check_plan(p)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
         step = shot["step"]

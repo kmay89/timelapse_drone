@@ -451,6 +451,7 @@ class _Builder:
     layout: Layout
     warnings: list[str]
     paper_dip: int
+    px: float = 1.0  # this film's px per px of the full-size film (< 1 under VANTAGE_FAST)
     shots: list[dict[str, Any]] = field(default_factory=list)
     f: int = 0  # the next shot's first frame (always on the grid)
     camera: _Camera = field(default_factory=_Camera)
@@ -569,8 +570,8 @@ def _aim_step(
             f"{label}: push clamped from {z:g} to {zmax:.3g} ({b.film.id}; max_upscale {b.film.max_upscale:g})"
         )
     upscale = geo.s0 * cam[2]
-    if upscale > SOFT + 1e-9:
-        b.warnings.append(f"{label}: soft push, {upscale:.2f} output px per master px ({b.film.id})")
+    if upscale / b.px > SOFT + 1e-9:  # judged at the full size, so a VANTAGE_FAST plan warns alike
+        b.warnings.append(f"{label}: soft push, {upscale / b.px:.2f} output px per master px ({b.film.id})")
     a, c = geo.centre(rest[0], rest[1], 1.0), geo.centre(cam[0], cam[1], cam[2])
     push = not (cam[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
     return cam, {
@@ -768,13 +769,16 @@ def derive_cut(
     images = [p for k, p in parts if k in ("series", "curtain")]
     total_images = sum(len(p.captures) if isinstance(p, _Series) else 1 for p in images)
 
-    b = _Builder(project, film, grid, lay, warnings, paper_dip)
+    # Pushes are clamped at the full size (max_upscale is in full-size output px), so a VANTAGE_FAST
+    # preview makes the same pushes, beats and captions as the film it previews.
+    px = width / film_size(settings, film.aspect, fast=False)[0]
+    b = _Builder(project, film, grid, lay, warnings, paper_dip, px)
     b.tracks = Tracks(fps, enabled=has_tracks(film, settings))
     for part in images:
         geo = part.geometry
-        if geo.s0 > film.max_upscale + 1e-9:
+        if geo.s0 / b.px > film.max_upscale + 1e-9:
             text = (
-                f"vantage {part.vantage}: master upscaled even at rest ({geo.s0:.2f}× > max_upscale "
+                f"vantage {part.vantage}: master upscaled even at rest ({geo.s0 / b.px:.2f}× > max_upscale "
                 f"{film.max_upscale:g}; {geo.mw}×{geo.mh} masters for a {width}×{height} film)"
             )
             if text not in warnings:
@@ -804,7 +808,7 @@ def derive_cut(
             s: _Series = part
             series_no += 1
             rest = b.rest(s)
-            zmax = s.geometry.zmax(film.max_upscale)
+            zmax = s.geometry.zmax(film.max_upscale * b.px)
             vname, vname_facts = b.said(s.name, f"vantage {s.vantage} name")
             vname = vname or caps.index.vantages[s.vantage].name
             heading, heading_facts = b.said(s.title, f"chapter {s.chapter!r} title")
@@ -1086,7 +1090,7 @@ def _curtain_shot(
         labels.append(label)
     before_label, after_label = labels
     label_facts = list(say.facts)
-    zmax = c.geometry.zmax(film.max_upscale)
+    zmax = c.geometry.zmax(film.max_upscale * b.px)
     keys: list[dict[str, Any]] = [{"a": f0, "b": f0 + B, "split": 0.0}]
     steps: list[dict[str, Any]] = []
     t = f0 + B
