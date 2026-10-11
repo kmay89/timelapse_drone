@@ -26,6 +26,7 @@ from vantage.cli import check_project
 from vantage.config import Project, load_project
 from vantage.film import beat
 from vantage.film.cut import _Cut
+from vantage.film.layout import Layout
 from vantage.film.plan import SIMULATED_NOTE, check_films, plan_films, resolve_films
 from vantage.film.render import _render_one, film_jobs, render_film
 from vantage.film.safety import LumaMeter, PlanError, check_plan
@@ -707,18 +708,55 @@ def test_degrade(tmp_path):
 
 
 def test_push_target_shows_subject(tmp_path):
+    """16:9: the push frames the subject (near the master's edge) inside the safe zone. 9:16: the
+    subject is far outside the portrait crop at rest, so the push keeps the step's focus and travels
+    at most MAX_TRAVEL of the rest crop instead of whipping across the master to reach it."""
+    from vantage.film.story import MAX_TRAVEL, subject_box
+
     steps = [STEPS[0], {**STEPS[1], "focus": [0.62, 0.54, 1.6]}]
     hotspots = [{"id": "tower", "x": 0.93, "y": 0.584, "label": "The tower", "to": DATES[1]}]
     project = tiny(tmp_path / "p", steps=steps, hotspots=hotspots, film={"vertical": True})
     for fid in ("16x9", "9x16"):
-        p = _plan(project, fid).plan
+        plan = _plan(project, fid)
+        p = plan.plan
         step = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["focus_requested"])
-        assert step["target"] == "focus+subject:tower" and step["subjects"] == ["tower"], fid
         x, y, z = step["focus"]
         geo = Geometry(p["width"], p["height"], 320, 200)
         cx, cy = geo.centre(x, y, z)
         hw, hh = geo.half(z)
-        assert cx - hw <= 0.93 <= cx + hw and cy - hh <= 0.584 <= cy + hh, (fid, cx, cy, hw, hh)
+        if fid == "16x9":
+            assert step["target"] == "focus+subject:tower" and step["subjects"] == ["tower"], fid
+            u0, u1, v0, v1 = subject_box(Layout.from_record(p["width"], p["height"], p["layout"]))
+            u, v = (0.93 - (cx - hw)) / (2 * hw), (0.584 - (cy - hh)) / (2 * hh)
+            assert u0 - 1e-9 <= u <= u1 + 1e-9 and v0 - 1e-9 <= v <= v1 + 1e-9, (u, v)
+        else:
+            assert step["target"] == "focus, subject off-frame:tower", step
+            assert any("subject tower cannot be framed" in w for w in plan.warnings)
+            rx, _ = geo.centre(0.5, 0.5, 1.0)  # the rest view (portrait_focus defaults to the centre)
+            assert abs(cx - rx) <= MAX_TRAVEL * 2 * geo.half(1.0)[0] + 1e-9
+
+
+def test_push_keeps_its_subject_above_the_words(tmp_path, monkeypatch):
+    """In 9:16 the lead words sit at .60H: a push puts its subject above them, not at the centre."""
+    import test_film
+    from vantage.film.story import subject_box
+
+    big = (1280, 800)
+    monkeypatch.setattr(test_film, "SIZE", big)
+    monkeypatch.setitem(globals(), "SIZE", big)
+    steps = [STEPS[0], {**STEPS[1], "focus": [0.5, 0.6, 1.6]}]
+    hotspots = [{"id": "ring", "x": 0.5, "y": 0.7, "label": "The ring", "to": DATES[1]}]
+    project = tiny(tmp_path / "p", steps=steps, hotspots=hotspots, film={"vertical": True})
+    p = _plan(project, "9x16").plan
+    step = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["focus_requested"])
+    assert step["target"] == "focus+subject:ring" and step["push"], step
+    x, y, z = step["focus"]
+    geo = Geometry(p["width"], p["height"], *big)
+    _, cy = geo.centre(x, y, z)
+    hh = geo.half(z)[1]
+    v = (0.7 - (cy - hh)) / (2 * hh)
+    v1 = subject_box(Layout.from_record(p["width"], p["height"], p["layout"]))[3]
+    assert v <= v1 + 1e-9 < p["layout"]["lead_baseline"] / p["height"], (v, v1)
 
 
 def test_default_is_story_and_classic_opt_out(tmp_path, monkeypatch):
@@ -816,8 +854,8 @@ def test_gate_hints_at_vantage_fast(tmp_path, monkeypatch):
 @pytest.mark.slow
 def test_demo_story_cut(tmp_path):
     """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 62 beats,
-    the Demolition push keeps the slide tower in frame in both cuts, and the stats print exactly the
-    three figures the cut chooses."""
+    the Demolition push frames the slide tower in 16:9 and keeps its reach in 9:16, and the stats
+    print exactly the three figures the cut chooses."""
     import shutil
 
     from vantage.demo import synth
@@ -850,12 +888,15 @@ def test_demo_story_cut(tmp_path):
         check_plan(p)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
         step = shot["step"]
-        assert step["push"] and step["target"] == "focus+subject:slide-tower", (fid, step)
         mv = MastersIndex.load(root / "masters" / "index.json").vantages["overview"]
         geo = Geometry(p["width"], p["height"], mv.width, mv.height)
         cx, cy = geo.centre(*step["focus"])
         hw, hh = geo.half(step["focus"][2])
-        assert cx - hw <= tower.x <= cx + hw and cy - hh <= tower.y <= cy + hh, fid
+        if fid == "16x9":
+            assert step["push"] and step["target"] == "focus+subject:slide-tower", (fid, step)
+            assert cx - hw <= tower.x <= cx + hw and cy - hh <= tower.y <= cy + hh, fid
+        else:  # far outside the portrait crop at rest: no whip across the master to reach it
+            assert step["target"] == "focus, subject off-frame:slide-tower", (fid, step)
         stats = [s for s in p["shots"] if s["kind"] == "stat"]
         assert [f for s in stats for f in s["facts"]] == ["flights", "stalls-to-meadow", "wave-pool-area"]
         assert stats[2]["value"] == "13,100"

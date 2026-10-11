@@ -671,13 +671,19 @@ two pushes), with or without VANTAGE_FAST.
     byte for byte, and a player looping the file shows no seam. The renderer checks it before
     encoding (`render.check_seam`).
   - For the demo the screen cycle is 76 beats at 75 bpm (1824 frames, 60.8 s at 30 fps).
-- **Push target**: `film.focus` when given (`target: film.focus`); otherwise the step's `focus`,
-  recentred so the step's **subject hotspots** fall inside the crop with a margin of 6 % of the crop
-  width (`focus+subject:<ids>`), or `focus` when there are none. Subjects are the chapter's hotspots
-  that appear since the previous step (`from` index in (prev step, this]) or disappear since it (`to`
-  index in [prev step, this − 1]); the first step's "previous" is the chapter's `from`. If they do not
-  fit, the zoom is lowered toward 1 in 32 steps; if they still do not fit, the crop centres on their
-  centroid (`subject-centroid`).
+- **Push target**: `film.focus` when given (`target: film.focus`, used as given); otherwise the
+  step's `focus`, recentred to the crop nearest it that puts the step's **subject hotspots** inside
+  the layout's subject box (`focus+subject:<ids>`; `story.subject_box`: the safe zone 1 % in from
+  its sides, below the date label (label cap-top + 64 units) and above the lead words (lead baseline
+  − 110 units), so in 9:16 a subject sits above the words, never under them), or `focus` when there
+  are none. Subjects are the chapter's hotspots that appear since the previous step (`from` index
+  in (prev step, this]) or disappear since it (`to` index in [prev step, this − 1]); the first step's
+  "previous" is the chapter's `from`. If they do not fit, the zoom is lowered toward 1 in 32 steps.
+  **Reach**: the crop centre never moves more than `MAX_TRAVEL` (0.5) of the rest crop's width
+  (height) from the rest view. When the subjects cannot be framed within that reach (in 9:16 a
+  subject far outside the portrait crop at rest), the push aims at the step's focus, capped to the
+  reach (`focus, subject off-frame:<ids>`, with a plan warning) rather than whipping across the
+  master to a subject the viewer never saw.
 - **Zoom clamp**: s0 = max(W/mw, H/mh); z_eff = clamp(z, 1, max(1, max_upscale/s0)). Warnings when
   z_eff < z ("push clamped"), s0·z_eff > 1.25 ("soft push") and s0 > max_upscale ("master upscaled
   even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a

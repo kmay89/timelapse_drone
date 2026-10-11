@@ -75,7 +75,6 @@ from vantage.site.build import resolve_capture_ref
 from vantage.site.render import capture_label as date_label
 
 LEAD_RE = re.compile(r"^\s*\*\*(.+?)\*\*", re.S)
-MARGIN = 0.06  # subject margin, as a share of the crop width
 SOFT = 1.25  # output px per master px beyond which a push is "soft"
 MIN_ZOOM, MIN_SHIFT = 1.08, 0.03  # below both, a clamped push becomes a still step
 Cam = tuple[float, float, float]
@@ -122,38 +121,85 @@ class Geometry:
         return min(max(x, hw), 1 - hw), min(max(y, hh), 1 - hh)
 
 
-def _fit(geo: Geometry, fx: float, fy: float, zoom: float, pts: Sequence[tuple[float, float]]) -> Cam | None:
-    """A crop at `zoom` nearest to (fx, fy) that holds every point with the subject margin, or None."""
+Box = tuple[float, float, float, float]  # u0, u1, v0, v1: where subjects may land, as frame fractions
+
+
+def subject_box(lay: Layout) -> Box:
+    """Where a push may put its subjects on screen: inside the safe zone (1 % in from its sides),
+    below the date label and above the lead words, so the words never cover what the camera frames."""
+    W, H, u = lay.width, lay.height, lay.unit
+    return (
+        lay.margin / W + 0.01,
+        lay.right / W - 0.01,
+        (lay.label_top + 64 * u) / H,
+        (lay.lead_baseline - 110 * u) / H,
+    )
+
+
+def _fit(
+    geo: Geometry, fx: float, fy: float, zoom: float, pts: Sequence[tuple[float, float]], box: Box
+) -> Cam | None:
+    """A crop at `zoom` nearest to (fx, fy) that puts every point inside `box` on screen, or None."""
     hw, hh = geo.half(zoom)
-    mx = MARGIN * 2 * hw
-    my = mx * geo.mw / geo.mh
+    u0, u1, v0, v1 = box
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-    x_lo, x_hi = max(max(xs) + mx - hw, hw), min(min(xs) - mx + hw, 1 - hw)
-    y_lo, y_hi = max(max(ys) + my - hh, hh), min(min(ys) - my + hh, 1 - hh)
+    # A point p lands at screen fraction u when the crop centre is p − (2u − 1)·hw.
+    x_lo, x_hi = max(max(xs) - (2 * u1 - 1) * hw, hw), min(min(xs) - (2 * u0 - 1) * hw, 1 - hw)
+    y_lo, y_hi = max(max(ys) - (2 * v1 - 1) * hh, hh), min(min(ys) - (2 * v0 - 1) * hh, 1 - hh)
     if x_lo > x_hi + 1e-12 or y_lo > y_hi + 1e-12:
         return None
     cx, cy = geo.centre(fx, fy, zoom)
     return min(max(cx, x_lo), x_hi), min(max(cy, y_lo), y_hi), zoom
 
 
+MAX_TRAVEL = 0.5  # a push moves the crop centre at most this share of the rest crop's width (height)
+
+
 def aim(
-    geo: Geometry, focus: Sequence[float], zmax: float, subjects: Sequence[Hotspot], *, explicit: bool
+    geo: Geometry,
+    focus: Sequence[float],
+    zmax: float,
+    subjects: Sequence[Hotspot],
+    *,
+    explicit: bool,
+    rest: Sequence[float] = (0.5, 0.5),
+    box: Box = (0.06, 0.94, 0.06, 0.94),
 ) -> tuple[Cam, str]:
-    """(x, y, zoom) of a push and how it was chosen: 'film.focus', 'focus', 'focus+subject:<ids>' or
-    'subject-centroid'. Zoom is clamped to [1, zmax]; subjects lower it toward 1 until they fit."""
+    """(x, y, zoom) of a push and how it was chosen: 'film.focus' (as given), 'focus' (the step's
+    focus), 'focus+subject:<ids>' (the crop nearest the focus that puts the subjects inside `box`),
+    or 'focus, subject off-frame:<ids>' (no such crop within MAX_TRAVEL of the rest view: the
+    step's focus). Zoom is clamped to [1, zmax]; subjects lower it toward 1 until they fit. Except
+    for film.focus, the crop centre never travels more than MAX_TRAVEL of the rest crop from the
+    rest view, so a push never whips across the master to reach a subject the viewer cannot see."""
     fx, fy, z = focus[0], focus[1], min(max(focus[2], 1.0), zmax)
     if explicit:
         return (fx, fy, z), "film.focus"
+    a = geo.centre(rest[0], rest[1], 1.0)
+    hw0, hh0 = geo.half(1.0)
+    reach = (MAX_TRAVEL * 2 * hw0, MAX_TRAVEL * 2 * hh0)
+
+    def near(cam: Cam) -> bool:
+        c = geo.centre(*cam)
+        return abs(c[0] - a[0]) <= reach[0] + 1e-9 and abs(c[1] - a[1]) <= reach[1] + 1e-9
+
+    def capped(x: float, y: float, zoom: float) -> Cam:
+        c = geo.centre(x, y, zoom)
+        return (
+            min(max(c[0], a[0] - reach[0]), a[0] + reach[0]),
+            min(max(c[1], a[1] - reach[1]), a[1] + reach[1]),
+            zoom,
+        )
+
     if not subjects:
-        return (fx, fy, z), "focus"
+        return capped(fx, fy, z), "focus"
     pts = [(h.x, h.y) for h in subjects]
     names = ",".join(h.id for h in subjects)
     for k in range(33):  # from the clamped zoom down to 1 in 32 even steps
         zoom = z - (z - 1.0) * k / 32
-        cam = _fit(geo, fx, fy, zoom, pts)
-        if cam is not None:
+        cam = _fit(geo, fx, fy, zoom, pts, box)
+        if cam is not None and near(cam):
             return cam, f"focus+subject:{names}"
-    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts), 1.0), "subject-centroid"
+    return capped(fx, fy, z), f"focus, subject off-frame:{names}"
 
 
 # --------------------------------------------------------------------------- #
@@ -578,7 +624,15 @@ def _aim_step(
     label: str,
 ) -> tuple[Cam, dict[str, Any]]:
     """A step's camera target, clamped by max_upscale (with warnings), and its plan record."""
-    cam, target = aim(geo, requested, zmax, [] if explicit else subjects, explicit=explicit)
+    cam, target = aim(
+        geo, requested, zmax, [] if explicit else subjects, explicit=explicit, rest=rest,
+        box=subject_box(b.layout),
+    )  # fmt: skip
+    if target.startswith("focus, subject off-frame"):
+        b.warnings.append(
+            f"{label}: subject {target.split(':', 1)[1]} cannot be framed above the words within reach "
+            f"of the rest view ({b.film.id}); the push aims at the step's focus"
+        )
     z = max(requested[2], 1.0)
     if zmax < z - 1e-9:
         b.warnings.append(
