@@ -338,6 +338,38 @@ def test_honesty_line(tmp_path):
     assert HONESTY["photo"] in photo and SIMULATED_NOTE not in photo
 
 
+def _kinds(root: Path, **kinds: str) -> Project:
+    path = root / "story.yaml"
+    story = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for v in story["vantages"]:
+        if v["id"] in kinds:
+            v["kind"] = kinds[v["id"]]
+    path.write_text(yaml.safe_dump(story, sort_keys=False), encoding="utf-8")
+    return load_project(root)
+
+
+def test_films_show_only_drone_vantages(tmp_path):
+    """An orthomosaic (or a plan, ground or archival vantage) is never called a real aerial
+    photograph: films leave it out with a warning, and an unknown provenance has no honesty line."""
+    from vantage.film.plan import honesty_line
+
+    root = tmp_path / "p"
+    compare = {**COMPARE, "vantage": "overview"}
+    tiny(root, chapters=[compare])
+    project = _kinds(root, overview="ortho")
+    plan = _plan(project)
+    assert plan.plan["provenance"] == ["photo"]
+    assert {s.get("vantage") for s in plan.plan["shots"]} - {None} == {"site"}
+    assert "vantage overview (kind: ortho): left out of the films" in " ".join(plan.warnings)
+    _, warnings = check_project(project)
+    assert any("vantage overview (kind: ortho)" in w for w in warnings)
+    project = _kinds(root, site="archival")
+    with pytest.raises(FileNotFoundError, match="no masters to film"):
+        _plan(project)
+    with pytest.raises(ValueError, match="no honesty line"):
+        honesty_line(["ortho"])
+
+
 def test_vertical_text_stays_in_the_safe_zone(tmp_path):
     project = tiny(tmp_path / "p", film={"vertical": True}, simulated=True)
     cut = _Cut(project, _plan(project, "9x16"))

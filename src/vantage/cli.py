@@ -472,14 +472,21 @@ FILM_WORDS_MAX = 40  # characters of on-screen words a step may put in a film
 
 
 def _check_films(project: Project, warnings: list[str]) -> None:
-    """Film warnings: long words, unknown chapters in films.<id>.chapters, a beat grid faster than a
-    dissolve, and pushes that are clamped or soft at the masters' resolution."""
+    """Film warnings: vantages films leave out (kind other than drone), long words, unknown chapters
+    in films.<id>.chapters, a beat grid faster than a dissolve, and pushes that are clamped or soft
+    at the masters' resolution."""
     from vantage.config import CompareChapter, ScrubChapter
     from vantage.film.beat import beat_grid
-    from vantage.film.plan import plan_films, resolve_films
+    from vantage.film.plan import FILM_KINDS, plan_films, resolve_films
     from vantage.film.story import lead_words
     from vantage.site.facts import FactError, FactNotes
 
+    for v in project.story.vantages:
+        if v.kind not in FILM_KINDS and project.config.output.film.enabled:
+            warnings.append(
+                f"story.yaml vantage {v.id} (kind: {v.kind}): left out of the films, which show only "
+                "drone vantages (no honesty line or on-image tag for this kind yet)"
+            )
     notes = FactNotes(project.facts.facts)
     ids = [ch.id or f"{ch.type}-{i + 1}" for i, ch in enumerate(project.story.chapters)]
     for cid, ch in zip(ids, project.story.chapters, strict=True):

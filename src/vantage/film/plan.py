@@ -80,8 +80,37 @@ def _plain(project: Project, text: str | None) -> str | None:
 
 
 def honesty_line(provenance: Sequence[str]) -> str:
-    """The end card's (and the transcript's) honesty line, derived from the plan's provenance."""
-    return HONESTY["simulated" if "simulated" in provenance else "photo"]
+    """The end card's (and the transcript's) honesty line, derived from the plan's provenance. Only
+    'photo' (drone vantages) and 'simulated' have one; any other provenance is an error, never
+    described as photographs."""
+    if "simulated" in provenance:
+        return HONESTY["simulated"]
+    unknown = sorted(set(provenance) - {"photo"})
+    if unknown or not provenance:
+        raise ValueError(
+            f"no honesty line for provenance {unknown or list(provenance)}: films show only drone vantages"
+        )
+    return HONESTY["photo"]
+
+
+FILM_KINDS = ("drone",)  # vantage kinds films show; ortho, ground, archival, plan need their own line and tag
+
+
+def film_vantages(project: Project, index: MastersIndex) -> list[str]:
+    """Leave the vantages films cannot show yet out of `index` (in place): every vantage whose
+    story.yaml `kind` is not drone. An orthomosaic is not a photograph, a plan is a drawing, a ground
+    view is not aerial and an archival image needs a recorded licence, while the honesty line says
+    "real aerial photographs". Returns one warning per vantage left out."""
+    kinds = {v.id: v.kind for v in project.story.vantages}
+    warnings = []
+    for vid in sorted(index.vantages):
+        kind = kinds.get(vid, "drone")
+        if kind not in FILM_KINDS:
+            del index.vantages[vid]
+            warnings.append(
+                f"vantage {vid} (kind: {kind}): left out of the films, which show only drone vantages"
+            )
+    return warnings
 
 
 def capture_labels(project: Project, dates: Sequence[str]) -> dict[str, str]:
@@ -413,6 +442,7 @@ def plan_films(
     _check_timing(project)
     fast = fast_mode() if fast is None else fast
     index = MastersIndex.load(index_path)
+    left_out = film_vantages(project, index)
     hashes: dict[str, str] = {}
     fonts = {}
     for role, path in font_files(project.brand).items():
@@ -422,7 +452,7 @@ def plan_films(
         }
     plans = {}
     for fid in ids:
-        warnings: list[str] = []
+        warnings: list[str] = list(left_out)
         if films[fid].cut == "story":
             from vantage.film.story import derive_cut
 
@@ -916,6 +946,7 @@ def check_films(project: Project, film_dir: Path) -> list[str]:
 
 
 __all__ = [
+    "FILM_KINDS",
     "FILM_RENDERER",
     "GOP_BEATS",
     "HONESTY",
@@ -927,6 +958,7 @@ __all__ = [
     "encode_settings",
     "film_records",
     "film_size",
+    "film_vantages",
     "has_tracks",
     "honesty_line",
     "plan_films",

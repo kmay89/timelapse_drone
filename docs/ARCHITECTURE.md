@@ -802,6 +802,12 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
 committed reconstruction clips) join it as new roles, and `provenance` will say so. The engine never
 reconstructs anything itself.
 
+Until each kind has its own honesty line and on-image tag, films show only vantages of `kind: drone`
+(`plan.FILM_KINDS`): `plan_films` leaves every `ortho`, `ground`, `archival` and `plan` vantage out
+of the masters it plans from, with a plan warning per vantage (`vantage validate` warns too), so
+`provenance` is only ever `photo` or `simulated`. `honesty_line` raises on any other provenance
+rather than describing it as photographs.
+
 Shots (in film order; `f0`, `f1` are frames, half-open; `key` is the storyboard frame):
 
 - Every shot: `id`, `kind`, `f0`, `f1`, `key`, `chapter` (null in classic cuts), `text`
