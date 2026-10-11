@@ -838,6 +838,17 @@ def test_poster_is_at_rest_without_words(tmp_path):
     assert cut.camera(p["poster"])[2] == 1.0
 
 
+def test_subject_under_the_words_is_a_warning(tmp_path):
+    """When the camera cannot lift a subject above the 9:16 lead words (no zoom to spare), the plan
+    says so."""
+    steps = [STEPS[0], {**STEPS[1], "focus": [0.5, 0.58, 1.4]}]
+    hotspots = [{"id": "pad", "x": 0.5, "y": 0.58, "label": "The pad", "to": DATES[1]}]
+    plan = _plan(tiny(tmp_path / "p", steps=steps, hotspots=hotspots, film={"vertical": True}), "9x16")
+    assert any("subject pad sits under the words 'Demolition.' (9x16)" in w for w in plan.warnings), (
+        plan.warnings
+    )
+
+
 def test_push_eases_back_as_slowly_as_it_went_in(tmp_path):
     """Every camera move lasts at least a push (B + B/3 frames): the release after a push no longer
     snaps back inside the next dissolve; check_plan refuses a faster move."""

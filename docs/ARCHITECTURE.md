@@ -710,6 +710,8 @@ two pushes), with or without VANTAGE_FAST.
   subject far outside the portrait crop at rest), the push aims at the step's focus, capped to the
   reach (`focus, subject off-frame:<ids>`, with a plan warning) rather than whipping across the
   master to a subject the viewer never saw.
+  A step whose subject still sits under its lead words on screen (between the subject box and
+  30 units below the lead baseline: no zoom to spare to lift it) gets a plan warning.
 - **Zoom clamp**: s0 = max(W/mw, H/mh); z_eff = clamp(z, 1, max(1, max_upscale/s0)). Warnings when
   z_eff < z ("push clamped"), s0·z_eff > 1.25 ("soft push") and s0 > max_upscale ("master upscaled
   even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a

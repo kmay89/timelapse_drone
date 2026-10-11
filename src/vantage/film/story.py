@@ -702,13 +702,34 @@ def _push(
         "reason": None if requested else "no focus",
     }
     if not requested:
+        _under_words(b, series.geometry, rest, cap, words, f"{series.chapter} {cap.date}")
         return record, None
     explicit = bool(step.film and step.film.focus)
     cam, aimed = _aim_step(
         b, series.geometry, requested, explicit, cap.subjects, rest, zmax, f"{series.chapter} {cap.date}"
     )
     record.update(aimed)
+    _under_words(
+        b, series.geometry, cam if aimed["push"] else rest, cap, words, f"{series.chapter} {cap.date}"
+    )
     return record, (cam if aimed["push"] else None)
+
+
+def _under_words(b: _Builder, geo: Geometry, cam: Cam, cap: _Capture, words: str | None, label: str) -> None:
+    """Warn when a step's subject sits under its lead words on screen (the camera at `cam`)."""
+    if not words or not cap.subjects:
+        return
+    lay = b.layout
+    u0, u1, _, v1 = subject_box(lay)
+    hw, hh = geo.half(cam[2])
+    cx, cy = geo.centre(*cam)
+    below = (lay.lead_baseline + 30 * lay.unit) / lay.height
+    for h in cap.subjects:
+        u, v = (h.x - (cx - hw)) / (2 * hw), (h.y - (cy - hh)) / (2 * hh)
+        if u0 <= u <= u1 and v1 < v < below:
+            warning = f"{label}: subject {h.id} sits under the words {words!r} ({b.film.id})"
+            if warning not in b.warnings:
+                b.warnings.append(warning)
 
 
 def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, part: _Series | _Curtain):
