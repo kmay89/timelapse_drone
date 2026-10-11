@@ -127,9 +127,10 @@ def test_caption_readability_rule(tmp_path):
     shots = {s["capture"]: s for s in p["shots"] if s["kind"] == "capture"}
     cues = {c["f0"]: c for c in p["captions"]}
 
-    def cue(date: str) -> dict:
-        d = shots[date]["dissolve"]
-        return cues[shots[date]["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2]
+    def cue(date: str) -> dict:  # a cue starts at its dissolve's midpoint, or later when the one
+        d = shots[date]["dissolve"]  # before it was held to be readable
+        mid = shots[date]["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
+        return next(c for f0, c in sorted(cues.items()) if f0 >= mid)
 
     first, third = cue(DATES[0]), cue(DATES[2])
     assert first["text"] == f"March 2025. Before. {short}"  # fits: appended
@@ -274,10 +275,10 @@ def test_package_lists_tracks(tmp_path, monkeypatch):
     # The classic cut's captions are its capture labels; its chapters its sections and the credits.
     plan = FilmPlan.load(dist / "film" / "tiny-site-16x9.plan.json")
     assert [c["title"] for c in plan.plan["chapters"]] == ["Overview", "Credits"]
-    assert [c["text"] for c in plan.plan["captions"]][:4] == [
+    # 0.8 s holds: too short for one date each, so the quiet labels read as spans.
+    assert [c["text"] for c in plan.plan["captions"]][:3] == [
         "A Tiny Site",
-        "June 2025",
-        "August 2025",
+        "June 2025 – August 2025",
         "January 2026",
     ]
 
@@ -314,3 +315,27 @@ def test_transcript_says_preview_unverified_and_pushes(tmp_path):
     assert "Preview, not for release. Lines marked [unverified]" in text
     assert re.search(r"^\[\d+:\d{2}\] \[unverified\] Aerial view .*78 trees\.", text, re.M), text
     assert "The camera moves in on The tower." in text
+
+
+def test_every_cue_is_readable(tmp_path):
+    """No caption cue lasts under a second or asks for more than 17 characters a second: runs of
+    quiet date labels become one span cue, and any other short cue is held into the next one."""
+    project = tiny(tmp_path / "p", steps=[STEPS[0]], chapters=[COMPARE], simulated=True)
+    p = _plan(project).plan
+    quiet = [s["label"] for s in p["shots"] if s["kind"] == "capture" and not s["step"]]
+    assert len(quiet) >= 2
+    assert any(" – " in c["text"] for c in p["captions"])  # the quiet captures as one span
+    for c in p["captions"][:-1]:
+        assert c["f1"] - c["f0"] >= tracks.cue_frames(c["text"], FPS), c
+    starts = [c["f0"] for c in p["captions"]]
+    assert starts == sorted(set(starts)) and all(c["f0"] < c["f1"] for c in p["captions"])
+    # A bare collector: two 0.4 s date cues become one span; a short worded cue is held.
+    t = tracks.Tracks(10)
+    t.cue(0, "May", span="May")
+    t.cue(4, "June", span="June")
+    t.cue(8, "Hi.", [])
+    t.cue(12, "A longer cue that ends the film here.", [])
+    caps = t.record(60, title="T", subtitle=None, honesty="H")["captions"]
+    assert [(c["f0"], c["f1"], c["text"]) for c in caps] == [
+        (0, 10, "May – June"), (10, 20, "Hi."), (20, 60, "A longer cue that ends the film here."),
+    ]  # fmt: skip

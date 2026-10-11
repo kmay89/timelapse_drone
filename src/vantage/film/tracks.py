@@ -20,6 +20,7 @@ are metadata, and it blanks them.
 from __future__ import annotations
 
 import html
+import math
 import re
 import struct
 import tempfile
@@ -32,6 +33,7 @@ from vantage.media.ffmpeg import run
 from vantage.models import FilmPlan
 
 CPS = 17  # the most characters per second a caption cue may ask a reader to take in
+MIN_CUE_S = 1.0  # the shortest a caption cue stays on screen
 SUFFIXES = (".vtt", ".srt", ".chapters.vtt", ".txt")
 ISO639_2 = {"en": "eng", "fr": "fra", "es": "spa", "de": "deu"}
 _END = re.compile(r"[.!?…:;]\s*$")
@@ -73,6 +75,41 @@ def fits(text: str, f0: int, f1: int, fps: int) -> bool:
     return len(text) <= CPS * (f1 - f0) / fps
 
 
+def cue_frames(text: str, fps: int) -> int:
+    """The fewest frames a cue of `text` needs: MIN_CUE_S, and CPS characters per second."""
+    return max(math.ceil(MIN_CUE_S * fps), math.ceil(len(text) * fps / CPS))
+
+
+def _readable(captions: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
+    """Give every cue its `cue_frames`: a run of short date-only cues (`span`, quiet captures)
+    becomes one '<first> – <last>' cue; any other short cue is held into the next cue's time (which
+    then starts later but ends where it did)."""
+    out: list[dict[str, Any]] = []
+    i = 0
+    while i < len(captions):
+        c, j = dict(captions[i]), i
+        first = c.get("span")
+        while (
+            first
+            and c["f1"] - c["f0"] < cue_frames(c["text"], fps)
+            and j + 1 < len(captions)
+            and captions[j + 1].get("span")
+            and captions[j + 1]["f0"] == c["f1"]
+        ):
+            j += 1
+            nxt = captions[j]
+            facts = list(dict.fromkeys([*c["facts"], *nxt["facts"]]))
+            c = {**c, "f1": nxt["f1"], "text": f"{first} – {nxt['span']}", "facts": facts}
+        c.pop("span", None)
+        out.append(c)
+        i = j + 1
+    for k, c in enumerate(out[:-1]):
+        nxt, want = out[k + 1], c["f0"] + cue_frames(c["text"], fps)
+        if c["f1"] < want and c["f1"] == nxt["f0"]:
+            c["f1"] = nxt["f0"] = max(c["f1"], min(want, nxt["f1"] - 1))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Plan time: collecting the tracks
 # --------------------------------------------------------------------------- #
@@ -99,9 +136,13 @@ class Tracks:
         text: str | None,
         facts: Sequence[str] = (),
         more: tuple[str, Sequence[str]] | None = None,
+        *,
+        span: str | None = None,
     ) -> None:
+        """A cue from f0; `span` (a quiet capture's date label) lets a run of short cues become one
+        '<first> – <last>' cue."""
         if self.enabled and text:
-            self.cues.append({"f0": f0, "text": text, "facts": list(facts), "more": more})
+            self.cues.append({"f0": f0, "text": text, "facts": list(facts), "more": more, "span": span})
 
     def chapter(self, f0: int, title: str | None, facts: Sequence[str] = ()) -> None:
         if self.enabled and title:
@@ -115,8 +156,9 @@ class Tracks:
         self, frames: int, *, title: str | None, subtitle: str | None, honesty: str, facts: Sequence[str] = ()
     ) -> dict[str, Any]:
         """plan.json `captions`, `chapters` and `transcript` (hashed). The first chapter starts at
-        frame 0 (the title belongs to it); a chapter or cue that would last no frames is dropped, and
-        consecutive cues with the same text become one."""
+        frame 0 (the title belongs to it); a chapter or cue that would last no frames is dropped,
+        consecutive cues with the same text become one, and short cues are made readable
+        (`_readable`)."""
         if not self.enabled:
             return {"captions": [], "chapters": [], "transcript": None}
         cues = sorted(self.cues, key=lambda c: c["f0"])
@@ -125,15 +167,18 @@ class Tracks:
             f1 = cues[k + 1]["f0"] if k + 1 < len(cues) else frames
             if f1 <= cue["f0"]:
                 continue
-            text, used = cue["text"], cue["facts"]
+            text, used, span = cue["text"], cue["facts"], cue.get("span")
             if cue["more"] is not None and fits(cue["more"][0], cue["f0"], f1, self.fps):
-                text, used = cue["more"][0], list(cue["more"][1])
+                text, used, span = cue["more"][0], list(cue["more"][1]), None
             text = one_line(text)
             if captions and captions[-1]["text"] == text and captions[-1]["f1"] == cue["f0"]:
                 captions[-1]["f1"] = f1  # the same words again (curtain steps): one longer cue
                 captions[-1]["facts"] = list(dict.fromkeys([*captions[-1]["facts"], *used]))
                 continue
-            captions.append({"f0": cue["f0"], "f1": f1, "text": text, "facts": list(dict.fromkeys(used))})
+            captions.append(
+                {"f0": cue["f0"], "f1": f1, "text": text, "facts": list(dict.fromkeys(used)), "span": span}
+            )
+        captions = _readable(captions, self.fps)
         marks = sorted(self.marks, key=lambda m: m["f0"])
         if marks:
             marks[0] = {**marks[0], "f0": 0}

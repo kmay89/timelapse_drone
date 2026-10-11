@@ -910,7 +910,11 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
 
 - **Captions**: one cue per text-bearing shot, from the midpoint of its dissolve or dip (its first frame
   without one) to the next cue's start, the last to the film's end; sorted, never overlapping;
-  consecutive cues with the same text merge.
+  consecutive cues with the same text merge. Every cue then gets `tracks.cue_frames`: at least
+  1 s (`MIN_CUE_S`) and its length at 17 characters a second. A run of short cues that are only a
+  quiet capture's date label becomes one "<first> – <last>" cue ("June 2026 – August 2026"); any
+  other short cue is held into the next cue, which starts later but ends where it did. Only the
+  last cue can stay short (the film ends).
   - title → the title (else the kicker); card → the chapter title;
   - capture → "<label>. <words>" ("April 2025. Before."); its note is appended only when the whole
     cue stays at or under 17 characters per second of the cue's length (`tracks.CPS`);

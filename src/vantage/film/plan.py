@@ -726,6 +726,7 @@ def _classic_tracks(
                     cap.label,
                     cap.label_facts,
                     (with_note, [*cap.label_facts, *cap.note_facts]) if with_note else None,
+                    span=cap.label,
                 )
                 lead = f"Aerial view ({section.name}), {cap.label}" if j == 0 else f"Same view, {cap.label}"
                 facts = [*cap.label_facts, *cap.note_facts, *(section.facts if j == 0 else ())]

@@ -1068,7 +1068,7 @@ def _capture_tracks(
     base = sentence(cap.label, words)
     base_facts = [*cap.label_facts, *words_facts]
     more = (sentence(base, cap.note), [*base_facts, *cap.note_facts]) if cap.note else None
-    b.tracks.cue(start, base, base_facts, more)
+    b.tracks.cue(start, base, base_facts, more, span=None if words else cap.label)
     text, text_facts = b.step_text(cap.step, f"chapter {s.chapter!r} step {cap.step_index}")
     body, body_facts = (text, text_facts) if text else (cap.note, cap.note_facts)
     lead = f"Aerial view ({vname}), {cap.label}" if first else f"Same view, {cap.label}"
