@@ -198,9 +198,9 @@ def test_film_specs_are_validated(tmp_path, films, match):
 def test_derive_cut_shapes_and_grid(tmp_path):
     plan = _plan(tiny(tmp_path / "p")).plan
     shots = plan["shots"]
-    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "end"]
+    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "end", "end"]
     assert plan["grid"] == {"bpm": 90.0, "fpb": B, "dissolve": D, "beats": plan["frames"] // B}
-    caps = shots[1:-1]
+    caps = shots[1:-2]
     assert [(s["f1"] - s["f0"]) // B for s in caps] == [3, 1, 4, 1, 3]  # step, quiet, push, quiet, step
     assert caps[0]["dissolve"] is None and all(
         s["dissolve"]["f1"] - s["dissolve"]["f0"] == D for s in caps[1:]
@@ -220,7 +220,7 @@ def test_derive_cut_shapes_and_grid(tmp_path):
     assert shots[0]["capture"] == DATES[0] and shots[0]["file"] == caps[0]["file"]
     assert [s["rail"] for s in caps] == [0, 1, 2, 3, 4]
     assert plan["frames"] == shots[-1]["f1"] and plan["camera"][-1]["b"] == plan["frames"]
-    # The push holds to the end of its shot and eases back during the next dissolve.
+    # The push holds to the end of its shot and eases back from the next shot on.
     push = [c for c in plan["camera"] if c["zoom"] > 1]
     assert len(push) == 1 and (push[0]["a"], push[0]["b"]) == (
         caps[2]["f0"] + 2 * B + round(B / 3),
@@ -238,7 +238,7 @@ def test_cards_between_vantages_and_chapter_scope(tmp_path):
     project = load_project(root)
     wide, tall = _plan(project).plan, _plan(project, "9x16").plan
     kinds = [s["kind"] for s in wide["shots"]]
-    assert kinds == ["title", *["capture"] * 5, "card", *["capture"] * 3, "end"]
+    assert kinds == ["title", *["capture"] * 5, "card", *["capture"] * 3, "end", "end"]
     card = wide["shots"][6]
     assert card["text"] == [{"role": "title", "text": "The overview"}] and card["vantage"] == "overview"
     assert wide["shots"][7]["dissolve"]["from"] == "night"
@@ -340,12 +340,12 @@ def test_bare_numbers():
 
 def test_honesty_line(tmp_path):
     def end_text(project: Project) -> str:
-        end = _plan(project).plan["shots"][-1]
-        assert end["kind"] == "end"
-        return "\n".join(t["text"] for t in end["text"])
+        ends = [s for s in _plan(project).plan["shots"] if s["kind"] == "end"]
+        assert [s["id"] for s in ends] == ["E1", "E2"]  # the credits, then the honesty card
+        return "\n".join(t["text"] for t in ends[1]["text"])
 
     simulated = end_text(tiny(tmp_path / "a", simulated=True))
-    assert HONESTY["simulated"] in simulated and SIMULATED_NOTE in simulated
+    assert HONESTY["simulated"] in simulated and SIMULATED_NOTE not in simulated  # said once
     assert "real photograph" not in simulated.lower() and "real aerial" not in simulated.lower()
     photo = end_text(tiny(tmp_path / "b"))
     assert HONESTY["photo"] in photo and SIMULATED_NOTE not in photo
@@ -463,20 +463,26 @@ def test_flash_meter_regions_and_red():
     assert meter.max_delta < 0.10 and not meter.passed
 
 
-def test_short_end_card_is_refused(tmp_path):
-    """end_beats 2 after a paper stat: the 18-frame dip from paper would leave the end card's text
-    under a beat (B = 8), so the plan is refused rather than ending mid-dip; transcript lines never
-    start past the film's last frame."""
+def test_end_cards_are_long_enough_to_read(tmp_path):
+    """end_beats 2 after a paper stat: the end cards are lengthened until their text reads at 17
+    characters a second after the 18-frame dip from paper; a dip that leaves under a beat for the
+    text is refused; transcript lines never start past the film's last frame."""
     root = tmp_path / "p"
     tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 2}})
-    project = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
-    with pytest.raises(PlanError, match="E1: a 18-frame dip leaves under a beat"):
-        _plan(project)
-    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 4}})
     plan = _plan(_facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]}))
     p = plan.plan
+    e1, e2 = (s for s in p["shots"] if s["kind"] == "end")
+    third = round(B / 3)
+    assert e1["f1"] - e1["f0"] - e1["dip"] - 2 * third >= math.ceil(len("Made for testing.") * 12 / 17)
+    assert e2["f1"] - e2["f0"] - e2["dip"] - third - B >= math.ceil(len(HONESTY["photo"]) * 12 / 17)
+    assert e2["f1"] == p["frames"]
     assert all(line["f0"] < p["frames"] for line in p["transcript"]["lines"])
-    assert p["captions"][-1]["text"] == "Made for testing."  # the credit cue survives
+    assert p["captions"][-1]["text"] == HONESTY["photo"]  # the honesty card's cue survives
+    short = json.loads(json.dumps(p))
+    end = next(s for s in short["shots"] if s["id"] == "E1")
+    end["dip"] = end["f1"] - end["f0"] - B + 1
+    with pytest.raises(PlanError, match=r"E1: a .*-frame dip leaves under a beat"):
+        check_plan(short)
 
 
 def test_check_plan_rejects_short_dissolve(tmp_path):
@@ -577,7 +583,7 @@ def test_curtain_split_halves(tmp_path):
     project = tiny(tmp_path / "p", chapters=[COMPARE], simulated=True)
     plan = _plan(project)
     shots = plan.plan["shots"]
-    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "curtain", "end"]
+    assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "curtain", "end", "end"]
     curtain = shots[6]
     assert (curtain["before"], curtain["after"], curtain["labels"]) == (DATES[0], DATES[4], ["Then", "Now"])
     assert curtain["f1"] - curtain["f0"] == (1 + 4) * B  # entry beat, then 2 + 2 beats per split
@@ -718,16 +724,21 @@ def test_degrade(tmp_path):
         return plan["shots"]
 
     one = kinds(1)
-    assert [s["kind"] for s in one] == ["title", "capture", "end"]
+    assert [s["kind"] for s in one] == ["title", "capture", "end", "end"]
     assert one[1]["f1"] - one[1]["f0"] == 3 * B and one[1]["dissolve"] is None
     unsourced = {**STATS, "items": [STATS["items"][0]]}
-    assert [s["kind"] for s in kinds(1, [unsourced])] == ["title", "capture", "end"]  # no fact, no stat
+    assert [s["kind"] for s in kinds(1, [unsourced])] == [
+        "title",
+        "capture",
+        "end",
+        "end",
+    ]  # no fact, no stat
     two = kinds(2)
-    assert [s["kind"] for s in two] == ["title", "capture", "curtain", "end"]
+    assert [s["kind"] for s in two] == ["title", "capture", "curtain", "end", "end"]
     assert two[1]["f1"] - two[1]["f0"] == 3 * B
     assert (two[2]["before"], two[2]["after"]) == (DATES[0], DATES[1])
     assert [k["split"] for k in two[2]["keys"]] == [0.0, 0.5]
-    assert [s["kind"] for s in kinds(3)] == ["title", "capture", "capture", "capture", "end"]
+    assert [s["kind"] for s in kinds(3)] == ["title", "capture", "capture", "capture", "end", "end"]
 
 
 def test_push_target_shows_subject(tmp_path):

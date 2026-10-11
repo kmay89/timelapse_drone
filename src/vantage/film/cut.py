@@ -932,8 +932,11 @@ class _Cut:
         third, dip = self.third, shot.get("dip", self.d)
         frame = self.card_bg.copy()
         opacity = ramp(f, shot["f0"] + dip, third)
-        if shot["kind"] == "card":
+        nxt = self.shots[i + 1] if i + 1 < len(self.shots) else None
+        if shot["kind"] == "card" or (nxt is not None and nxt["kind"] == "end"):
             opacity *= 1 - ramp(f, shot["f1"] - third, third)
+        elif nxt is None:  # the last shot of a film that does not loop: its text fades to night
+            opacity *= 1 - ramp(f, shot["f1"] - self.fpb, self.fpb)
         _put(frame, L["stack"], opacity)
         self._surface_tag(frame, "night")
         prev = self.shots[i - 1] if i else None

@@ -159,7 +159,7 @@ def test_chapters_and_transcript(tmp_path):
     assert starts == sorted(set(starts))
     curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
     stat = next(s for s in p["shots"] if s["kind"] == "stat")
-    end = p["shots"][-1]
+    end = next(s for s in p["shots"] if s["kind"] == "end")
     assert starts[1:] == [curtain["f0"], stat["f0"], end["f0"]]
     chapters = tracks.to_chapters_vtt(plan)
     assert chapters.startswith("WEBVTT\n\n") and chapters.count(" --> ") == 4

@@ -57,7 +57,6 @@ from vantage.film.plan import (
     GOP_BEATS,
     HONESTY,
     LOOP_BEATS,
-    SIMULATED_NOTE,
     FilmDef,
     _Printer,
     _sha256,
@@ -997,7 +996,7 @@ def derive_cut(
                 b.tracks.line(start, f"Figure: {figure} {item['label']}{source}.", item["facts"])
             pushed = None
 
-    # End card.
+    # End cards: the credits (E1), then, except in a loop, the honesty line and fine print (E2).
     brand = project.brand
     say = b.say()
     provenance = ["simulated" if cfg.simulated else "photo"]
@@ -1008,21 +1007,31 @@ def derive_cut(
         lines.append({"role": "url", "text": short_url})
     if not film.loop and brand.credit_line and (t := say(brand.credit_line, "brand.yaml credit_line")):
         lines.append({"role": "credit", "text": t})
+    fine_say = b.say()
+    fine: list[dict[str, Any]] = []
     if not film.loop:
         for partner in brand.partners:
             lines += [{"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name}]
         if short_url:
             lines.append({"role": "link", "text": short_url})
+        # The honesty line already says "simulated" when it is: no SIMULATED_NOTE on top of it.
+        fine.append({"role": "honesty", "text": honesty})
         for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer")):
-            if text_ and (t := say(text_, f"brand.yaml {where}")):
-                lines.append({"role": "fine", "text": t})
-        lines.append({"role": "honesty", "text": honesty})
-        if cfg.simulated:
-            lines.append({"role": "fine", "text": SIMULATED_NOTE})
+            if text_ and (t := fine_say(text_, f"brand.yaml {where}")):
+                fine.append({"role": "fine", "text": t})
     dip = b.dip("night")
     if b.prev is not None and b.prev["kind"] in IMAGES:  # a push holds while the image dips out
         cam.until(b.f + dip)
+
+    def card_beats(d: int, read: str, extra: int) -> int:
+        """Beats for an end card whose `read` text is fully on screen for as long as it takes to
+        read at 17 characters a second (it fades in over B/3 after its dip), plus `extra` frames."""
+        return -(-(d + third + cue_frames(read, fps) + extra) // B)
+
+    credit_read = " ".join(t["text"] for t in lines if t["role"] in ("credit", "link"))
     end_beats = film.end_beats
+    if not film.loop:  # partners are scanned, the credit line and link read; then a fade
+        end_beats = max(end_beats, card_beats(dip, credit_read, third + (B if brand.partners else 0)))
     if film.loop:  # a whole number of GOPs: lengthen the end card
         end_beats += -(b.f // B + end_beats + LOOP_BEATS["dip"]) % GOP_BEATS
     end = b.add(
@@ -1042,6 +1051,23 @@ def derive_cut(
     b.tracks.chapter(end["f0"], "Credits")
     b.tracks.cue(end["f0"] + dip // 2, credit or brand.name, credit_facts)
     b.tracks.line(end["f0"] + dip // 2, "End card: " + " / ".join(t["text"] for t in lines), say.facts)
+    if fine:  # the honesty line read in full, the fine print shown with it; the film ends on night
+        d2 = b.dip("night")
+        e2 = b.add(
+            {
+                "id": "E2",
+                "kind": "end",
+                "chapter": None,
+                "text": fine,
+                "facts": list(fine_say.facts),
+                "dip": d2,
+                "honesty": honesty,
+            },
+            max(4, card_beats(d2, honesty, B)),
+        )
+        e2["key"] = min(e2["f1"] - B - 1, e2["f0"] + d2 + 2 * B)
+        b.tracks.cue(e2["f0"] + d2 // 2, honesty)
+        b.tracks.line(e2["f0"] + d2 // 2, "End card: " + " / ".join(t["text"] for t in fine), fine_say.facts)
     if film.loop:  # back to pure night: frame N is frame 0
         back = b.add({"id": "D1", "kind": "dip", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["dip"])
         back["key"] = back["f0"] + B

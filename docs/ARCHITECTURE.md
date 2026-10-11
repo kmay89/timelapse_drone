@@ -655,8 +655,15 @@ two pushes), with or without VANTAGE_FAST.
   surface or an image: it lasts `surface_dip` frames (film/safety.py, 17 for the demo colours at
   30 fps), the shortest display-gamma dip from night to paper in which no frame pair changes
   luminance by 0.10 or more.
-- **end** (`end_beats`, 6): a D-frame dip to night, then brand name, credit line, partners, the short
-  `base_url`, copyright, disclaimer, the honesty line and SIMULATED_NOTE when the project is simulated.
+- **end** (two cards, both kind `end`):
+  - `E1`, the credits (at least `end_beats`, 6): a dip to night, then the brand name, credit line,
+    partners and the short `base_url`. Lengthened until the credit line and link are fully on screen
+    for as long as they take to read at 17 characters a second, plus a beat to scan the partners;
+    its text fades out over its last B/3 frames.
+  - `E2`, the honesty card (at least 4 beats): a D-frame dip, then the honesty line with copyright
+    and disclaimer below it as fine print, held until the honesty line reads at 17 characters a
+    second, then its text fades to night over the film's last beat (the film ends on night). The
+    honesty line says "simulated" when it is, so no SIMULATED_NOTE is added (classic cuts keep it).
   The honesty line comes from `provenance`:
   - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
   - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
@@ -878,8 +885,8 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
 - `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper), `dip`, `land` (the
   frame the figure starts to slide in), `text_in` (the frame unit, label and source fade in). Text roles
   `value`, `unit`, `label`, `source`.
-- `end` (`E1`): `dip`, `honesty`. Text roles `brand`, `credit`, `role`, `partner`, `link`, `fine`,
-  `honesty`; a loop's end card has only `brand` and `url`.
+- `end` (`E1`, then `E2` except in a loop): `dip`, `honesty`. Text roles: E1 `brand`, `credit`,
+  `role`, `partner`, `link`; E2 `honesty`, `fine`; a loop's end card has only `brand` and `url`.
 - `rise` (`R1`), `dip` (`D1`): loop films only, no extra fields and no text.
 
 Shot kinds `ortho`, `heatmap` and `insert` are reserved and refused. A text that uses a
@@ -941,7 +948,7 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
     cue stays at or under 17 characters per second of the cue's length (`tracks.CPS`);
   - curtain → one cue per step, from the entry (first step) or the sweep start: "<before> / <after>:
     <step text, plain>" under the same 17 characters/s rule, else "<before> / <after>";
-  - stat → "<value> <unit> <label>"; end → the credit line (else the brand name).
+  - stat → "<value> <unit> <label>"; E1 → the credit line (else the brand name); E2 → the honesty line.
   - Classic cuts: the title, each capture's label (+ note under the same rule) from the middle of
     its incoming crossfade, each section card's name and the credit line.
 - **Chapters**: each series (the scrub title, else the vantage name), each curtain (the compare
@@ -963,7 +970,7 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   - curtain: "Split screen (<vantage name>), <before> left and <after> right. The line moves to
     <split>%: <step text>. Then to <split>%: …";
   - stat: "Figure: <value> <unit> <label> (source: <source>).";
-  - end: "End card: " and the end card's lines joined by " / ".
+  - end: "End card: " and each end card's lines joined by " / " (one line per card).
   It reads only the plan (`to_transcript(plan)`), so it never prints a fact the gate has not seen.
 - **Formats**: WebVTT `WEBVTT` with `hh:mm:ss.mmm` (cue text escapes `&`, `<`, `>`); SRT numbered
   with `hh:mm:ss,mmm`; times are frames converted to whole milliseconds, rounded half up (frame 36
