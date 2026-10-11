@@ -967,6 +967,12 @@ def render_film(
         outputs.append(out)
     if not plan_only:
         for fid, h in usb.items():
+            bad = [f for f, snap in plans[fid].facts.items() if not snap.get("releasable")]
+            if bad and not project.config.draft:  # an unattended public screen: nobody to explain them
+                raise ReleaseError(
+                    f"--hours: film {fid} prints fact(s) {', '.join(map(repr, bad))} that are not "
+                    "releasable; a USB copy plays unattended, so verify them (or mark the project draft)"
+                )
             copy = concat_hours(out_dir / f"{project.slug}-{fid}.mp4", h, out_dir / USB_DIR)
             log.ok(f"{fid}: {h:g} h for a USB player → {copy} ({copy.stat().st_size / 1024**2:.1f} MiB)")
     return outputs

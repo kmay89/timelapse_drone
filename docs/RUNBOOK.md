@@ -100,12 +100,14 @@ player looping the file shows no jump). It is rendered only when asked for:
 
 ```sh
 uv run vantage film <slug> --film screen --plan-only    # approve the cut from its storyboard
-uv run vantage film <slug> --film screen                # film/<slug>-screen.mp4 (one cycle, about a minute)
+uv run vantage film <slug> --film screen --release      # film/<slug>-screen.mp4 (one cycle, about a minute)
 uv run vantage film <slug> --film screen --hours 2      # film/usb/<slug>-screen-2h.mp4, stream copy in seconds
 ```
 
-- Declare it once in story.yaml: `films: { screen: { preset: screen } }`. Its stats show only facts
-  that are releasable (or everything in a draft project), because nobody is there to explain them.
+- Declare it once in story.yaml: `films: { screen: { preset: screen } }`. Every text it prints
+  (stats, step words, labels, cards) shows only facts that are releasable (or everything in a draft
+  project, tagged Preview), because nobody is there to explain them; `--release` refuses a draft,
+  and `--hours` refuses a loop of a project that is not a draft if it prints a fact that is not releasable.
 - Render both versions: the one-cycle MP4 (for players and laptops that loop a file) and the
   `--hours` file (for TVs whose USB player plays a file once and stops).
 - Test-play both on the venue's own player at least **3 days ahead**: that it starts, loops without a

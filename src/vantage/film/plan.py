@@ -126,19 +126,27 @@ class _Printer:
     """Resolves the text one shot prints and collects the fact ids it prints, in first-use order.
 
     A text that uses a do-not-print fact is never printed in a film: it comes back as None and the
-    plan records a warning."""
+    plan records a warning. With `releasable_only` (an unattended loop film of a project that is not
+    a draft), neither is a text that prints a fact that is not releasable."""
 
     project: Project
     warnings: list[str]
     facts: list[str] = field(default_factory=list)
+    releasable_only: bool = False
 
     def __call__(self, text: str | None, where: str) -> str | None:
         if text is None:
             return None
         notes = FactNotes(self.project.facts.facts)
         printed = notes.plain(text)
-        if any(self.project.facts.facts[f].status == "do-not-print" for f in notes.order):
+        facts = self.project.facts.facts
+        if any(facts[f].status == "do-not-print" for f in notes.order):
             warning = f"{where}: left out of the films (it uses a do-not-print fact)"
+            if warning not in self.warnings:
+                self.warnings.append(warning)
+            return None
+        if self.releasable_only and (bad := [f for f in notes.order if not facts[f].releasable]):
+            warning = f"{where}: left out of the loop film (fact {bad[0]!r} is not releasable)"
             if warning not in self.warnings:
                 self.warnings.append(warning)
             return None
@@ -666,10 +674,12 @@ def _classic(
     )
 
 
-def said(project: Project, raw: str | None, where: str, warnings: list[str]) -> tuple[str | None, list[str]]:
+def said(
+    project: Project, raw: str | None, where: str, warnings: list[str], *, releasable_only: bool = False
+) -> tuple[str | None, list[str]]:
     """(text as printed through the facts, the fact ids it prints); (None, []) for a text that uses
-    a do-not-print fact (with a warning)."""
-    say = _Printer(project, warnings)
+    a do-not-print fact, or with `releasable_only` a fact that is not releasable (with a warning)."""
+    say = _Printer(project, warnings, releasable_only=releasable_only)
     text = say(raw, where)
     return text, list(say.facts) if text is not None else []
 

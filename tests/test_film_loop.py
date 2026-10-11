@@ -207,6 +207,31 @@ def test_screen_stats_need_releasable_facts(tmp_path):
     assert len(stat) == 1 and stat[0]["facts"] == ["area"]
 
 
+def test_screen_prints_only_releasable_facts(tmp_path, monkeypatch):
+    """Every text of an unattended loop (step words, labels, cards), not only its stats, drops a
+    fact that is not releasable unless the project is a draft; --hours refuses such a plan."""
+    monkeypatch.setenv("VANTAGE_FAST", "1")
+    root = tmp_path / "p"
+    steps = [{"capture": "2025-07-01", "text": "**Opens {fact:opening}.** Then the rest."}]
+    captures = [{"date": "2025-03-01", "label": "Spring {fact:opening}"}]
+    tiny(root, films={"screen": {"preset": "screen", "hours": 0.01}}, steps=steps, captures=captures)
+    project = _facts(root, opening={"text": "Aug. 1, 2026", "status": "needs-client"})
+    plan = _screen(project)
+    assert "Aug. 1" not in json.dumps(plan.plan) and plan.facts == {}
+    assert any("left out of the loop film (fact 'opening'" in w for w in plan.warnings), plan.warnings
+    wide = plan_films(project, only=["16x9"], fast=False)["16x9"]
+    assert "Aug. 1" in json.dumps(wide.plan)  # the release gate guards the regular films
+    tiny(root, films=SCREEN, steps=steps, captures=captures, draft=True)
+    project = _facts(root, opening={"text": "Aug. 1, 2026", "status": "needs-client"})
+    assert "opening" in _screen(project).facts  # a draft shows it (tagged Preview)
+    # --hours refuses a loop plan that prints an unreleasable fact in a project that is not a draft.
+    plan = _screen(project)
+    monkeypatch.setattr(render, "plan_films", lambda *a, **k: {"screen": plan})
+    project.config.draft = False
+    with pytest.raises(Exception, match="not releasable"):
+        render_film(project, tmp_path / "film", only=["screen"], hours=0.01)
+
+
 def test_cli_hours(tmp_path):
     from typer.testing import CliRunner
 

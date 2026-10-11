@@ -649,8 +649,11 @@ two pushes), with or without VANTAGE_FAST.
     sweeping back from the last tick to tick 0; the rail then stays (knob at 0) through the title into
     the first capture instead of fading in.
   - The title starts at 2B (its `groups` and `key` are relative to its own `f0`).
-  - Stats need releasable facts unless the project is a draft: any other item is left out with a
-    plan warning ("left out of the loop"), since the loop plays unattended.
+  - Every text needs releasable facts unless the project is a draft: a stat item, step words,
+    capture label or note, card or title text that prints any other fact is left out with a plan
+    warning ("left out of the loop"), since the loop plays unattended (a label falls back to its
+    date). `--hours` refuses a loop plan of a project that is not a draft if it still prints a fact
+    that is not releasable.
   - The end card (`end_beats`, 4) prints only the brand name and, when `output.base_url` is set, the
     short URL in large type (text role `url`, 64 units × type_scale); no credits, partners, fine
     print or honesty line (the `honesty` field is still recorded). No QR code in v1.

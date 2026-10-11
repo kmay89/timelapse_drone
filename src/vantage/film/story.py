@@ -19,8 +19,8 @@
 
 A loop film (the `screen` preset) opens with a `rise` from pure night onto the title's image (the
 rail's knob sweeping back to its first tick) and closes with a `dip` back to pure night, so frame N
-(one past the last) equals frame 0. Its end card is only the brand and the short URL, its stats
-need releasable facts (unless the project is a draft), and its end card is lengthened by a beat
+(one past the last) equals frame 0. Its end card is only the brand and the short URL, every text
+it prints needs releasable facts (unless the project is a draft), and its end card is lengthened by a beat
 when needed so the film is a whole number of GOPs (2 beats).
 
 Every shot start, dissolve start, sweep, push start and word landing is a multiple of B
@@ -223,8 +223,8 @@ def in_scope(project: Project, film: FilmDef, index: MastersIndex, warnings: lis
 class _Captures:
     """Every vantage's non-excluded captures with labels as the site prints them."""
 
-    def __init__(self, project: Project, index: MastersIndex, warnings: list[str]):
-        self.project, self.index, self.warnings = project, index, warnings
+    def __init__(self, project: Project, index: MastersIndex, warnings: list[str], strict: bool = False):
+        self.project, self.index, self.warnings, self.strict = project, index, warnings, strict
         self.notes: dict[str, CaptureNote] = {n.date.isoformat(): n for n in project.story.captures}
         self.excluded = {d for d, n in self.notes.items() if n.exclude}
 
@@ -234,12 +234,16 @@ class _Captures:
         months = Counter(c.date[:7] for c in caps)
         out = []
         for i, c in enumerate(caps):
-            say = _Printer(self.project, self.warnings)
+            say = _Printer(self.project, self.warnings, releasable_only=self.strict)
             entry = self.notes.get(c.date)
             label = say(entry.label if entry else None, f"captures {c.date} label")
             label = label or date_label(c.date, day=months[c.date[:7]] > 1)
             note, note_facts = said(
-                self.project, entry.note if entry else None, f"captures {c.date} note", self.warnings
+                self.project,
+                entry.note if entry else None,
+                f"captures {c.date} note",
+                self.warnings,
+                releasable_only=self.strict,
             )
             out.append(_Capture(c.date, c.file, label, list(say.facts), i, note, note_facts))
         return out
@@ -461,12 +465,19 @@ class _Builder:
     camera: _Camera = field(default_factory=_Camera)
     tracks: Tracks = field(default_factory=lambda: Tracks(1, enabled=False))
 
+    @property
+    def strict(self) -> bool:
+        """An unattended loop film of a project that is not a draft prints only releasable facts."""
+        return self.film.loop and not self.project.config.draft
+
     def say(self) -> _Printer:
-        return _Printer(self.project, self.warnings)
+        return _Printer(self.project, self.warnings, releasable_only=self.strict)
 
     def said(self, raw: str | None, where: str) -> tuple[str | None, list[str]]:
         """(raw text printed through the facts, its fact ids), or (None, []) without it."""
-        return said(self.project, raw, where, self.warnings) if raw else (None, [])
+        return (
+            said(self.project, raw, where, self.warnings, releasable_only=self.strict) if raw else (None, [])
+        )
 
     def step_text(self, step: Step | None, where: str) -> tuple[str | None, list[str]]:
         """A step's full text as plain text (tracks only), printed through the facts."""
@@ -710,7 +721,8 @@ def derive_cut(
     lay = layout(preset, width, height, safe=film.safe, type_scale=film.type_scale)
     colors = project.brand.colors
     paper_dip = surface_dip(fps, D, colors.night, colors.paper)
-    caps = _Captures(project, index, warnings)
+    strict = film.loop and not cfg.draft  # _Builder.strict
+    caps = _Captures(project, index, warnings, strict)
     chapters = project.story.chapters
     ids = _chapter_ids(project)
     size = (width, height)
@@ -728,16 +740,18 @@ def derive_cut(
                 parts.append(("curtain", c))
         elif isinstance(ch, StatsChapter) and not any(k == "stats" for k, _ in parts):
             items = (
-                _stat_items(
-                    project, ids[i], ch, film.stats, warnings, releasable_only=film.loop and not cfg.draft
-                )
+                _stat_items(project, ids[i], ch, film.stats, warnings, releasable_only=strict)
                 if film.stats
                 else []
             )
             if items:
-                heading, heading_facts = said(project, ch.title, f"chapter {ids[i]!r} title", warnings)
+                heading, heading_facts = said(
+                    project, ch.title, f"chapter {ids[i]!r} title", warnings, releasable_only=strict
+                )
                 if not heading:
-                    heading, heading_facts = said(project, ch.kicker, f"chapter {ids[i]!r} kicker", warnings)
+                    heading, heading_facts = said(
+                        project, ch.kicker, f"chapter {ids[i]!r} kicker", warnings, releasable_only=strict
+                    )
                 parts.append(
                     ("stats", (ids[i], ch.surface or "paper", items, heading or "Figures", heading_facts))
                 )
