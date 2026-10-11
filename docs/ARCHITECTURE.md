@@ -910,10 +910,16 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   "Credits"; a chapter starts with the card that introduces it. The title shot belongs to the first
   chapter, which starts at frame 0. Classic: one chapter per section, then "Credits".
 - **Transcript** (`.txt`): the project title and subtitle, then "<m:ss> film, no sound. <honesty
-  line>" (from `provenance`, for classic cuts too), a blank line, then one `[m:ss] …` line per shot (a line never starts after the last frame):
+  line>" (from `provenance`, for classic cuts too), "On screen throughout: <tag words joined by ·>."
+  when the plan has a `tag`, "Preview, not for release." for a draft or a plan that prints a fact
+  that is not releasable (adding "Lines marked [unverified] use figures that are not confirmed
+  yet." for the latter), a blank line, then one `[m:ss] …` line per shot (a line never starts after
+  the last frame; "[unverified] " after the time when the line prints such a fact, from the plan's
+  fact snapshot):
   - title: "Title over the <label> view: <kicker>. <title>";
   - capture: "Aerial view (<vantage name>), <label>: <step text, plain, else the note>" for a series'
-    first capture, "Same view, <label>: …" after it;
+    first capture, "Same view, <label>: …" after it; a pushed step adds "The camera moves in on
+    <subject hotspot labels joined by ' and '>." ("The camera moves in." without subjects);
   - card: "Chapter card: <kicker>. <title>";
   - curtain: "Split screen (<vantage name>), <before> left and <after> right. The line moves to
     <split>%: <step text>. Then to <split>%: …";

@@ -1073,7 +1073,14 @@ def _capture_tracks(
     body, body_facts = (text, text_facts) if text else (cap.note, cap.note_facts)
     lead = f"Aerial view ({vname}), {cap.label}" if first else f"Same view, {cap.label}"
     facts = [*cap.label_facts, *body_facts, *(vname_facts if first else ())]
-    b.tracks.line(start, f"{lead}: {body}" if body else f"{lead}.", facts)
+    line = f"{lead}: {body}" if body else f"{lead}."
+    if step and step["push"]:  # the push carries information: say what it frames
+        named = [b.said(h.label, f"hotspot {h.id} label") for h in cap.subjects if h.id in step["subjects"]]
+        labels = [plain_markdown(text) for text, _ in named if text]
+        facts += [f for text, ids in named if text for f in ids]
+        on = f" on {' and '.join(labels)}" if labels else ""
+        line = sentence(line, f"The camera moves in{on}.")
+    b.tracks.line(start, line, facts)
 
 
 def _curtain_shot(

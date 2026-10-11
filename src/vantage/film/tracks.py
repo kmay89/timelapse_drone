@@ -256,15 +256,29 @@ def to_ffmetadata(plan: FilmPlan) -> str:
 
 
 def to_transcript(plan: FilmPlan) -> str:
-    """The timed transcript: title and subtitle, '<m:ss> film, no sound. <honesty line>', then one
-    '[m:ss] …' line per shot. It reads only the plan, whose text was printed through the facts."""
+    """The timed transcript: title and subtitle, '<m:ss> film, no sound. <honesty line>', the
+    on-screen tag ('On screen throughout: Simulated imagery · Preview.') and, for a draft or a plan
+    that prints unverified facts, 'Preview, not for release.', then one '[m:ss] …' line per shot
+    ('[unverified]' before a line that prints a fact that is not releasable). It reads only the
+    plan, whose text was printed through the facts, and its fact snapshot."""
     p = plan.plan
     t = p.get("transcript") or {}
     fps = p["fps"]
     seconds = round(p["frames"] / fps)
     head = [x for x in (t.get("title"), t.get("subtitle")) if x]
-    out = [*head, f"{seconds // 60}:{seconds % 60:02d} film, no sound. {t.get('honesty') or ''}".rstrip(), ""]
-    out += [f"[{minutes(line['f0'], fps)}] {line['text']}" for line in t.get("lines", [])]
+    out = [*head, f"{seconds // 60}:{seconds % 60:02d} film, no sound. {t.get('honesty') or ''}".rstrip()]
+    unverified = {f for f, snap in plan.facts.items() if not snap.get("releasable", True)}
+    if p.get("tag"):  # what every image frame (and a loop's every frame) says in its corner
+        out.append(f"On screen throughout: {' · '.join(p['tag'])}.")
+    if p.get("draft") or unverified:
+        out.append(
+            "Preview, not for release."
+            + (" Lines marked [unverified] use figures that are not confirmed yet." if unverified else "")
+        )
+    out.append("")
+    for line in t.get("lines", []):
+        mark = "[unverified] " if unverified.intersection(line.get("facts", [])) else ""
+        out.append(f"[{minutes(line['f0'], fps)}] {mark}{line['text']}")
     return "\n".join(out) + "\n"
 
 

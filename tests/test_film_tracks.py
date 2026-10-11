@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from test_film import FILM, make_project
-from test_film_story import COMPARE, DATES, _facts, tiny
+from test_film_story import COMPARE, DATES, STEPS, _facts, tiny
 from vantage.config import Project
 from vantage.film import tracks
 from vantage.film.plan import HONESTY, check_films, plan_films
@@ -168,6 +168,7 @@ def test_chapters_and_transcript(tmp_path):
     seconds = round(p["frames"] / FPS)
     assert lines[0] == "A Tiny Site"
     assert lines[1] == f"{seconds // 60}:{seconds % 60:02d} film, no sound. {HONESTY['simulated']}"
+    assert lines[2:4] == ["On screen throughout: Simulated imagery.", ""]  # the tag; not a draft
     timed = [line for line in lines if re.match(r"^\[\d+:\d{2}\] ", line)]
     assert len(timed) == len(p["shots"])  # one line per shot
     assert "The site" in text  # the vantage name
@@ -294,3 +295,22 @@ def test_sidecars_are_checked_against_the_plan(tmp_path):
     problems = check_films(project, out)
     assert any("tiny-site-16x9.srt does not match its plan" in p for p in problems)
     assert any("tiny-site-gone.vtt: film 'gone' is not in the current film set" in p for p in problems)
+
+
+def test_transcript_says_preview_unverified_and_pushes(tmp_path):
+    """The transcript (the film's text alternative) carries what the picture says: the Preview tag,
+    which lines print unverified figures, and what each push moves in on."""
+    root = tmp_path / "p"
+    steps = [
+        {**STEPS[0], "text": "**Before.** {fact:pending} trees."},
+        {**STEPS[1], "focus": [0.62, 0.54, 1.6]},
+    ]
+    hotspots = [{"id": "tower", "x": 0.93, "y": 0.584, "label": "The tower", "to": DATES[1]}]
+    tiny(root, steps=steps, hotspots=hotspots, draft=True)
+    project = _facts(root, pending={"text": "78", "status": "needs-client"})
+    plan = _plan(project)
+    text = tracks.to_transcript(plan)
+    assert "On screen throughout: Preview." in text
+    assert "Preview, not for release. Lines marked [unverified]" in text
+    assert re.search(r"^\[\d+:\d{2}\] \[unverified\] Aerial view .*78 trees\.", text, re.M), text
+    assert "The camera moves in on The tower." in text
