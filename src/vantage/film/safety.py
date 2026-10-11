@@ -1,0 +1,152 @@
+"""Photosensitivity safety for films: a static check of every story plan and a luminance meter run on
+every rendered frame.
+
+Static (plan time, an error): every transition between two images is a dissolve of at least
+ceil(0.34·fps) frames (a dip through night counts as two), there is no hard cut between images,
+and the push and word timings stay on the plan's grid.
+
+Luminance (render time, every frame, every cut): each frame is downscaled to 1/8 (INTER_AREA),
+converted from sRGB to linear light and reduced to Rec.709 relative luminance on a 4×4 grid of
+cells. A transition is a frame pair in which any cell changes by |ΔL| ≥ 0.10 while the darker of the
+two values is < 0.80 (WCAG 2.3.1's general flash threshold, per cell). A film fails if any window of
+`fps` frames holds more than 3 transitions; the renderer then deletes its .part outputs and raises
+FlashError. The meter only reads frames, so it never changes a film's bytes; its result is the
+plan's `render.flash`.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any
+
+import cv2
+import numpy as np
+
+from vantage.film.beat import min_dissolve
+
+CELLS = 4
+THRESHOLD = 0.10  # |ΔL| of a transition
+BRIGHT = 0.80  # changes between two frames both at or above this are not counted
+LIMIT = 3  # transitions allowed in any window of fps frames
+
+_c = np.arange(256, dtype=np.float64) / 255
+_SRGB_TO_LINEAR = np.where(_c <= 0.04045, _c / 12.92, ((_c + 0.055) / 1.055) ** 2.4).astype(np.float32)
+_BGR_WEIGHTS = np.array([0.0722, 0.7152, 0.2126], np.float32)  # Rec.709, BGR order
+
+
+class PlanError(ValueError):
+    """A plan breaks a safety rule (a dissolve too short, a hard cut between images)."""
+
+
+class FlashError(ValueError):
+    """A rendered film exceeds the flash limit."""
+
+
+def check_plan(plan: dict[str, Any]) -> None:
+    """Raise PlanError when a story plan cuts between images or dissolves faster than 0.34 s.
+
+    Classic plans keep their own hold/fade timing and are not checked here (the meter still
+    measures them)."""
+    if plan.get("cut") == "classic":
+        return
+    fps = plan["fps"]
+    shortest = min_dissolve(fps)
+    problems: list[str] = []
+    image = {"title", "capture"}
+    prev: dict[str, Any] | None = None
+    for shot in plan["shots"]:
+        kind = shot["kind"]
+        if kind == "capture":
+            d = shot.get("dissolve")
+            same = prev is not None and prev["kind"] == "title" and prev.get("capture") == shot.get("capture")
+            if prev is not None and prev["kind"] in image and d is None and not same:
+                problems.append(f"{shot['id']}: a hard cut from {prev['id']} (every image change dissolves)")
+            if d is not None:
+                n = d["f1"] - d["f0"]
+                if n < shortest:
+                    problems.append(
+                        f"{shot['id']}: a {n}-frame dissolve ({n / fps:.2f} s) is shorter than "
+                        f"{shortest} frames (0.34 s)"
+                    )
+                if d["f0"] != shot["f0"]:
+                    problems.append(f"{shot['id']}: its dissolve does not start with the shot")
+        if kind in ("card", "end") and prev is not None and prev["kind"] in image:
+            n = shot.get("dip", 0)
+            if n < shortest:
+                problems.append(f"{shot['id']}: a {n}-frame dip to night is shorter than {shortest} frames")
+        prev = shot
+    if problems:
+        raise PlanError("film plan is not safe to render:\n  " + "\n  ".join(problems))
+
+
+def cells(frame: np.ndarray, grid: int = CELLS) -> np.ndarray:
+    """Mean linear relative luminance of each cell of a grid × grid split of a BGR uint8 frame."""
+    h, w = frame.shape[:2]
+    small = cv2.resize(frame, (max(grid, w // 8), max(grid, h // 8)), interpolation=cv2.INTER_AREA)
+    lum = _SRGB_TO_LINEAR[small] @ _BGR_WEIGHTS
+    sh, sw = lum.shape
+    ys = np.linspace(0, sh, grid + 1).round().astype(int)
+    xs = np.linspace(0, sw, grid + 1).round().astype(int)
+    return np.array(
+        [[lum[ys[r] : ys[r + 1], xs[c] : xs[c + 1]].mean() for c in range(grid)] for r in range(grid)],
+        np.float64,
+    )
+
+
+@dataclass
+class LumaMeter:
+    """Counts luminance transitions frame by frame; `result()` is the plan's render.flash record."""
+
+    fps: int
+    frames: int = 0
+    worst: int = 0  # most transitions in any window of fps frames
+    worst_frame: int = 0  # last frame of that window
+    max_delta: float = 0.0
+    max_delta_frame: int = 0
+    _prev: np.ndarray | None = None
+    _window: deque[int] = field(default_factory=deque)  # frame indices of recent transitions
+
+    def add(self, frame: np.ndarray) -> None:
+        self.push(cells(frame))
+
+    def push(self, grid: np.ndarray) -> None:
+        """Feed one frame's cell luminances (linear, 0–1)."""
+        k = self.frames
+        self.frames += 1
+        prev, self._prev = self._prev, np.asarray(grid, np.float64)
+        if prev is None:
+            return
+        delta = np.abs(self._prev - prev)
+        darker = np.minimum(self._prev, prev)
+        peak = float(delta.max())
+        if peak > self.max_delta:
+            self.max_delta, self.max_delta_frame = peak, k
+        if bool(((delta >= THRESHOLD) & (darker < BRIGHT)).any()):
+            self._window.append(k)
+        while self._window and self._window[0] <= k - self.fps:
+            self._window.popleft()
+        if len(self._window) > self.worst:
+            self.worst, self.worst_frame = len(self._window), k
+
+    @property
+    def passed(self) -> bool:
+        return self.worst <= LIMIT
+
+    def result(self) -> dict[str, Any]:
+        return {
+            "pass": self.passed,
+            "max_transitions_per_s": self.worst,
+            "max_delta": round(self.max_delta, 4),
+            "frame": self.worst_frame if self.worst else self.max_delta_frame,
+        }
+
+    def check(self, name: str) -> None:
+        if not self.passed:
+            raise FlashError(
+                f"{name}: {self.worst} luminance transitions within one second around frame "
+                f"{self.worst_frame} (the limit is {LIMIT}); the film was not written"
+            )
+
+
+__all__ = ["FlashError", "LumaMeter", "PlanError", "cells", "check_plan"]

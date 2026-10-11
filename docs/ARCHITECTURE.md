@@ -57,8 +57,13 @@ src/vantage/
     render.py            StoryJSON → semantic, pre-rendered HTML (works without JS)
     package.py           single-file inliner, offline zip, manifest, icons, share card, sw.js
   film/
-    plan.py              FilmPlans: YAML + masters + fonts → one hashed plan per film; the release gate
-    render.py            renders a plan to MP4 + poster (classic `_Film`, shared drawing code)
+    plan.py              FilmPlans: YAML + masters + fonts → one hashed plan per film; the film set; the release gate
+    beat.py              the beat grid (frames per beat, dissolves) and ports of the runtime's holdWindows/keyed
+    layout.py            safe zones and text/rail anchors of the story layouts (16:9, 9:16)
+    story.py             derives a story cut's shots from the chapters: title, captures, cards, end; push clamps
+    cut.py               renders story plans: pure frame(f) (pyramid warps, dissolves, words, rail, tag)
+    safety.py            photosensitivity: static plan check and the per-frame luminance (flash) meter
+    render.py            renders a plan to MP4 + poster (classic `_Film`, shared drawing code, the encode)
     storyboard.py        one contact-sheet tile per key frame of a plan, with fact status chips
   llm/claude.py          optional Claude vision helpers (captions, alt text, milestones)
   demo/synth.py          procedural "drone footage" of a fictional site changing over time
@@ -440,10 +445,18 @@ master and font files and the settings into one **FilmPlan** per film. That step
 nothing. A renderer then evaluates a pure frame function over the plan and pipes the frames to
 ffmpeg. The same plan, with the same inputs, gives the same bytes with the same ffmpeg build.
 
-Today every film uses the **classic cut**: a title card, one section per vantage (the main vantage
-first; the 9:16 film keeps only the main one), a card between vantages and an end card. Inside a
-section each capture holds `hold_s` and dissolves `fade_s` into the next (linear light) under an
-eased 6 % push. `hold_s`, `fade_s`, `title_card_s` and `end_card_s` in `output.film` time it.
+A film has one of two cuts:
+
+- **story** (`film/story.py`, rendered by `film/cut.py`): shots derived from the chapters on a beat
+  grid, the step's lead words landing on downbeats and pushes toward what changed (see "Derived
+  story cut"). Opt-in for now with `output.film.cut: story` or a FilmSpec `cut: story`.
+- **classic** (the default for now): a title card, one section per vantage (the main vantage first;
+  the 9:16 film keeps only the main one), a card between vantages and an end card. Inside a section
+  each capture holds `hold_s` and dissolves `fade_s` into the next (linear light) under an eased 6 %
+  push. `hold_s`, `fade_s`, `title_card_s` and `end_card_s` in `output.film` time it.
+
+Not yet built: compare (curtain), stats, the event-screen loop (`preset: screen`, `loop`), web
+encodes and tracks. A plan for a loop film is refused with "not supported yet".
 
 ### Output layout (dist/<slug>/film/)
 
@@ -468,6 +481,142 @@ eased 6 % push. `hold_s`, `fade_s`, `title_card_s` and `end_card_s` in `output.f
 `output.film.require_approval` (default false): `package --release` needs each film's plan hash in
 `approvals.yaml` (see PROJECTS.md).
 
+### Settings and the films: spec
+
+project.yaml `output.film` (FilmSettings). Existing fields are unchanged; `hold_s`, `fade_s`,
+`title_card_s` and `end_card_s` time the classic cut. New fields:
+
+```yaml
+cut: classic          # story | classic: the cut of the derived films (classic until story covers every chapter)
+bpm: 100              # 60–160; the beat grid of story cuts
+max_upscale: 1.6      # 1.0–3.0; output px per master px never exceeds this in a push
+require_approval: false
+```
+
+story.yaml:
+
+```yaml
+films:                       # optional; id → FilmSpec; merged over the derived set
+  16x9: {}                   # derived: aspect 16x9, chapters all
+  9x16: {chapters: main}     # derived when output.film.vertical (aspect from the id)
+  screen: {preset: screen}   # the event loop (auto: false); planning it says "not supported yet"
+# FilmSpec fields (all optional): preset (screen) · cut · aspect (16x9|9x16) · bpm · chapters (all | main | [chapter ids])
+#   · stats (0–6, default 3) · title_beats (4) · end_beats (6) · safe [top, right, bottom, left] (fractions)
+#   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
+#   · enabled (true) · hours (loop films)
+steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare steps
+```
+
+- Film ids match `[a-z0-9][a-z0-9-]{0,31}`, do not end in `-web` and are unique as typed (`1080` and
+  `"1080"` collide). `films.<id>` with `enabled: false` removes a film.
+- Precedence: explicit FilmSpec field > preset > output.film (`cut`, `bpm`, `max_upscale`) > built-in
+  default. A new id's aspect is 16x9 unless the id is `9x16`.
+- The `screen` preset sets cut story, aspect 16x9, loop true, bpm 75, type_scale 1.6, safe 0.05 on
+  every side, auto false.
+- `vantage film` (no `--film`) plans and renders the `auto` films; `--film ID` names any enabled film.
+- The 16:9 size is `output.film.width × height`; the 9:16 size is `short × short·16/9`. `VANTAGE_FAST=1`
+  caps the long edge at 960 px, which changes the size and so the plan hash.
+- `chapters: main` keeps the chapters whose vantage is the main vantage (the first scrub's with
+  masters, else the first compare's), plus stats. Unknown ids in a list are ignored with a warning.
+- `film.line` sets a step's words on screen; `film.focus` its push target (used as given, only
+  clamped); `film.skip` leaves the step out of films (its capture still plays as a quiet beat).
+- `vantage validate` warns about words over 40 characters, unknown chapter ids in
+  `films.<id>.chapters`, "bpm too fast for fps", and (with masters) clamped or soft pushes.
+
+### Beat grid (film/beat.py)
+
+- B (frames per beat) = round(60·fps / bpm). The effective bpm (60·fps / B) is the plan's `grid.bpm`.
+- D (dissolve frames) = max(ceil(0.34·fps), round(2B/3)). B must be ≥ D, otherwise planning fails
+  with "bpm too fast for fps". At 30 fps and 100 bpm: B = 18, D = 12.
+- Every shot start, dissolve start, push start and lead-word landing falls on a frame index divisible
+  by B. Sub-beat staggers (title word groups at B/3, text fades over B/3) stay inside their beat.
+- `ramp(f, start, n)` = smoothstep((f − start + 1) / n): the first changed frame is `start`, the last
+  is start + n − 1. Dissolves, dips, rises and fades all use it.
+- `hold_windows(keys, hold)` and `keyed(windows, values, v, mix)` are line-for-line ports of
+  runtime/js/25-stage.js (smoothstep, without the reduced-motion branch); the camera is `keyed` over
+  the plan's `camera` windows with `mix_cam` (componentwise linear, as the runtime's `mixCam`).
+
+### Derived story cut (film/story.py derive_cut)
+
+Shots come from the chapters in scope, in story order: the first hero → title; each scrub chapter →
+a series of captures; then the end card. (Compare → curtain and stats → stat shots come in later
+steps; gallery, explore, text, timeline and video chapters are not used.) A film with no scrub
+chapter in scope plays the main vantage's captures as one quiet series.
+
+- **title** (`title_beats`, 4): the first image (the first series capture) at rest under a 30 % night
+  scrim. The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
+  across beat 0; the title's word groups (up to three, split by word count) rise on frames B, B + B/3
+  and B + 2B/3 (`groups`). Text and scrim fade out over the last B/3 frames. Frame 0 is the image.
+- **capture** (one per capture of each series: `from`..`to` minus `exclude`d captures): 1 beat with
+  no step, 3 with a step, 4 with a push (at least 3 when the film has a single image).
+  - Every capture except the film's first image starts with a D-frame dissolve on its first frame:
+    `_mix` in linear light from the previous capture, or a display-gamma dip from night after a card.
+  - The date label swaps at the dissolve's midpoint; the rail knob eases (smoothstep) to the new
+    tick over the dissolve. Ticks sit at the real dates of the series.
+  - Words: `film.line`, else the step's leading `**bold**` run, resolved through the facts (a
+    do-not-print fact drops the words with a warning). They land at beat 1 (beat 0 on the first
+    image, `step.land`), rise 14 units while fading in over B/3 frames, and fade out with the next
+    dissolve.
+  - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`), holds to
+    the end of the shot and eases back during the next shot's dissolve.
+  - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
+- **card** (4 beats): inserted when consecutive captures change vantage. The chapter kicker and title
+  (else the vantage name) on night. A D-frame dip (`dip`) from the image in display gamma; the next
+  capture dips in from night.
+- **end** (`end_beats`, 6): a D-frame dip to night, then brand name, credit line, partners, the short
+  `base_url`, copyright, disclaimer, the honesty line and SIMULATED_NOTE when the project is simulated.
+  The honesty line comes from `provenance`:
+  - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
+  - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
+- **Push target**: `film.focus` when given (`target: film.focus`); otherwise the step's `focus`,
+  recentred so the step's **subject hotspots** fall inside the crop with a margin of 6 % of the crop
+  width (`focus+subject:<ids>`), or `focus` when there are none. Subjects are the chapter's hotspots
+  that appear since the previous step (`from` index in (prev step, this]) or disappear since it (`to`
+  index in [prev step, this − 1]); the first step's "previous" is the chapter's `from`. If they do not
+  fit, the zoom is lowered toward 1 in 32 steps; if they still do not fit, the crop centres on their
+  centroid (`subject-centroid`).
+- **Zoom clamp**: s0 = max(W/mw, H/mh); z_eff = clamp(z, 1, max(1, max_upscale/s0)). Warnings when
+  z_eff < z ("push clamped"), s0·z_eff > 1.25 ("soft push") and s0 > max_upscale ("master upscaled
+  even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a
+  3-beat step without a push (`push: false, reason: clamped`).
+- **Rest camera**: the image centre at zoom 1 in 16:9; the vantage's `portrait_focus` in 9:16.
+- **Degrade**: 0 captures is an error; 1 capture plays title → capture (3 beats) → end.
+- Pushes sample a two-level pyramid per master (L0 at s0, L1 at s0·zmax, zmax the largest camera
+  zoom in the plan) and blend the two warps with weight log z / log zmax, so there is no pop between
+  levels. The classic cut keeps its single level at s0·1.06.
+
+### Layout presets (film/layout.py)
+
+`Layout(name, width, height, safe px [t, r, b, l], margin, label_top, lead_baseline, rail_y, tag,
+type_scale)`; px values are rounded. Styles are in units of short edge / 1080 × type_scale. A film's
+`safe` fractions replace the preset's.
+
+| layout | safe t, r, b, l | label cap-top | lead baseline | rail | tag |
+|---|---|---|---|---|---|
+| story-16x9 | .06H .05W .06H .05W | safe top | .78H | .88H | top-right in safe |
+| story-9x16 | .14H .12W .28H .06W | .16H | .60H | .70H | right, baseline rail − 18u |
+| classic 16x9 / 9x16 | margin .055W / .075W, rail H − round(.075H / .13H) (unchanged) | | | | |
+
+Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
+fit between the margins), card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
+are composited at sub-pixel offsets by bilinear warping of the pre-rendered layer patch. Scrims are
+feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands.
+In 9:16 every word, the end card and the rail stay between 0.14H and 0.72H, clear of the right edge.
+
+### Safety (film/safety.py)
+
+- **Static** (`check_plan`, at plan time and again before rendering a story plan; `PlanError`):
+  every change between two images is a dissolve of at least ceil(0.34·fps) frames that starts with
+  its shot, there are no hard cuts between images, and every card or end dip is as long. Classic
+  plans keep their own timing and are not checked.
+- **Luminance** (`LumaMeter`, render time, every frame of every cut): each frame is downscaled to 1/8
+  (INTER_AREA), converted from sRGB to linear light and reduced to Rec.709 relative luminance on a 4×4
+  grid of cells. A transition is a frame pair in which any cell changes by |ΔL| ≥ 0.10 while the
+  darker value is < 0.80. The film fails if any window of `fps` frames holds more than 3
+  transitions: the renderer deletes the `.part` outputs and raises `FlashError`. The meter only reads
+  frames, so it never changes bytes; its result is `render.flash`
+  (`{pass, max_transitions_per_s, max_delta, frame}`).
+
 ### plan.json
 
 Canonical JSON is `json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
@@ -483,8 +632,10 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
   "plan": {                                            // hashed: everything that decides frames
     "slug": "demo-lakeside", "cut": "classic", "preset": null, "renderer": 1,   // renderer: bumped when frames change for an equal plan
     "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
-    "grid": null,                                      // the beat grid of beat-cut films; null for classic
+    "grid": null | {"bpm": 100.0, "fpb": 18, "dissolve": 12, "beats": 37},   // story: effective bpm; classic: null
     "layout": {"name": "classic-16x9", "margin": 106, "rail_y": 999, "type_scale": 1.0},
+    // story: {"name": "story-16x9", "safe": [65, 96, 65, 96], "margin": 96, "label_top": 65,
+    //         "lead_baseline": 842, "rail_y": 950, "tag": "top-right", "type_scale": 1.0}
     "draft": false, "simulated": true, "tag": ["Simulated imagery"],          // + "Preview" in drafts
     "provenance": ["simulated"],                       // photo | simulated; reserved: ortho, analysis, reconstruction
     "inputs": {                                        // every file the frames read, by role
@@ -492,14 +643,16 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
       "fonts": {"display": {"file": "runtime:fraunces/….woff2" | "brand:fonts/….woff2", "sha256": "…"},
                 "text": {…}, "numeric": {…}},          // "pillow:default" (sha256 null) when a brand has no font file
       "colors": {"night": "#…", "paper": "#…", "ink": "#…", "accent": "#…"} },
-    "camera": [], "captions": [], "chapters": [],
+    "camera": [],                                      // story: [{"a": 0, "b": 162, "x": 0.5, "y": 0.5, "zoom": 1.0}, …]
+    "captions": [], "chapters": [],
     "shots": [ /* see below */ ],
     "hold_s": 1.0, "fade_s": 0.8, "seconds_total": 47.0, "poster_seconds": 23.65 },   // classic timing
+    // story instead: "poster": <frame> (the last frame of the last capture shot)
   "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
   "encode": {"crf": 18, "preset": "slow", "web": null, "gop": null, "tracks": false},  // NOT hashed: bytes, not frames
   "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": null,
-             "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0, "frame": 0},
+             "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0467, "frame": 384},
              "ffmpeg": "6.1.1-3ubuntu5"} }             // written after the encode; null with --plan-only
 ```
 
@@ -519,14 +672,29 @@ Shots (in film order; `f0`, `f1` are frames, half-open; `key` is the storyboard 
   `shots: [{date, label, note, file, key, facts}]`. The classic renderer evaluates `frame(k / fps)`
   in seconds.
 
+Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without one):
+
+- `title` (`T1`): `vantage`, `capture` (date), `file`, `groups` (the frames the title's word groups
+  start rising). Text roles `kicker`, `title`.
+- `capture` (`S01…`): `vantage`, `capture` (date), `label`, `file`, `dissolve` (`{from: <date> |
+  "night", f0, f1}` or null on the film's first image), `series` (ordinal), `rail` (index on the
+  series' rail), `step` (null or `{index, words, words_from: film.line | lead | null,
+  focus_requested, focus [x, y, z_eff], target, subjects, z_eff, upscale, push, reason, land,
+  push_f0, push_f1}`). Text roles `label`, `words`.
+- `card` (`K1…`): `vantage`, `dip` (frames). Text roles `kicker`, `title`.
+- `end` (`E1`): `dip`, `honesty`. Text roles `brand`, `credit`, `role`, `partner`, `link`, `fine`,
+  `honesty`.
+
 Shot kinds `ortho`, `heatmap` and `insert` are reserved and refused. A text that uses a
 `do-not-print` fact is never printed in a film: it is left out (a capture label falls back to its
 date, a vantage name to the masters' name) and a warning is recorded.
 
 ### Storyboard (film/storyboard.py)
 
-- Tiles show the key frames in film order: the middle of each card, the middle of each capture's
-  hold, then the poster frame (`P1`). 8 columns of 320 px tiles for landscape films, 10 columns of
+- Tiles show the key frames in film order. Classic: the middle of each card, the middle of each
+  capture's hold, then the poster frame (`P1`). Story: one per shot `key` (the title once its words
+  are in, a capture at its words or push hold, else the end of its hold, a card's middle, the end
+  card once its text is in). 8 columns of 320 px tiles for landscape films, 10 columns of
   192 px for portrait ones.
 - Under each tile: `m:ss.ff · f<frame>` (prefixed with `bar.beat` on a beat grid), then
   `<shot id> <kind> <date>`, then one chip per fact: green releasable, amber needs-client or
@@ -548,8 +716,7 @@ date, a vantage name to the masters' name) and a warning is recorded.
 4. `plan.draft` is true.
 5. The MP4 sha256 differs from the `render` record, `render` is null, or a plan has no MP4.
 6. A fact it prints (as re-planned) is not releasable under the current facts.yaml.
-7. `render.flash.pass` is false (classic films record a pass; the luminance meter comes with the
-   story cut).
+7. `render.flash.pass` is false (every cut is metered; a failing film is never written).
 8. `require_approval` is on and neither the hash nor its first 12 characters is listed in any
    `approvals.yaml` `approvals[].films`.
 
@@ -578,5 +745,14 @@ vantage.film.plan.film_records(project: Project, film_dir: Path) -> tuple[dict, 
 vantage.film.render.render_film(project, out_dir, *, only=None, release=False, plan_only=False) -> list[Path]
 vantage.film.storyboard.write_storyboard(plan: FilmPlan, frame_fn: Callable[[int], ndarray],
                                          facts: Mapping[str, Mapping], out: Path) -> Path
+vantage.film.plan.resolve_films(project: Project) -> dict[str, FilmDef]     # enabled films, settings merged
+vantage.film.beat.beat_grid(fps, bpm) -> Grid                               # ValueError "bpm too fast for fps"
+vantage.film.beat.frames_per_beat(fps, bpm) / dissolve_frames(fps, B) / bar_beat(f, B)
+vantage.film.beat.hold_windows(keys, hold) / keyed(windows, values, v, mix)  # ports of runtime/js/25-stage.js
+vantage.film.layout.layout(name, width, height, *, safe=None, type_scale=1.0) -> Layout
+vantage.film.story.derive_cut(project, film, index, fonts, hashes, warnings, *, fast) -> FilmPlan
+vantage.film.safety.check_plan(plan: dict) -> None                          # PlanError
+vantage.film.safety.LumaMeter(fps).add(frame) / .result() / .check(name)    # FlashError
+vantage.film.render.encode_frames(film, part, *, crf, preset, meter=None)   # the one encode path
 vantage.media.ffmpeg.ffmpeg_version() -> str
 ```

@@ -12,6 +12,9 @@ light) under an eased push that spans the whole section, with a date lower-third
 and a calendar rail whose ticks sit at the real flight dates. Cards dissolve into
 and out of the imagery while the camera keeps moving.
 
+Story plans are rendered by `film/cut.py` (`_Cut`); `renderer` picks the one for a plan's cut, and
+every film goes through `encode_frames` and the luminance meter of `film/safety.py`.
+
 `_Film` evaluates a classic plan: the timeline, card text and inputs all come from the plan, so a
 plan read back from plan.json renders the same bytes. Frames are composed with numpy/OpenCV and
 piped to ffmpeg (media.ffmpeg.FrameWriter). Text is typeset once per card and capture with Pillow in
@@ -28,7 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 import cv2
 import numpy as np
@@ -47,6 +50,7 @@ from vantage.film.plan import (
     resolve_films,
 )
 from vantage.film.plan import capture_labels as capture_labels
+from vantage.film.safety import LumaMeter, check_plan
 from vantage.film.storyboard import write_storyboard
 from vantage.media.ffmpeg import FrameWriter, ffmpeg_version
 from vantage.models import FilmPlan
@@ -549,12 +553,8 @@ class _Film:
         """Frame k of the film (classic plans keep their timeline in seconds)."""
         return self.frame(k / self.fps)
 
-    def encode(self, part: Path, *, crf: int, preset: str) -> None:
-        with FrameWriter(
-            part, self.width, self.height, fps=self.fps, crf=crf, preset=preset, extra=_ENCODE
-        ) as writer:
-            for k in range(self.frames):
-                writer.write(self.frame_at(k))
+    def encode(self, part: Path, *, crf: int, preset: str, meter: LumaMeter | None = None) -> None:
+        encode_frames(self, part, crf=crf, preset=preset, meter=meter)
 
     def poster(self) -> bytes:
         """The poster JPEG: the main vantage's final hold."""
@@ -563,6 +563,44 @@ class _Film:
         if not ok:
             raise ValueError(f"could not encode the poster of film {self.plan.id}")
         return data.tobytes()
+
+
+class Renderable(Protocol):
+    width: int
+    height: int
+    fps: int
+    frames: int
+
+    def frame_at(self, k: int) -> np.ndarray: ...
+
+    def poster(self) -> bytes: ...
+
+
+def encode_frames(
+    film: Renderable, part: Path, *, crf: int, preset: str, meter: LumaMeter | None = None
+) -> None:
+    """Pipe every frame of a film to ffmpeg (and through the luminance meter, which only reads)."""
+    with FrameWriter(
+        part, film.width, film.height, fps=film.fps, crf=crf, preset=preset, extra=_ENCODE
+    ) as writer:
+        for k in range(film.frames):
+            frame = film.frame_at(k)
+            if meter is not None:
+                meter.add(frame)
+            writer.write(frame)
+
+
+def renderer(project: Project, plan: FilmPlan) -> Renderable:
+    """The renderer of a plan's cut: `_Film` (classic) or `_Cut` (story)."""
+    cut = plan.plan["cut"]
+    if cut == "classic":
+        return _Film(project, plan)
+    if cut == "story":
+        from vantage.film.cut import _Cut
+
+        check_plan(plan.plan)
+        return _Cut(project, plan)
+    raise ValueError(f"film {plan.id}: no renderer for cut {cut!r}")
 
 
 def _sha256(path: Path) -> str:
@@ -585,7 +623,7 @@ def _render_one(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: b
         parts[final] = final.with_name(f"{final.name}.part")
         return parts[final]
 
-    film = _Film(project, plan)
+    film = renderer(project, plan)
     try:
         if plan_only:
             plan.render = None
@@ -596,13 +634,14 @@ def _render_one(project: Project, plan: FilmPlan, out_dir: Path, *, plan_only: b
                 except (OSError, ValueError):
                     pass
         else:
-            film.encode(part(mp4), crf=plan.encode["crf"], preset=plan.encode["preset"])
+            meter = LumaMeter(plan.plan["fps"])
+            encode_frames(film, part(mp4), crf=plan.encode["crf"], preset=plan.encode["preset"], meter=meter)
+            meter.check(f"film {plan.id}")
             part(poster).write_bytes(film.poster())
             plan.render = {
                 "mp4": {"bytes": parts[mp4].stat().st_size, "sha256": _sha256(parts[mp4])},
                 "web": None,
-                # The luminance meter arrives with the story cut; classic cuts dissolve ≥ fade_s.
-                "flash": {"pass": True, "max_transitions_per_s": 0, "max_delta": 0.0, "frame": 0},
+                "flash": meter.result(),
                 "ffmpeg": ffmpeg_version(),
             }
         write_storyboard(plan, film.frame_at, plan.facts, part(board))
@@ -648,11 +687,11 @@ def render_film(
     for plan in plans.values():
         out = _render_one(project, plan, out_dir, plan_only=plan_only)
         p = plan.plan
-        sections = sum(s["kind"] == "section" for s in p["shots"])
+        sections = sum(s["kind"] in ("section", "capture") for s in p["shots"])
         done = "planned" if plan_only else "rendered"
         log.info(
             f"{out.name}: {p['width']}×{p['height']}, {p['frames']} frames ({p['frames'] / p['fps']:.1f}s), "
-            f"{sections} section(s), plan {plan.hash[:12]} {done}"
+            f"{sections} {'capture' if p['cut'] == 'story' else 'section'}(s), plan {plan.hash[:12]} {done}"
         )
         for warning in plan.warnings:
             log.warn(f"film {plan.id}: {warning}")

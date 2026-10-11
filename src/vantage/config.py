@@ -241,6 +241,13 @@ class FilmSettings(Model):
         False,
         description="package --release needs each film's plan hash under approvals[].films in approvals.yaml.",
     )
+    cut: Literal["story", "classic"] = Field(
+        "classic", description="The cut of the derived films: story (on a beat grid) or classic (hold/fade)."
+    )
+    bpm: float = Field(100.0, ge=60, le=160, description="The beat grid of story cuts.")
+    max_upscale: float = Field(
+        1.6, ge=1.0, le=3.0, description="Output px per master px never exceeds this in a push."
+    )
 
 
 class OutputSettings(Model):
@@ -383,6 +390,32 @@ class Hotspot(Model):
     to: CaptureRef | None = Field(None, description="Last capture where it is shown.")
 
 
+def _check_focus(v: list[float] | None) -> list[float] | None:
+    if v is not None and len(v) != 3:
+        raise ValueError("focus must be [x, y, zoom]")
+    return v
+
+
+class StepFilm(Model):
+    """How a step reads in the films: the words on screen and the camera target."""
+
+    line: str | None = Field(
+        None, description="Words on screen in films (default: the step's leading **bold** run)."
+    )
+    focus: list[float] | None = Field(
+        None,
+        description="[x, y, zoom] push target in films (default: the step's focus, kept on its subjects).",
+    )
+    skip: bool = Field(
+        False, description="Leave the step out of films; its capture still plays as a quiet beat."
+    )
+
+    @field_validator("focus")
+    @classmethod
+    def _focus(cls, v: list[float] | None) -> list[float] | None:
+        return _check_focus(v)
+
+
 class Step(Model):
     """A scrollytelling step: a text card tied to a moment in time."""
 
@@ -394,13 +427,12 @@ class Step(Model):
     split: float | None = Field(
         None, ge=0, le=1, description="compare chapters: curtain position for this step."
     )
+    film: StepFilm | None = Field(None, description="Films only: words on screen, push target, skip.")
 
     @field_validator("focus")
     @classmethod
     def _focus(cls, v: list[float] | None) -> list[float] | None:
-        if v is not None and len(v) != 3:
-            raise ValueError("focus must be [x, y, zoom]")
-        return v
+        return _check_focus(v)
 
 
 class _Chapter(Model):
@@ -548,10 +580,71 @@ Chapter = Annotated[
 ]
 
 
+# Matched in full; a film id names files (<slug>-<id>.mp4, …) and never ends in "-web".
+FILM_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+
+
+class FilmSpec(Model):
+    """One film of story.yaml `films:`. Every field is optional; precedence is
+    FilmSpec field > preset > output.film > built-in default (see docs/ARCHITECTURE.md "Films")."""
+
+    preset: Literal["screen"] | None = Field(None, description="screen: the silent event-screen loop.")
+    cut: Literal["story", "classic"] | None = None
+    aspect: Literal["16x9", "9x16"] | None = None
+    bpm: float | None = Field(None, ge=60, le=160)
+    chapters: Literal["all", "main"] | list[str] | None = Field(
+        None, description="all | main (the first scrub's vantage, plus stats) | [chapter ids]."
+    )
+    stats: int | None = Field(None, ge=0, le=6, description="Stats shown (default 3).")
+    title_beats: int | None = Field(None, ge=1, le=16)
+    end_beats: int | None = Field(None, ge=1, le=16)
+    safe: list[float] | None = Field(None, description="[top, right, bottom, left] safe margins, fractions.")
+    type_scale: float | None = Field(None, gt=0.25, le=4)
+    max_upscale: float | None = Field(None, ge=1.0, le=3.0)
+    loop: bool | None = None
+    sound: str = Field("none", description='none ("file" is reserved).')
+    auto: bool | None = Field(None, description="Rendered by `vantage film` without --film (default true).")
+    enabled: bool | None = None
+    hours: float | None = Field(None, gt=0, le=12, description="Loop films: --hours default.")
+
+    @field_validator("safe")
+    @classmethod
+    def _safe(cls, v: list[float] | None) -> list[float] | None:
+        if v is not None and (len(v) != 4 or not all(0 <= x < 0.45 for x in v)):
+            raise ValueError("safe must be [top, right, bottom, left], each a fraction in [0, 0.45)")
+        return v
+
+    @field_validator("sound")
+    @classmethod
+    def _sound(cls, v: str) -> str:
+        if v != "none":
+            raise ValueError(f"sound {v!r} is not supported yet (films are silent: sound: none)")
+        return v
+
+
 class Story(Model):
     vantages: list[Vantage]
     captures: list[CaptureNote] = Field(default_factory=list)
     chapters: list[Chapter]
+    films: dict[str, FilmSpec] = Field(
+        default_factory=dict, description="Films by id, merged over the derived 16x9 and 9x16."
+    )
+
+    @field_validator("films", mode="before")
+    @classmethod
+    def _film_ids(cls, value: Any) -> Any:
+        """Ids name files: [a-z0-9][a-z0-9-]{0,31}, not ending in -web, unique as typed (1080 == "1080")."""
+        if not isinstance(value, dict):
+            return value
+        out: dict[str, Any] = {}
+        for key, spec in value.items():
+            fid = _as_text(key)
+            if not isinstance(fid, str) or not FILM_ID_RE.fullmatch(fid) or fid.endswith("-web"):
+                raise ValueError(f"film id {key!r} must match [a-z0-9][a-z0-9-]{{0,31}} and not end in -web")
+            if fid in out:
+                raise ValueError(f"film id {fid!r} is declared twice")
+            out[fid] = {} if spec is None else spec
+        return out
 
     @model_validator(mode="after")
     def _refs(self) -> Story:

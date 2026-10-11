@@ -462,6 +462,68 @@ def _check_outputs(project: Project, warnings: list[str]) -> None:
     ]
 
 
+FILM_WORDS_MAX = 40  # characters of on-screen words a step may put in a film
+
+
+def _check_films(project: Project, warnings: list[str]) -> None:
+    """Film warnings: long words, unknown chapters in films.<id>.chapters, a beat grid faster than a
+    dissolve, and pushes that are clamped or soft at the masters' resolution."""
+    from vantage.config import CompareChapter, ScrubChapter
+    from vantage.film.beat import beat_grid
+    from vantage.film.plan import plan_films, resolve_films
+    from vantage.film.story import lead_words
+    from vantage.site.facts import FactError, FactNotes
+
+    notes = FactNotes(project.facts.facts)
+    ids = [ch.id or f"{ch.type}-{i + 1}" for i, ch in enumerate(project.story.chapters)]
+    for cid, ch in zip(ids, project.story.chapters, strict=True):
+        if not isinstance(ch, ScrubChapter | CompareChapter):
+            continue
+        for j, step in enumerate(ch.steps):
+            raw, _ = lead_words(step)
+            try:
+                words = notes.plain(raw) if raw else None
+            except (FactError, KeyError):
+                continue  # reported by the facts check
+            if words and len(words) > FILM_WORDS_MAX:
+                warnings.append(
+                    f"story.yaml {cid} step {j}: film words are {len(words)} characters "
+                    f"(over {FILM_WORDS_MAX}; set film.line to something shorter): {words!r}"
+                )
+    for fid, spec in project.story.films.items():
+        if isinstance(spec.chapters, list):
+            unknown = [c for c in spec.chapters if c not in ids]
+            if unknown:
+                warnings.append(
+                    f"story.yaml films.{fid}.chapters: unknown chapter id(s) {', '.join(unknown)}"
+                )
+    try:
+        films = resolve_films(project)
+    except ValueError as exc:
+        warnings.append(f"films: {exc}")
+        return
+    story = [fid for fid, film in films.items() if film.cut == "story" and not film.loop]
+    for fid in list(story):
+        try:
+            beat_grid(project.config.output.film.fps, films[fid].bpm)
+        except ValueError as exc:
+            warnings.append(f"film {fid}: {exc}")
+            story.remove(fid)
+    if not story or not (project.masters_dir / "index.json").is_file():
+        return
+    try:
+        plans = plan_films(project, only=story)
+    except (OSError, ValueError) as exc:
+        warnings.append(f"films: cannot plan them ({exc})")
+        return
+    for fid, plan in plans.items():
+        warnings += [
+            f"film {fid}: {w}"
+            for w in plan.warnings
+            if any(k in w for k in ("clamped", "soft push", "upscaled"))
+        ]
+
+
 def check_project(project: Project) -> tuple[list[str], list[str]]:
     """Cross-checks beyond the YAML schema: (errors, warnings)."""
     errors: list[str] = []
@@ -478,6 +540,7 @@ def check_project(project: Project) -> tuple[list[str], list[str]]:
     _check_story(project, errors, warnings)
     _check_facts(project, errors, warnings)
     _check_outputs(project, warnings)
+    _check_films(project, warnings)
     todos = {
         rel: (project.root / rel).read_text(encoding="utf-8").count("TODO")
         for rel in ("project.yaml", "story.yaml", project.config.brand, "facts.yaml")

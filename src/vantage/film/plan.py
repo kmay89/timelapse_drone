@@ -6,9 +6,11 @@ colours), so a renderer evaluating it gives the same bytes from the same plan, a
 can tell whether a rendered film still matches the YAML, the masters and the facts that would make
 it today. `vantage film` writes the plan next to each MP4 as <slug>-<id>.plan.json.
 
-The derived films are '16x9' and, with output.film.vertical, '9x16' (the main vantage only); both
-use the classic cut: a title card, one section per vantage (a capture holds `hold_s` and dissolves
-`fade_s` into the next), a card between vantages and an end card.
+The derived films are '16x9' and, with output.film.vertical, '9x16'; story.yaml `films:` overrides
+them or adds more (`resolve_films`: FilmSpec field > preset > output.film > built-in default). Each
+film has a cut: `story` (film/story.py: shots cut from the chapters on a beat grid) or `classic` (a
+title card, one section per vantage in which a capture holds `hold_s` and dissolves `fade_s` into
+the next, a card between vantages and an end card; the 9:16 classic film keeps the main vantage).
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ import hashlib
 import json
 import math
 import os
-import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -28,14 +29,13 @@ from typing import Any, Literal
 import yaml
 
 from vantage import log
-from vantage.config import BrandKit, FontSpec, Project, ScrubChapter
+from vantage.config import FILM_ID_RE, BrandKit, FilmSettings, FontSpec, Project, ScrubChapter
 from vantage.models import FilmPlan, MastersIndex
 from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
 
-FILM_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")  # matched in full; never ends in "-web"
-FILM_RENDERER = {"classic": 1}  # bumped when frame(i) changes for an equal plan
+FILM_RENDERER = {"classic": 1, "story": 1}  # bumped when frame(i) changes for an equal plan
 FAST_LONG_EDGE = 960
 PLAN_SUFFIX = ".plan.json"
 STORYBOARD_SUFFIX = ".storyboard.jpg"
@@ -232,23 +232,84 @@ def font_path(ref: str, brand: BrandKit) -> Path | None:
 # --------------------------------------------------------------------------- #
 
 
+Aspect = Literal["16x9", "9x16"]
+
+
 @dataclass(frozen=True)
 class FilmDef:
+    """One film's resolved settings (see `resolve_films`)."""
+
     id: str
-    aspect: Literal["16x9", "9x16"]
-    cut: Literal["classic"] = "classic"
+    aspect: Aspect
+    cut: Literal["story", "classic"] = "classic"
+    preset: str | None = None
+    bpm: float = 100.0
+    chapters: str | tuple[str, ...] = "all"  # all | main | chapter ids
+    stats: int = 3
+    title_beats: int = 4
+    end_beats: int = 6
+    safe: tuple[float, float, float, float] | None = None  # None: the layout preset's
+    type_scale: float = 1.0
+    max_upscale: float = 1.6
+    loop: bool = False
+    sound: str = "none"
     auto: bool = True
+    enabled: bool = True
+    hours: float | None = None
+
+
+# The `screen` preset: the silent event-screen loop (rendered only on request).
+PRESETS: dict[str, dict[str, Any]] = {
+    "screen": {
+        "cut": "story",
+        "aspect": "16x9",
+        "loop": True,
+        "bpm": 75.0,
+        "type_scale": 1.6,
+        "safe": (0.05, 0.05, 0.05, 0.05),
+        "auto": False,
+    }
+}
 
 
 def resolve_films(project: Project) -> dict[str, FilmDef]:
-    """Every film this project can make, by id: '16x9', plus '9x16' when output.film.vertical."""
-    films = {"16x9": FilmDef("16x9", "16x9")}
-    if project.config.output.film.vertical:
-        films["9x16"] = FilmDef("9x16", "9x16")
-    for fid in films:
+    """Every enabled film this project can make, by id: the derived '16x9' (chapters all) and, with
+    output.film.vertical, '9x16' (chapters main), merged with story.yaml `films:` in that order.
+    Precedence: FilmSpec field > preset > output.film (cut, bpm, max_upscale) > built-in default."""
+    settings = project.config.output.film
+    derived: dict[str, dict[str, Any]] = {"16x9": {"aspect": "16x9", "chapters": "all"}}
+    if settings.vertical:
+        derived["9x16"] = {"aspect": "9x16", "chapters": "main"}
+    specs = project.story.films
+    output = {"cut": settings.cut, "bpm": settings.bpm, "max_upscale": settings.max_upscale}
+    films: dict[str, FilmDef] = {}
+    for fid in [*derived, *(f for f in specs if f not in derived)]:
         if not FILM_ID_RE.fullmatch(fid) or fid.endswith("-web"):
             raise ValueError(f"film id {fid!r} must match [a-z0-9][a-z0-9-]{{0,31}} and not end in -web")
+        builtin = {"aspect": fid if fid in ("16x9", "9x16") else "16x9", **derived.get(fid, {})}
+        explicit = specs[fid].model_dump(exclude_unset=True) if fid in specs else {}
+        preset = PRESETS[explicit["preset"]] if explicit.get("preset") else {}
+        merged = {**builtin, **output, **preset, **explicit}
+        if isinstance(merged.get("chapters"), list):
+            merged["chapters"] = tuple(merged["chapters"])
+        if merged.get("safe") is not None:
+            merged["safe"] = tuple(merged["safe"])
+        film = FilmDef(id=fid, **merged)
+        if film.enabled:
+            films[fid] = film
     return films
+
+
+def film_size(settings: FilmSettings, aspect: Aspect, *, fast: bool) -> tuple[int, int]:
+    """16:9 is output.film width × height; 9:16 is short × short·16/9 (short: the 16:9 short edge).
+    VANTAGE_FAST caps the long edge at 960 px."""
+
+    def fit(w: float, h: float) -> tuple[int, int]:
+        s = min(1.0, FAST_LONG_EDGE / max(w, h)) if fast else 1.0
+        return _even(w * s), _even(h * s)
+
+    short = min(settings.width, settings.height)
+    return fit(short, short * 16 / 9) if aspect == "9x16" else fit(settings.width, settings.height)
 
 
 def film_id(slug: str, name: str) -> str | None:
@@ -269,13 +330,16 @@ def _check_timing(project: Project) -> None:
 def plan_films(
     project: Project, *, only: Sequence[str] | None = None, fast: bool | None = None
 ) -> dict[str, FilmPlan]:
-    """One FilmPlan per film (all of them, or the ids in `only`, in that order). Pure: reads the
-    YAML already loaded, masters/index.json and the master and font files; renders nothing."""
+    """One FilmPlan per film (the `auto` films, or the ids in `only`, in that order). Pure: reads
+    the YAML already loaded, masters/index.json and the master and font files; renders nothing."""
     films = resolve_films(project)
-    ids = list(films) if only is None else list(dict.fromkeys(only))
+    ids = [f for f, film in films.items() if film.auto] if only is None else list(dict.fromkeys(only))
     unknown = [fid for fid in ids if fid not in films]
     if unknown:
         raise ValueError(f"unknown film {', '.join(map(repr, unknown))}; this project has {', '.join(films)}")
+    for fid in ids:
+        if films[fid].loop:
+            raise ValueError(f"film {fid!r}: loop films (preset: screen) are not supported yet")
     index_path = project.masters_dir / "index.json"
     if not index_path.is_file():
         raise FileNotFoundError(f"no {index_path}; run `vantage process {project.slug}` first")
@@ -292,6 +356,11 @@ def plan_films(
     plans = {}
     for fid in ids:
         warnings: list[str] = []
+        if films[fid].cut == "story":
+            from vantage.film.story import derive_cut
+
+            plans[fid] = derive_cut(project, films[fid], index, fonts, hashes, warnings, fast=fast)
+            continue
         sections = _sections(project, index, warnings)
         plans[fid] = _classic(project, films[fid], sections, index, fonts, hashes, warnings, fast=fast)
     return plans
@@ -313,12 +382,7 @@ def _classic(
     if portrait:
         sections = sections[:1]
 
-    def fit(w: float, h: float) -> tuple[int, int]:
-        s = min(1.0, FAST_LONG_EDGE / max(w, h)) if fast else 1.0
-        return _even(w * s), _even(h * s)
-
-    short = min(settings.width, settings.height)
-    width, height = fit(short, short * 16 / 9) if portrait else fit(settings.width, settings.height)
+    width, height = film_size(settings, film.aspect, fast=fast)
     fps, hold, fade = settings.fps, settings.hold_s, settings.fade_s
     first = sections[0]
 
@@ -649,10 +713,12 @@ def check_films(project: Project, film_dir: Path) -> list[str]:
 
 __all__ = [
     "FILM_RENDERER",
+    "PRESETS",
     "FilmDef",
     "capture_labels",
     "check_films",
     "film_records",
+    "film_size",
     "plan_films",
     "resolve_films",
 ]

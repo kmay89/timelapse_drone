@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from vantage.film.beat import bar_beat
 from vantage.models import FilmPlan
 from vantage.paths import RUNTIME_DIR
 
@@ -126,7 +127,7 @@ def write_storyboard(
         draw.line((x, y, x, y + tile_h + STRIP - 1), fill=_BG, width=1)  # a hairline between tiles
         when = f"{timecode(tile.key, fps)} · f{tile.key}"
         if beat:
-            when = f"{tile.key // (4 * beat) + 1}.{tile.key // beat % 4 + 1} · {when}"
+            when = f"{bar_beat(tile.key, beat)} · {when}"
         what = " ".join(filter(None, (tile.shot, tile.kind, tile.date)))
         draw.text(
             (x + 6, y + tile_h + 16), _fit(draw, when, line, tile_w - 10), font=line, fill=_INK, anchor="ls"
