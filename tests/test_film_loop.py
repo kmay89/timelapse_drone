@@ -167,9 +167,9 @@ def test_hours_concat(tmp_path):
     assert "usb" not in sums and not any("usb" in f for f in info["files"])
     assert "film/tiny-site-screen.mp4" in info["files"]
     how = (dist / "HOW-TO-VIEW.txt").read_text(encoding="utf-8")
-    assert (
-        "silent loop for an event screen; for a TV's USB player use film/usb/tiny-site-screen-<H>h.mp4" in how
-    )
+    assert "silent loop for an event screen; set the player to repeat (ask for a long copy for a TV)" in how
+    assert "film/usb" not in how  # never in the package, so never pointed to
+    assert "Captions" not in how  # a loop has no tracks
 
 
 def test_hours_guards(tmp_path, monkeypatch):

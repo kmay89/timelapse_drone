@@ -339,8 +339,7 @@ def _how_to_view(
         if film.name.endswith("-web.mp4"):
             use = "a smaller copy for websites and uploads (under 25 MB)"
         elif film.name in loops:
-            stem = film.name.removesuffix(".mp4")
-            use = f"silent loop for an event screen; for a TV's USB player use film/usb/{stem}-<H>h.mp4"
+            use = "silent loop for an event screen; set the player to repeat (ask for a long copy for a TV)"
         elif "9x16" in film.name:
             use = "for phones: save to Photos or send in a message"
         else:
@@ -372,9 +371,15 @@ def _how_to_view(
             lines.append(
                 "  (On an iPhone the file opens as a preview: scroll to read; the link above is the full story.)"
             )
-    if tracks:
+    captioned = [f.name for f in films if not f.name.endswith("-web.mp4") and f.name not in loops]
+    if tracks and captioned:
+        which = (
+            "each film"
+            if len(captioned) == len([f for f in films if not f.name.endswith("-web.mp4")])
+            else ("film/" + ", film/".join(captioned))
+        )
         lines.append(
-            "  Captions (.srt, .vtt) and a timed text transcript (.txt) come with each film; the films have "
+            f"  Captions (.srt, .vtt) and a timed text transcript (.txt) come with {which}; the films have "
             "no sound."
         )
     lines += [

@@ -1017,9 +1017,11 @@ before planning, and refuses a film with text outside its safe zone (`checks.out
 `files`): its MP4 and -web.mp4, plan.json, storyboard and tracks (`.vtt`, `.srt`, `.chapters.vtt`,
 `.txt`), never a poster or `film/usb/`. release.yml uploads `film/*.mp4 film/*.vtt film/*.srt
 film/*.txt` from the files SHA256SUMS lists. HOW-TO-VIEW.txt adds "Captions (.srt, .vtt) and a timed
-text transcript (.txt) come with each film" when there are tracks. HOW-TO-VIEW.txt describes `film/<name>-web.mp4` as "a smaller copy
-for websites and uploads (under 25 MB)" and a loop film as "silent loop for an event screen; for a
-TV's USB player use film/usb/<name>-<H>h.mp4".
+text transcript (.txt) come with each film" when there are tracks (naming the films that have them
+when a loop film, which has none, is also shipped). It describes `film/<name>-web.mp4` as "a
+smaller copy for websites and uploads (under 25 MB)" and a loop film as "silent loop for an event
+screen; set the player to repeat (ask for a long copy for a TV)": `film/usb/` is never shipped, so
+it is never pointed to.
 
 ### Module API
 
