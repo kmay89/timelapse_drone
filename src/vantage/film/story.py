@@ -553,6 +553,13 @@ class _Builder:
         self.shots.append(shot)
         return shot
 
+    @property
+    def ease(self) -> int:
+        """Frames a push takes to go in, and to ease back: B + B/3, or 2 beats in a loop film, whose
+        unattended screen should move calmly and whose meter must pass at full size (a fast pull back
+        sweeps a bright path through a region more than 3 times a second)."""
+        return 2 * self.grid.fpb if self.film.loop else self.grid.fpb + self.grid.third
+
     def rest(self, part: _Series | _Curtain) -> Cam:
         if self.layout.width < self.layout.height:
             return part.portrait_focus[0], part.portrait_focus[1], 1.0
@@ -942,12 +949,12 @@ def derive_cut(
                 if b.prev is not None and b.prev["kind"] not in IMAGES:
                     cam.hold(f0, rest)
                 if pushed is not None and target is None:  # the previous push eases back from the
-                    cam.until(f0)  # dissolve on, as slowly as it went in (B + B/3 frames)
-                    cam.hold(f0 + B + third, rest)
+                    cam.until(f0)  # dissolve on, as slowly as it went in (b.ease frames)
+                    cam.hold(f0 + b.ease, rest)
                 # (pushed and target: the camera glides from the last subject to this one)
                 if target is not None:
                     cam.until(f0 + B)
-                    cam.hold(f0 + 2 * B + third, target, f0 + beats * B)
+                    cam.hold(f0 + B + b.ease, target, f0 + beats * B)
                 pushed = target
                 facts = list(dict.fromkeys([*cap.label_facts, *(step["facts"] if step else [])]))
                 text = [{"role": "label", "text": cap.label}]
@@ -957,7 +964,7 @@ def derive_cut(
                 if step is not None:
                     step.pop("facts")
                     if target is not None:
-                        step["push_f0"], step["push_f1"] = f0 + B, f0 + 2 * B + third
+                        step["push_f0"], step["push_f1"] = f0 + B, f0 + B + b.ease
                 shot = b.add(
                     {
                         "id": f"S{n:02d}",
@@ -1253,7 +1260,7 @@ def _curtain_shot(
     dissolve = None if same else b.entry()
     if prev is not None and prev["kind"] in IMAGES:  # a push before eases back as slowly as it went in
         cam.until(f0)
-        cam.hold(f0 + B + b.grid.third, rest)
+        cam.hold(f0 + b.ease, rest)
     else:
         cam.hold(f0, rest, f0 + B)
     say = b.say()

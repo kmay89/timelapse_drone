@@ -546,6 +546,7 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
 - The `screen` preset sets cut story, aspect 16x9, loop true, bpm 75, type_scale 1.6, safe 0.05 on
   every side (the `screen` layout), auto false, title_beats 4, end_beats 4, and capture beats 2 (no
   step), 4 (a step) and 5 (a push) where other films have 1, 3 and 4 (`FilmDef.beats`, preset only).
+  Its pushes go in and ease back over 2 beats (B + B/3 in other films).
   Loop films have no web encode and no embedded tracks. A loop film needs the story cut.
 - `vantage film` (no `--film`) plans and renders the `auto` films; `--film ID` names any enabled film.
 - The 16:9 size is `output.film.width × height`; the 9:16 size is `short × short·16/9`. `VANTAGE_FAST=1`
@@ -611,7 +612,9 @@ two pushes), with or without VANTAGE_FAST.
     shot's first frame (through its dissolve), or, when the next shot pushes too, the camera glides
     from one target to the next. Before a curtain it eases back over B + B/3 from the curtain's first
     frame; before a card, stat or the end card it holds while the image dips out. `check_plan`
-    refuses any camera move shorter than B + B/3 frames.
+    refuses any camera move shorter than B + B/3 frames. In a loop film both ways take 2 beats
+    (`push_f1` = beat 3): the unattended screen moves calmly, and at full size a 1.8× pull back over
+    B + B/3 swept a bright path through one meter region 4 times in a second.
   - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
 - **card** (4 beats): inserted when consecutive image shots (captures, curtains) change vantage. The
   chapter kicker and title (else the vantage name) on night. A dip (`dip`) from the image in display

@@ -7,6 +7,7 @@ per beat (D = 7), so a GOP is 20 frames.
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import subprocess
@@ -15,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from test_film_story import STATS, STORY_FILM, _facts, tiny
+from test_film_story import COMPARE, STATS, STEPS, STORY_FILM, _facts, tiny
 from vantage.config import Project
 from vantage.film import loop, render
 from vantage.film.cut import _Cut
@@ -80,6 +81,17 @@ def test_screen_preset_resolution(tmp_path):
     assert (out / "tiny-site-screen.plan.json").is_file() and (
         out / "tiny-site-screen.storyboard.jpg"
     ).is_file()
+
+
+def test_loop_pushes_take_two_beats(tmp_path):
+    """An unattended loop pushes in and eases back over 2 beats (B + B/3 elsewhere): at full size a
+    1.8× pull back over B + B/3 swept a bright path through one region 4 times in a second."""
+    steps = [STEPS[0], {**STEPS[1], "focus": [0.5, 0.5, 1.6]}, STEPS[2]]
+    p = _screen(_project(tmp_path / "p", steps=steps, chapters=[COMPARE])).plan
+    push = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["push"])
+    assert push["push_f1"] - push["push_f0"] == 2 * B
+    moves = [w1["a"] - w0["b"] for w0, w1 in itertools.pairwise(p["camera"])]
+    assert moves and min(moves) >= 2 * B, p["camera"]
 
 
 def test_screen_end_card_prints_the_url_large(tmp_path):
