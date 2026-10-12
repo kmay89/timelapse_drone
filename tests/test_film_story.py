@@ -1339,8 +1339,8 @@ def test_montage_shows_the_other_vantage(tmp_path):
     """A gallery chapter on another drone vantage plays as a montage in both cuts: five captures
     spread evenly from its first to its last, dissolving on the beat with no card, the date label per
     capture, the chapter's kicker over the first picture for as long as it takes to read, the last
-    picture held 4 beats, no push, and the outgoing vantage keeping its own framing through the
-    dissolve. The stat run follows it on its last picture (no dissolve: only the panel and text come
+    picture held 3 beats (and a beat more while the stats' panel comes in before the first figure
+    lands), no push, and the outgoing vantage keeping its own framing through the dissolve. The stat run follows it on its last picture (no dissolve: only the panel and text come
     in), so the film's middle is not one photograph and it closes on the figures."""
     project = tiny(
         tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)}, film={"vertical": True},
@@ -1354,12 +1354,13 @@ def test_montage_shows_the_other_vantage(tmp_path):
         stat = p["shots"][kinds.index("stat")]
         assert kinds.index("stat") == p["shots"].index(run[-1]) + 1, kinds  # the stats close the film
         assert stat["file"] == run[-1]["file"] and stat["vantage"] == "water" and stat["dissolve"] is None
+        assert stat["land"] >= stat["f0"] + B  # the last picture: 3 beats clean, then the panel's beat
         assert [s["capture"] for s in run] == [WATER[k] for k in (0, 2, 3, 5, 6)], fid
         assert {s["vantage"] for s in run} == {"water"} and all(s["kind"] == "capture" for s in run)
         assert [s["label"] for s in run] == [s["text"][0]["text"] for s in run]
         assert [s["rail"] for s in run] == [0, 1, 2, 3, 4] and len({s["series"] for s in run}) == 1
         beats = [(s["f1"] - s["f0"]) // B for s in run]
-        assert beats[1:] == [2, 2, 2, 4], beats
+        assert beats[1:] == [2, 2, 2, 3], beats
         for s in run:
             assert s["f0"] % B == 0 and s["dissolve"]["f0"] == s["f0"]
             assert s["dissolve"]["f1"] - s["dissolve"]["f0"] == D

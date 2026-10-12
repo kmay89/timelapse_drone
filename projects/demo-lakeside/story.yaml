@@ -254,7 +254,7 @@ chapters:
 #   uv run vantage film demo-lakeside --film screen [--hours 1]
 films:
   # Two figures (by their facts: the flights, and the pool that became the beach the shoreline shows)
-  # and three looks from the water; the stats close each film over the montage's last picture.
-  16x9: { stats: [flights, wave-pool-area], montage: 3 }
+  # and two or three looks from the water; the stats close each film over the montage's last picture.
+  16x9: { stats: [flights, wave-pool-area], montage: 2 }
   9x16: { stats: [flights, wave-pool-area], montage: 3 }
   screen: { preset: screen }

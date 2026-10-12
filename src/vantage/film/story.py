@@ -2112,7 +2112,7 @@ def _capture_tracks(
 
 
 MONTAGE_BEATS = 2  # a montage picture's beats (at least the film's quiet capture beats)
-MONTAGE_LAST_BEATS = 4  # its last picture's: the closing look holds, drifting, before what follows
+MONTAGE_LAST_BEATS = 3  # its last picture's: the closing look holds, drifting, before what follows
 
 
 def _montage_shots(

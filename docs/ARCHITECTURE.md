@@ -603,10 +603,11 @@ exception: when the film has a montage, its stat run (over a picture) moves afte
 and sits on its last picture, so the middle of the film is not one photograph and the film closes
 on its figures over the site seen anew. Explore, text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
 plays the main vantage's captures as one quiet series. For the demo at full size the 16:9 cut is
-87 beats (52.2 s) and the 9:16 78 (46.8 s: two figures and three montage pictures, story.yaml
-`films.9x16`), each with 5.4 s on night (the end card) after the shoreline montage, and with the
+80 beats (48.0 s: two figures and two montage pictures, story.yaml `films.16x9`) and the 9:16 79
+(47.4 s: two figures and three montage pictures, `films.9x16`), each with 5.4 s on night (the end
+card) after the stats over the shoreline montage's last picture, and with the
 holds and softened pushes of its flash margin (see Safety); from the CI-sized demo footage, whose
-small masters leave little to push, they are 85 and 73 beats.
+small masters leave little to push, they are 77 and 77 beats.
 
 - **title** (at least `title_beats`, 4): the first image (the first series capture, else the first
   curtain's before image) at rest under a 30 % night
@@ -652,7 +653,8 @@ small masters leave little to push, they are 85 and 73 beats.
   first beat, D frames each, the date label swapping at each dissolve's midpoint and the knob easing
   along the montage's own rail (ticks at its dates; another series' rail crossfades out over the
   first dissolve). 2 beats a picture (`MONTAGE_BEATS`, at least the film's quiet capture beats), and
-  4 for the last (`MONTAGE_LAST_BEATS`: the closing look holds, drifting, before what follows), so
+  3 for the last (`MONTAGE_LAST_BEATS`: the closing look holds, drifting, before what follows; a
+  stat run that follows on it adds the beat before its first figure lands), so
   no region sees two dissolves within a second: a snow flight between two summer ones stays within
   the flash margin. Words (`film.line`, else the kicker, else the title; `step.words_from`
   film.line | kicker | title, `reason: montage`) land on the first picture's beat 1 in the zone
@@ -811,7 +813,7 @@ small masters leave little to push, they are 85 and 73 beats.
     reaching it on frame N (`ramp(f, f0, n + 1)`), one past the last frame. So frame(N) == frame(0),
     byte for byte, and a player looping the file shows no seam. The renderer checks it before
     encoding (`render.check_seam`).
-  - For the demo the screen cycle is 80 beats at 75 bpm (1920 frames, 64.0 s at 30 fps).
+  - For the demo the screen cycle is 92 beats at 75 bpm (2208 frames, 73.6 s at 30 fps).
 - **Push target**: `film.focus` when given (`target: film.focus`, used as given); otherwise the
   step's `focus`, recentred to the crop nearest it that puts the step's **subject hotspots** inside
   the layout's subject box (`focus+subject:<ids>`; `story.subject_box`: the safe zone 1 % in from
