@@ -80,6 +80,7 @@ from vantage.film.plan import (
     FILM_RENDERER,
     GOP_BEATS,
     HONESTY,
+    HONESTY_RIDE,
     LOOP_BEATS,
     FilmDef,
     _Printer,
@@ -92,7 +93,15 @@ from vantage.film.plan import (
     said,
 )
 from vantage.film.safety import check_plan, is_image, surface_dip
-from vantage.film.tracks import Tracks, cue_frames, iso639_2, plain_markdown, sentence, track_facts
+from vantage.film.tracks import (
+    Tracks,
+    cue_frames,
+    iso639_2,
+    one_line,
+    plain_markdown,
+    sentence,
+    track_facts,
+)
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
 from vantage.site.facts import FactNotes
@@ -1436,8 +1445,9 @@ def _stats(
     stat drifts in by DRIFT, keeping what changed on its picture in frame (`_drift_to`; consecutive
     drifts on one picture, a montage's included, are one move), or holds. Consecutive stats on one
     picture start on the beat with no dip and only the text crossfades. The riding `honesty` line
-    (with its `honesty_facts`) is captioned once, its sentences spread under the stats' cues
-    (`Tracks.lasting`), and has its own transcript line.
+    (with its `honesty_facts`) is captioned once, its sentences shared out under the stats' cues
+    (`_ride_parts`), and has its own transcript line; the run lasts until it reads with the stats'
+    own words, one after another at 17 characters a second, not beside them.
     Returns the camera the run ends on when that is not the rest view (what follows eases back from
     it)."""
     project, film, lay = b.project, b.film, b.layout
@@ -1492,6 +1502,9 @@ def _stats(
         for x in kept
     ]
     ride_in = ride_on = 0  # the riding line comes in with the panel, whole as the first figure lands
+    cues = [" ".join(filter(None, (item["value"], item["unit"], item["label"]))) for item in items]
+    reads = [" ".join(filter(None, (item["label"], item["source"]))) for item in items]
+    unders = _ride_parts(honesty, cues, reads) if honesty else [""] * len(items)
     drifts: list[dict[str, Any]] = []  # the moves of the stats one drift in progress carries
     for k, item in enumerate(items):
         f0 = b.f
@@ -1525,11 +1538,14 @@ def _stats(
 
             ride_in = panel_from({"f0": f0, "land": land, "dissolve": dissolve, "dip": dip}, B)
             ride_on = land
-        read = " ".join(filter(None, (item["label"], item["source"])))
         out = third if k + 1 < len(items) else 0  # its text leaves before the next figure lands
-        need = text_in - f0 + third + cue_frames(read, fps) + out
-        if honesty and k == len(items) - 1:  # the riding honesty line reads in full by the run's end
-            need = max(need, ride_on + cue_frames(honesty, fps) - f0)
+        need = text_in - f0 + third + cue_frames(reads[k], fps) + out
+        # Its caption cue (from the middle of its entry), with its part of the riding line under it,
+        # reads at 17 characters a second; and the run as a whole gives every word it prints its
+        # time: the riding line is read alongside the figures, never in parallel with them.
+        need = max(need, entry // 2 + cue_frames(sentence(cues[k], unders[k]), fps))
+        if honesty and k == len(items) - 1:
+            need = max(need, ride_on + cue_frames(" ".join([*reads, honesty]), fps) - f0)
         beats = max(STAT_MIN_BEATS, -(-need // B)) + b.holds.get(f"N{n}", 0)
         f1 = f0 + beats * B
         move: dict[str, Any] | None = None
@@ -1627,7 +1643,7 @@ def _stats(
             hashes[on.capture.file] = _sha256(project.masters_dir / on.capture.file)
         start_cue = f0 + entry // 2
         b.tracks.cue(
-            start_cue, " ".join(filter(None, (item["value"], item["unit"], item["label"]))), item["facts"]
+            start_cue, cues[k], item["facts"], under=(unders[k], honesty_facts) if unders[k] else None
         )
         figure = " ".join(filter(None, (item["value"], item["unit"])))
         source = f" (source: {item['source']})" if item["source"] else ""
@@ -1641,7 +1657,6 @@ def _stats(
                 facts += label_facts
         b.tracks.line(start_cue, line, facts)
     if honesty:  # printed under the figures from the panel's entry to the run's end
-        b.tracks.lasting(ride_in, b.f, honesty, honesty_facts)
         b.tracks.line(ride_in, f"Under the figures: {honesty}", honesty_facts)
     last = cam.windows[-1]
     held = (last["x"], last["y"], last["zoom"])
@@ -1650,9 +1665,35 @@ def _stats(
     return None if plain or held == end_rest else held
 
 
+def _ride_parts(honesty: str, cues: Sequence[str], reads: Sequence[str]) -> list[str]:
+    """The riding line's sentences shared out in order over a stat run's caption cues, each sentence
+    captioned once: of every way to split them, the one that asks for the fewest characters of
+    reading time over the run (a stat's own words on screen, `reads`, already take a while; a cue
+    with a part takes its figure's caption and the part), then the most even, then the earliest."""
+    sentences = [p for p in re.split(r"(?<=[.!?…])\s+", one_line(honesty)) if p]
+    n = len(cues)
+    if n == 0:
+        return []
+
+    def cost(cuts: tuple[int, ...]) -> tuple[int, int]:
+        edges = (0, *cuts, len(sentences))
+        sizes = [
+            max(len(reads[k]), len(cues[k]) + len(" ".join(sentences[edges[k] : edges[k + 1]])))
+            for k in range(n)
+        ]
+        return sum(sizes), max(sizes)
+
+    best = min(
+        itertools.combinations_with_replacement(range(len(sentences) + 1), n - 1), key=cost, default=()
+    )
+    edges = (0, *best, len(sentences))
+    return [" ".join(sentences[edges[k] : edges[k + 1]]) for k in range(n)]
+
+
 def _end_text(
     b: _Builder,
     honesty: str,
+    short: str,
     has_stats: bool,
     last_part: tuple[str, Any],
     fits: Callable[[str], bool] = lambda _ride: True,
@@ -1665,7 +1706,8 @@ def _end_text(
     a glance, as legal text is). The card takes as long as its words take to read at 17 characters
     a second after its dip (the partners a beat to scan), plus the last beat its text fades out
     over, and at least `end_beats`. When that is over END_MAX_S and the film has stats, the honesty
-    line rides along under the stats instead (`ride`), then the disclaimer too, as long as the run
+    line rides along under the stats instead, in its short form (`ride`, HONESTY_RIDE), then the disclaimer
+    too (a simulated film's disclaimer alone, its tag saying the rest), as long as the run
     still `fits` with them (its words at full size, `stat_run`); a card still over
     END_MAX_S leaves the partners out (a warning), and one over it even so is a warning too (a film
     without stats has nothing for its honesty line to ride along with).
@@ -1680,11 +1722,11 @@ def _end_text(
         if short_url:
             lines.append({"role": "url", "text": short_url})
         # An unattended screen prints figures with no end card to qualify them: the honesty line
-        # and the disclaimer ride under its stats, as in a cut whose card is full.
+        # (short) and the disclaimer ride under its stats, as in a cut whose card is full.
         riding, ride_facts = [], []
         if has_stats:
             disclaimer, ride_facts = b.said(brand.disclaimer, "brand.yaml disclaimer")
-            riding = [t for t in (honesty, disclaimer) if t]
+            riding = [disclaimer] if cfg.simulated and disclaimer else [t for t in (short, disclaimer) if t]
         return {
             "text": lines, "facts": list(say.facts), "ride": " ".join(riding) or None,
             "ride_facts": ride_facts,
@@ -1717,12 +1759,19 @@ def _end_text(
     def read() -> str:
         return sentence(" ".join(filter(None, (credit, short_url))), *card)
 
+    # What rides is read alongside the figures, so it is kept short: the honesty line in its short
+    # form, then the disclaimer. In a simulated film whose brand has a disclaimer, the disclaimer
+    # alone rides: the tag says "simulated" on every frame, and the disclaimer says the rest.
+    instead = cfg.simulated and disclaimer is not None
     for text in (honesty, disclaimer):
-        if text and has_stats and need(read(), bool(partners), dip0) > most:
-            if not fits(" ".join([*riding, text])):
+        if text and text in card and has_stats and need(read(), bool(partners), dip0) > most:
+            moving = [disclaimer] if text == honesty and instead else [short if text == honesty else text]
+            if not fits(" ".join([*riding, *moving])):
                 break  # the run would set its words under the type floor: the card keeps the rest
-            card.remove(text)
-            riding.append(text)
+            for t in (text, *moving):
+                if t in card:
+                    card.remove(t)
+            riding += moving
     if partners and need(read(), True, dip0) > most:
         b.warnings.append(
             f"end card: the partners are left out of film {film.id} (with them it would run over "
@@ -1738,7 +1787,9 @@ def _end_text(
         )
     roles = {honesty: "honesty", disclaimer: "disclaimer"}
     text = [*lines, *partners, *link, *({"role": roles[t], "text": t} for t in card), *fine]
-    ride_facts = b.said(brand.disclaimer, "brand.yaml disclaimer")[1] if disclaimer in riding else []
+    ride_facts = (
+        b.said(brand.disclaimer, "brand.yaml disclaimer")[1] if disclaimer and disclaimer in riding else []
+    )
     return {
         "text": text,
         "facts": list(say.facts),
@@ -1993,6 +2044,7 @@ def _derive_cut(
     first_cap = first.captures[0] if isinstance(first, _Series) else first.before
     provenance = ["simulated" if cfg.simulated else "photo"]
     honesty = honesty_line(provenance)
+    short = honesty_line(provenance, ride=True)
     # A run of stats over a picture closes on the last montage's last picture when the film has a
     # montage (after it, so the middle of the film is not one photograph and the figures land on
     # the finished site seen anew); else it sits on the main vantage's latest picture, in story order.
@@ -2018,7 +2070,7 @@ def _derive_cut(
 
         return bool(b.decide(f"ride:{ride}", full))  # decided at the full size, like the place
 
-    end = _end_text(b, honesty, any(k == "stats" for k, _ in parts), parts[-1], fits)
+    end = _end_text(b, honesty, short, any(k == "stats" for k, _ in parts), parts[-1], fits)
 
     def stats_on(vid: str, cap: _Capture) -> _StatsOn:
         first_file = caps.of(vid)[0].file
@@ -2809,6 +2861,7 @@ def _curtain_tracks(
 
 __all__ = [
     "HONESTY",
+    "HONESTY_RIDE",
     "Geometry",
     "aim",
     "derive_cut",

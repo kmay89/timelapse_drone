@@ -19,7 +19,7 @@ from test_film import FILM, make_project
 from test_film_story import COMPARE, DATES, STEPS, _facts, tiny
 from vantage.config import Project
 from vantage.film import tracks
-from vantage.film.plan import HONESTY, check_films, plan_films
+from vantage.film.plan import HONESTY, HONESTY_RIDE, check_films, plan_films
 from vantage.film.render import encode_frames, render_film, renderer
 from vantage.media.ffmpeg import ffmpeg_bin, ffprobe_bin
 from vantage.models import FilmPlan
@@ -172,19 +172,18 @@ def test_chapters_and_transcript(tmp_path):
     assert lines[2:4] == ["On screen throughout: Simulated imagery.", ""]  # the tag; not a draft
     timed = [line for line in lines if re.match(r"^\[\d+:\d{2}\] ", line)]
     # One line per shot, and one for the honesty line that rides along under the figures.
-    assert end["ride"] and stat["honesty"] == HONESTY["simulated"]
+    assert end["ride"] and stat["honesty"] == HONESTY_RIDE["simulated"]  # the short form rides
     ride = [line for line in timed if "] Under the figures: " in line]
-    assert ride and ride[0].endswith(f"Under the figures: {HONESTY['simulated']}")
+    assert ride and ride[0].endswith(f"Under the figures: {HONESTY_RIDE['simulated']}")
     assert len(timed) == len(p["shots"]) + 1
-    # The riding line is captioned too: its sentences spread in order as the second line of the cues
-    # over the stats, each once (never the whole line under every figure), read in full over them.
+    # The riding line is captioned too: its sentences shared out in order as the second line of the
+    # stats' cues, each once (never the whole line under every figure), each cue read in its time.
     under = [c for c in p["captions"] if c.get("lasting")]
     assert under and all(c["text"].endswith(f"\n{c['lasting']}") for c in under)
-    assert " ".join(c["lasting"] for c in under) == HONESTY["simulated"]
+    assert " ".join(c["lasting"] for c in under) == HONESTY_RIDE["simulated"]
     stats = [s for s in p["shots"] if s["kind"] == "stat"]
-    assert all(stats[0]["f0"] <= (c["f0"] + c["f1"]) / 2 < stats[-1]["f1"] for c in under)
-    assert len(under) == len(stats)
-    assert under[-1]["f1"] - under[0]["f0"] >= tracks.cue_frames(HONESTY["simulated"], FPS)
+    assert all(stats[0]["f0"] <= c["f0"] < stats[-1]["f1"] for c in under)
+    assert all(c["f1"] - c["f0"] >= tracks.cue_frames(c["text"], FPS) for c in under)
     assert "The site" in text  # the vantage name
     for shot in p["shots"]:
         if shot["kind"] == "capture":
@@ -331,16 +330,20 @@ def test_transcript_says_preview_unverified_and_pushes(tmp_path):
 
 
 def test_every_cue_is_readable(tmp_path):
-    """No caption cue lasts under a second or asks for more than 17 characters a second: runs of
-    quiet date labels become one span cue, and any other short cue is held into the next one."""
-    project = tiny(tmp_path / "p", steps=[STEPS[0]], chapters=[COMPARE], simulated=True)
-    p = _plan(project).plan
+    """No caption cue lasts under a second or asks for more than 17 characters a second, counting all
+    of its words (a stat's cue with its part of the riding line too): runs of quiet date labels
+    become one span cue, and any other short cue is held into the next one."""
+    flights = {"value": "{fact:flights}", "label": "drone flights over the build", "source": "Flight logs"}
+    stats = {**STATS, "items": [*STATS["items"], flights]}
+    tiny(tmp_path / "p", steps=[STEPS[0]], chapters=[COMPARE, stats], simulated=True)
+    flown = {"text": "12", "status": "verified", "sources": ["Flight log"]}
+    p = _plan(_facts(tmp_path / "p", area=AREA, flights=flown)).plan
+    assert [c for c in p["captions"] if c.get("lasting")]  # the riding line is captioned
     quiet = [s["label"] for s in p["shots"] if s["kind"] == "capture" and not s["step"]]
     assert len(quiet) >= 2
     assert any(" – " in c["text"] for c in p["captions"])  # the quiet captures as one span
-    for c in p["captions"][:-1]:  # a line lasting through several cues is read over all of them
-        own = c["text"].removesuffix(f"\n{c['lasting']}") if c.get("lasting") else c["text"]
-        assert c["f1"] - c["f0"] >= tracks.cue_frames(own, FPS), c
+    for c in p["captions"][:-1]:  # every word a cue carries, its part of a riding line included
+        assert c["f1"] - c["f0"] >= tracks.cue_frames(c["text"], FPS), c
     starts = [c["f0"] for c in p["captions"]]
     assert starts == sorted(set(starts)) and all(c["f0"] < c["f1"] for c in p["captions"])
     # A bare collector: two 0.4 s date cues become one span; a short worded cue is held.
@@ -375,23 +378,28 @@ def test_tracks_say_the_curtain_lines_on_screen(tmp_path):
     ), line
 
 
-def test_a_lasting_line_is_captioned_once_across_its_cues():
-    """A line riding under several cues (the honesty line and disclaimer under the figures) is
-    captioned once, its sentences in order under the cues it lasts through, not whole under each."""
-    honesty = "Every frame is made from the simulated flights. No in-between images are invented."
-    disclaimer = "A demonstration: every place, person and figure in it is fictional."
+def test_a_riding_line_is_captioned_once_across_the_stat_cues():
+    """A cue's `under` line (its part of the honesty line or disclaimer riding under the figures) is
+    its second line, named by `lasting`, with its facts; the stat run shares the riding line's
+    sentences out in order over its cues, each once, so no cue repeats it whole."""
+    from vantage.film.story import _ride_parts
+
     t = tracks.Tracks(30)
     t.cue(0, "Before the figures.", [])
-    t.cue(60, "12 drone flights over the build", ["flights"])
-    t.cue(180, "13,100 square feet of old pool, now beach", ["area"])
+    t.cue(60, "12 drone flights over the build", ["flights"], under=("Simulated flights.", ["d"]))
+    t.cue(180, "13,100 square feet of old pool, now beach", ["area"], under=("", ["d"]))
     t.cue(300, "Credits", [])
-    t.lasting(60, 300, f"{honesty} {disclaimer}", ["d"])
     caps = t.record(360, title="T", subtitle=None, honesty="H")["captions"]
-    under = [c for c in caps if c.get("lasting")]
-    assert [c["text"].split("\n")[0] for c in under] == [
-        "12 drone flights over the build",
-        "13,100 square feet of old pool, now beach",
-    ]
-    assert " ".join(c["lasting"] for c in under) == f"{honesty} {disclaimer}"
-    assert all(len(c["lasting"]) < len(honesty) + len(disclaimer) for c in under)
-    assert under[0]["facts"] == ["flights", "d"] and "lasting" not in caps[0] and "lasting" not in caps[-1]
+    assert [c.get("lasting") for c in caps] == [None, "Simulated flights.", None, None]
+    assert caps[1]["text"] == "12 drone flights over the build\nSimulated flights."
+    assert caps[1]["facts"] == ["flights", "d"] and caps[2]["facts"] == ["area"]
+
+    ride = "Real aerial photographs only; no in-between images. A demonstration: it is all fictional."
+    cues = ["12 drone flights over the build", "13,100 sq ft of old pool, now beach"]
+    reads = ["drone flights over the build Flight logs", "of old pool, now beach Site plan"]
+    assert _ride_parts(ride, cues, reads) == [
+        "Real aerial photographs only; no in-between images.",
+        "A demonstration: it is all fictional.",
+    ]  # fmt: skip
+    assert "" in _ride_parts("One sentence only.", cues, reads)
+    assert _ride_parts("One.", cues[:1], reads[:1]) == ["One."] and _ride_parts("One.", [], []) == []

@@ -20,7 +20,6 @@ are metadata, and it blanks them.
 from __future__ import annotations
 
 import html
-import itertools
 import math
 import re
 import struct
@@ -81,24 +80,6 @@ def cue_frames(text: str, fps: int) -> int:
     return max(math.ceil(MIN_CUE_S * fps), math.ceil(len(text) * fps / CPS))
 
 
-def _spread(text: str, cues: Sequence[dict[str, Any]], fps: int) -> list[str]:
-    """A lasting line's sentences spread in order over the cues it lasts through, each captioned
-    once: a sentence goes to the cue whose share of the reading time left over by the cues' own
-    words (CPS characters a second) holds its middle character."""
-    parts = [p for p in re.split(r"(?<=[.!?…])\s+", text) if p]
-    room = [max(1.0, CPS * (c["f1"] - c["f0"]) / fps - len(c["text"])) for c in cues]
-    total = sum(room)
-    out: list[list[str]] = [[] for _ in cues]
-    edges = list(itertools.accumulate(r / total for r in room))
-    done = 0
-    for part in parts:
-        middle = (done + len(part) / 2) / len(text)
-        k = next((i for i, e in enumerate(edges) if middle < e), len(cues) - 1)
-        out[k].append(part)
-        done += len(part) + 1
-    return [" ".join(p) for p in out]
-
-
 def _readable(captions: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
     """Give every cue its `cue_frames`: a run of short date-only cues (`span`, quiet captures)
     becomes one '<first> – <last>' cue; any other short cue is held into the next cue's time (which
@@ -141,14 +122,15 @@ class Tracks:
 
     A cue runs from its start to the next cue's start (the last to the film's end). `more` is the
     longer text a cue takes only when it still fits CPS characters per second (a capture's note, a
-    curtain step's text)."""
+    curtain step's text); `under` is a second line the cue carries (`lasting` in plan.json): its part
+    of a line printed under text that changes meanwhile, such as the honesty line riding along under
+    the stats, whose sentences the stat run shares out over its cues so it is captioned once."""
 
     fps: int
     enabled: bool = True
     cues: list[dict[str, Any]] = field(default_factory=list)
     marks: list[dict[str, Any]] = field(default_factory=list)
     lines: list[dict[str, Any]] = field(default_factory=list)
-    lasts: list[dict[str, Any]] = field(default_factory=list)
 
     def cue(
         self,
@@ -158,19 +140,14 @@ class Tracks:
         more: tuple[str, Sequence[str]] | None = None,
         *,
         span: str | None = None,
+        under: tuple[str, Sequence[str]] | None = None,
     ) -> None:
         """A cue from f0; `span` (a quiet capture's date label) lets a run of short cues become one
-        '<first> – <last>' cue."""
+        '<first> – <last>' cue; `under` (text, facts) is its second line."""
         if self.enabled and text:
-            self.cues.append({"f0": f0, "text": text, "facts": list(facts), "more": more, "span": span})
-
-    def lasting(self, f0: int, f1: int, text: str | None, facts: Sequence[str] = ()) -> None:
-        """A line printed from f0 to f1 under other text that changes meanwhile (the honesty line that
-        rides along under the stats): its sentences become the second line of the cues whose middle
-        falls in that time, spread over them in order and each captioned once (`_spread`), so the
-        captions stay one cue at a time (mov_text cannot overlap cues) and no cue repeats it whole."""
-        if self.enabled and text and f1 > f0:
-            self.lasts.append({"f0": f0, "f1": f1, "text": one_line(text), "facts": list(facts)})
+            self.cues.append(
+                {"f0": f0, "text": text, "facts": list(facts), "more": more, "span": span, "under": under}
+            )
 
     def chapter(self, f0: int, title: str | None, facts: Sequence[str] = ()) -> None:
         if self.enabled and title:
@@ -186,8 +163,7 @@ class Tracks:
         """plan.json `captions`, `chapters` and `transcript` (hashed). The first chapter starts at
         frame 0 (the title belongs to it); a chapter or cue that would last no frames is dropped,
         consecutive cues with the same text become one, short cues are made readable (`_readable`),
-        and a `lasting` line is spread under the cues it lasts through (`lasting` names each cue's
-        part)."""
+        and a cue's `under` line becomes its second line (`lasting` names it)."""
         if not self.enabled:
             return {"captions": [], "chapters": [], "transcript": None}
         cues = sorted(self.cues, key=lambda c: c["f0"])
@@ -207,19 +183,15 @@ class Tracks:
             captions.append(
                 {"f0": cue["f0"], "f1": f1, "text": text, "facts": list(dict.fromkeys(used)), "span": span}
             )
+            if cue["under"] is not None and one_line(cue["under"][0]):
+                captions[-1]["under"] = cue["under"]
         captions = _readable(captions, self.fps)
-        for last in self.lasts:
-            under = [c for c in captions if last["f0"] <= (c["f0"] + c["f1"]) / 2 < last["f1"]]
-            if not under:  # else the cue it overlaps most, if any
-                c = max(
-                    captions, key=lambda c: min(c["f1"], last["f1"]) - max(c["f0"], last["f0"]), default=None
-                )
-                under = [c] if c is not None and min(c["f1"], last["f1"]) > max(c["f0"], last["f0"]) else []
-            for c, part in zip(under, _spread(last["text"], under, self.fps), strict=True):
-                if part:
-                    c["text"] = f"{c['text']}\n{part}"
-                    c["facts"] = list(dict.fromkeys([*c["facts"], *last["facts"]]))
-                    c["lasting"] = part
+        for c in captions:
+            if (under := c.pop("under", None)) is not None:
+                part = one_line(under[0])
+                c["text"] = f"{c['text']}\n{part}"
+                c["facts"] = list(dict.fromkeys([*c["facts"], *under[1]]))
+                c["lasting"] = part
         marks = sorted(self.marks, key=lambda m: m["f0"])
         if marks:
             marks[0] = {**marks[0], "f0": 0}

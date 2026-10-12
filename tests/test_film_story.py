@@ -31,7 +31,8 @@ from vantage.film.layout import Layout
 from vantage.film.plan import SIMULATED_NOTE, check_films, plan_films, resolve_films
 from vantage.film.render import _render_one, film_jobs, render_film
 from vantage.film.safety import LumaMeter, PlanError, check_plan
-from vantage.film.story import HONESTY, Geometry
+from vantage.film.story import HONESTY, HONESTY_RIDE, Geometry
+from vantage.film.tracks import cue_frames
 from vantage.media.ffmpeg import ffmpeg_bin
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import ReleaseError
@@ -489,7 +490,6 @@ def test_end_card_is_short_and_the_honesty_line_rides_the_stats(tmp_path):
     honesty line under the stat run instead, where it reads in full; the card then fits in 6 s.
     Transcript lines never start past the film's last frame."""
     from vantage.film.story import END_MAX_S
-    from vantage.film.tracks import cue_frames
 
     third = round(B / 3)
     root = tmp_path / "p"
@@ -510,10 +510,10 @@ def test_end_card_is_short_and_the_honesty_line_rides_the_stats(tmp_path):
     assert [t["role"] for t in end["text"]] == ["brand", "credit", "role", "partner"]
     assert end["f1"] - end["f0"] <= END_MAX_S * 12  # its dip included
     assert end["f1"] - end["f0"] - end["dip"] - third - 2 * B >= cue_frames("Made for testing.", 12)
-    assert (
-        stat["honesty"] == HONESTY["photo"] and {"role": "honesty", "text": HONESTY["photo"]} in stat["text"]
-    )
-    assert stat["f1"] - stat["land"] >= cue_frames(HONESTY["photo"], 12)  # in with the panel, at land
+    short = HONESTY_RIDE["photo"]  # the short form rides, read alongside the figure
+    assert stat["honesty"] == short and {"role": "honesty", "text": short} in stat["text"]
+    # In with the panel, whole at the landing; read with the stat's label and source, not beside them.
+    assert stat["f1"] - stat["land"] >= cue_frames(f"{stat['label']} {stat['source']} {short}", 12)
     assert all(line["f0"] < p["frames"] for line in p["transcript"]["lines"])
     assert p["captions"][-1]["text"] == "Made for testing."  # the end card's cue
     short = json.loads(json.dumps(p))
@@ -878,7 +878,11 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
     shots = p["shots"]
     assert [s["kind"] for s in shots][-4:] == ["curtain", "stat", "stat", "end"]
     curtain, n1, n2, end = shots[-4:]
-    assert end["ride"] and n2["honesty"] == HONESTY["simulated"]  # the end card alone would run over 6 s
+    assert end["ride"] and n2["honesty"] == HONESTY_RIDE["simulated"]  # the card alone would run over 6 s
+    # The riding line is read alongside the figures, not in parallel: from the first landing to the
+    # run's end there is time for every label, source and the riding line at 17 characters a second.
+    words = " ".join([*(f"{n['label']} {n['source']}" for n in (n1, n2)), n2["honesty"]])
+    assert n2["f1"] - n1["land"] >= cue_frames(words, p["fps"]), (n1["land"], n2["f1"], words)
     assert n1["file"] == n2["file"] == curtain["after_file"] and n1["surface"] == (surface or "paper")
     d = n1["dissolve"]
     held = p["flash"]["held"].get("N1.0", 0)  # the flash margin may hold the picture before the figure
@@ -2094,7 +2098,7 @@ def test_the_disclaimer_is_read_and_rides_the_stats_when_the_card_is_full(tmp_pa
     then the disclaimer ride under the stats, where both read in full; without stats the card keeps
     them and says it runs long."""
     from vantage.film.story import END_MAX_S
-    from vantage.film.tracks import cue_frames
+    from vantage.film.tracks import to_transcript
 
     disclaimer = "A demonstration: every place, person and figure in it is fictional."
     root = tmp_path / "p"
@@ -2106,11 +2110,26 @@ def test_the_disclaimer_is_read_and_rides_the_stats_when_the_card_is_full(tmp_pa
     p = plan.plan
     (end,) = (s for s in p["shots"] if s["kind"] == "end")
     (stat,) = (s for s in p["shots"] if s["kind"] == "stat")
-    assert stat["honesty"] == f"{HONESTY['photo']} {disclaimer}", stat["honesty"]
-    assert stat["f1"] - stat["land"] >= cue_frames(stat["honesty"], 12)
+    assert stat["honesty"] == f"{HONESTY_RIDE['photo']} {disclaimer}", stat["honesty"]
+    assert stat["f1"] - stat["land"] >= cue_frames(f"{stat['label']} {stat['source']} {stat['honesty']}", 12)
     assert [t["role"] for t in end["text"]] == ["brand", "credit", "role", "partner", "fine"]
     assert end["text"][-1]["text"] == "© 2026 Tiny Brand"
     assert end["f1"] - end["f0"] <= END_MAX_S * 12 and not [w for w in plan.warnings if "end card" in w]
+    # A simulated film's disclaimer rides alone: its tag says "simulated" on every frame.
+    tiny(
+        root,
+        chapters=[{**STATS, "items": [STATS["items"][2]]}],
+        films={"16x9": {"end_beats": 2}},
+        simulated=True,
+    )
+    (root / "brand" / "brand.yaml").write_text(yaml.safe_dump(brand))
+    plan = _plan(_facts(root, area=AREA))
+    p = plan.plan
+    (end,) = (s for s in p["shots"] if s["kind"] == "end")
+    (stat,) = (s for s in p["shots"] if s["kind"] == "stat")
+    assert stat["honesty"] == disclaimer and p["tag"] and end["ride"], stat["honesty"]
+    assert [t["role"] for t in end["text"]] == ["brand", "credit", "role", "partner", "fine"]
+    assert HONESTY["simulated"] in to_transcript(plan).splitlines()[1]  # the whole line, in the header
 
     tiny(root, films={"16x9": {"end_beats": 2}})  # no stats: nothing to ride along with
     (root / "brand" / "brand.yaml").write_text(yaml.safe_dump(brand))
@@ -2130,7 +2149,6 @@ def test_a_curtains_lines_share_one_size_and_land_with_their_picture(tmp_path):
     9:16 and one in 16:9), and lands on the beat nearest its sweep's midpoint, so it arrives with
     the picture it names; it stays until the next line lands (or the curtain ends), at least as
     long as it takes to read."""
-    from vantage.film.tracks import cue_frames
 
     lines = ["The old lot, as it was left in the spring.", "Half.", "The new park in its first summer."]
     compare = {

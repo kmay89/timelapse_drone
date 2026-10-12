@@ -18,12 +18,12 @@ import pytest
 import yaml
 
 from test_film_story import COMPARE, STATS, STEPS, STORY_FILM, _facts, tiny
-from vantage.config import Project
+from vantage.config import Project, load_project
 from vantage.film import loop, render
 from vantage.film.cut import _Cut
 from vantage.film.plan import plan_films, resolve_films
 from vantage.film.render import render_film
-from vantage.film.story import HONESTY
+from vantage.film.story import HONESTY_RIDE
 from vantage.media.ffmpeg import ffprobe_bin, probe
 from vantage.models import FilmPlan
 from vantage.site.package import package_project
@@ -270,9 +270,10 @@ def test_loop_discloses_on_every_shot(tmp_path):
 
 
 def test_loop_stats_carry_the_honesty_line_and_disclaimer(tmp_path):
-    """A loop has no end-card disclaimer, so the figures it prints carry one: the honesty line and the
-    brand's disclaimer ride under its stats, at the screen's type size, read in full by the run's
-    end; the end card stays the brand alone."""
+    """A loop has no end-card disclaimer, so the figures it prints carry one: the brand's disclaimer
+    rides under its stats (in a simulated loop it rides alone, the tag saying "simulated" on every
+    frame; else after the honesty line's short form), at the screen's type size, read with the
+    stat's own words by the run's end; the end card stays the brand alone."""
     root = tmp_path / "p"
     stats = {**STATS, "items": [STATS["items"][2]]}
     tiny(root, films=SCREEN, chapters=[stats], simulated=True)
@@ -285,16 +286,22 @@ def test_loop_stats_carry_the_honesty_line_and_disclaimer(tmp_path):
     p = plan.plan
     (stat,) = (s for s in p["shots"] if s["kind"] == "stat")
     end = next(s for s in p["shots"] if s["kind"] == "end")
-    assert stat["honesty"] == f"{HONESTY['simulated']} {data['disclaimer']}", stat["honesty"]
+    assert stat["honesty"] == data["disclaimer"], stat["honesty"]
     assert end["ride"] and [t["role"] for t in end["text"]] == ["brand"]
     fps = p["fps"]
-    assert stat["f1"] - stat["land"] >= math.ceil(len(stat["honesty"]) * fps / 17), stat
+    read = f"{stat['label']} {stat['source']} {stat['honesty']}"
+    assert stat["f1"] - stat["land"] >= math.ceil(len(read) * fps / 17), stat
     cut = _Cut(project, plan)
     ride = next(i for i in cut.ink if i["shot"] == stat["id"] and i["layer"] == "honesty")
     x0, y0, x1, y1 = cut.lay.rect
     bx, by, bw, bh = ride["box"]
     assert x0 - 1 <= bx and bx + bw <= x1 + 1 and y0 - 1 <= by and by + bh <= y1 + 1, ride
     assert cut.stat_runs[stat["id"]]["ride"] is not None
+    # Without a disclaimer the honesty line's short form rides.
+    data.pop("disclaimer")
+    brand.write_text(yaml.safe_dump(data), encoding="utf-8")
+    (stat,) = (s for s in _screen(load_project(root)).plan["shots"] if s["kind"] == "stat")
+    assert stat["honesty"] == HONESTY_RIDE["simulated"], stat["honesty"]
 
 
 def test_cli_hours(tmp_path):

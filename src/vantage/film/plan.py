@@ -50,6 +50,12 @@ HONESTY = {
     "photo": "Every frame is made from real aerial photographs. No in-between images are invented.",
     "simulated": "Every frame is made from the simulated flights. No in-between images are invented.",
 }
+# The same promise in a line short enough to ride under a stat run, read alongside the figures; the
+# full line stays in the transcript's header (and on an end card that has room for it).
+HONESTY_RIDE = {
+    "photo": "Real aerial photographs only; no in-between images.",
+    "simulated": "Simulated flights only; no in-between images.",
+}
 Role = Literal["display", "text", "numeric"]
 ROLES: tuple[Role, ...] = ("display", "text", "numeric")
 
@@ -80,18 +86,20 @@ def _plain(project: Project, text: str | None) -> str | None:
     return FactNotes(project.facts.facts).plain(text)
 
 
-def honesty_line(provenance: Sequence[str]) -> str:
-    """The end card's (and the transcript's) honesty line, derived from the plan's provenance. Only
-    'photo' (drone vantages) and 'simulated' have one; any other provenance is an error, never
-    described as photographs."""
+def honesty_line(provenance: Sequence[str], *, ride: bool = False) -> str:
+    """The end card's (and the transcript's) honesty line, derived from the plan's provenance, or
+    with `ride` its short form that rides under a stat run (HONESTY_RIDE). Only 'photo' (drone
+    vantages) and 'simulated' have one; any other provenance is an error, never described as
+    photographs."""
+    lines = HONESTY_RIDE if ride else HONESTY
     if "simulated" in provenance:
-        return HONESTY["simulated"]
+        return lines["simulated"]
     unknown = sorted(set(provenance) - {"photo"})
     if unknown or not provenance:
         raise ValueError(
             f"no honesty line for provenance {unknown or list(provenance)}: films show only drone vantages"
         )
-    return HONESTY["photo"]
+    return lines["photo"]
 
 
 FILM_KINDS = ("drone",)  # vantage kinds films show; ortho, ground, archival, plan need their own line and tag
@@ -1037,6 +1045,7 @@ __all__ = [
     "FILM_RENDERER",
     "GOP_BEATS",
     "HONESTY",
+    "HONESTY_RIDE",
     "LOOP_BEATS",
     "PRESETS",
     "FilmDef",

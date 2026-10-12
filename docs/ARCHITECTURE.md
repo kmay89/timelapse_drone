@@ -817,10 +817,13 @@ small masters leave little to push, they are 77 and 77 beats.
     source fade in over B/3 at `text_in` (= `land` + B/2: once the figure and its unit are whole).
   - Length: max(4, ceil((text_in − f0 + B/3 + cue_frames(label + source) + out) / B)) beats (`out`:
     B/3 before another stat of the run), so label and source are fully on screen for as long as
-    they take to read at 17 characters a second (the figure itself is read at a glance); the last
-    stat of a run carrying the honesty line (and the disclaimer after it) is lengthened until that
-    text, fully on from the first stat's `land` (it comes in with the panel over the beat before),
-    reads too.
+    they take to read at 17 characters a second (the figure itself is read at a glance). A run
+    carrying a riding line is read as one screen, not text by text: its sentences are shared out in
+    order over the stats' caption cues (`story._ride_parts`: the split asking the fewest characters
+    of reading, then the most even), each stat lasting until its cue, from the middle of its entry,
+    reads with its part at 17 characters a second; and the last stat lasts until every label, source
+    and the riding line, fully on from the first stat's `land` (it comes in with the panel over the
+    beat before), read one after another at that rate.
   - The last stat's text holds to the shot's last frame: what follows dissolves (an image) or dips
     (a card, the end card) from the stat as it is, panel and text included.
   - Plain card (`backdrop: plain`; a FilmSpec `stats_surface` night | paper asks for it): the old
@@ -840,18 +843,24 @@ small masters leave little to push, they are 77 and 77 beats.
   line, link, honesty line and disclaimer take to read at 17 characters a second, plus a beat to scan the
   partners and the last beat, and at least `end_beats` (6). When that would run over 6 s with its
   dip (`END_MAX_S`) and the film has stats, the honesty line **rides along** under the stat run
-  instead (`ride: true` here; the stats' `honesty`: 30 units in 16:9 (at least 36 px at a 1080 px short
+  instead, in a short form read alongside the figures (`HONESTY_RIDE`, below; the whole line stays
+  in the transcript's header) (`ride: true` here; the stats' `honesty`: 30 units in 16:9 (at least 36 px at a 1080 px short
   edge), 38 in 9:16, in with the
   panel over the beat before the first figure lands and held to the run's end, which lasts until it
-  reads), then the disclaimer too (after the honesty line, one riding text). A card still over 6 s
+  reads), then the disclaimer too (after the honesty line, one riding text). In a simulated film
+  whose brand has a disclaimer, the disclaimer rides alone in the honesty line's place: the tag
+  says "simulated" on every frame and the disclaimer says the rest, so what the figures carry
+  stays short. A card still over 6 s
   leaves the partners out (a warning), and one over 6 s even so is a warning too: with no stats the
   card carries the honesty line and disclaimer however long they take. The
   honesty line says "simulated" when it is, so no SIMULATED_NOTE is added (classic cuts keep it).
-  For the demo the card is 9 beats (5.4 s) and the honesty line and disclaimer ride along the
-  stats for 9.6 s in the 9:16 cut.
+  For the demo the card is 9 beats (5.4 s) and its disclaimer rides along the stats for 10.2 s in
+  both cuts.
   The honesty line comes from `provenance`:
   - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
   - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
+  Its short, riding form (`HONESTY_RIDE`): "Real aerial photographs only; no in-between images." and
+  "Simulated flights only; no in-between images."
 - **Loop films** (`loop: true`; the `screen` preset):
   - A `rise` (`R1`, 1 beat, `LOOP_BEATS`) opens the film: frame 0 is a pure night fill, easing in display gamma
     (`ramp(f, f0 + 1, n)`, 0 on its first frame) onto the title's image at rest under the title's
@@ -873,9 +882,10 @@ small masters leave little to push, they are 77 and 77 beats.
   - With no disclaimer on its end card and no tracks, a loop keeps its `tag` ("Simulated imagery",
     "Preview") on every shot: on cards, plain stat cards and the end card too, in ink without a
     scrim on paper (stats over a picture carry it as every image does). An unattended screen prints
-    figures with no end card to qualify them, so a loop with stats has the honesty line and the
-    brand's disclaimer ride under them (`ride: true`), as a cut whose card is full does, at the
-    screen's type size, and its last stat lasts until they read.
+    figures with no end card to qualify them, so a loop with stats has the honesty line's short form
+    and the brand's disclaimer (a simulated loop's disclaimer alone, as in a cut) ride under them
+    (`ride: true`), as a cut whose card is full does, at the screen's type size, its stats lasting
+    until they read with the figures' words.
   - The end card is lengthened by a beat when needed so the film's length is a whole number of GOPs
     (2B frames): N % 2B == 0.
   - A `dip` (`D1`, 1 beat) closes the film: the end card eases in display gamma to the night fill,
@@ -1207,12 +1217,12 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
   `file`; `place` (low | high), `place_subject` (over a picture: `{low, high}`, the share of the
   picture's subject under each place's panel), `dissolve` (as a capture's: the first of a run over a picture, else
   null; with `cam` after another vantage's image), `dip` (frames; plain cards), `land` (the frame the figure starts to slide in), `text_in`
-  (the frame label and source fade in), `honesty` (the riding honesty line, or null), `move`
+  (the frame label and source fade in), `honesty` (the riding line, or null), `move`
   (null on a plain card, else `{how: focus+subject:<id> | drift | hold[, subject off-frame:<id>],
   subjects, focus [x, y, zoom] | null, upscale, f0, f1}`). Text roles `value`, `unit`, `label`,
   `source`, `honesty`.
-- `end` (`E1`): `dip`, `honesty`, `ride` (the honesty line, then the disclaimer, rides along the
-  stats instead). Text roles `brand`, `credit`, `role`, `partner`, `link`, `honesty` and
+- `end` (`E1`): `dip`, `honesty`, `ride` (the honesty line's short form, then the disclaimer, or a
+  simulated film's disclaimer alone, rides along the stats instead). Text roles `brand`, `credit`, `role`, `partner`, `link`, `honesty` and
   `disclaimer` (unless they ride), `fine`; a loop's
   end card has only `brand` and `url`.
 - `rise` (`R1`), `dip` (`D1`): loop films only, no extra fields and no text.
@@ -1271,11 +1281,10 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   quiet capture's date label becomes one "<first> – <last>" cue ("June 2026 – August 2026"); any
   other short cue is held into the next cue, which starts later but ends where it did. Only the
   last cue can stay short (the film ends). A line printed under text that changes meanwhile (the
-  honesty line riding along under the stats, `Tracks.lasting`) is captioned once, as second lines:
-  its sentences spread in order over the cues whose middle falls in its time, each sentence under
-  the cue whose share of the reading time its own words leave holds the sentence's middle
-  (`tracks._spread`; `lasting` names each cue's part; mov_text cannot overlap cues); the
-  readability rule then measures each cue without it, and the line over all of them.
+  line riding along under the stats) is captioned once, as second lines (a cue's `under`;
+  `lasting` names each cue's part; mov_text cannot overlap cues): the stat run shares its sentences
+  out in order over its cues and lasts until each cue reads with its part, so the readability rule
+  measures every cue whole.
   - title → the title (else the kicker); card → the chapter title;
   - capture → "<label>. <words>" ("April 2025. Before."); its note is appended only when the whole
     cue stays at or under 17 characters per second of the cue's length (`tracks.CPS`);
@@ -1285,7 +1294,7 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
     "<before> / <after>: <step text, plain>" from the entry or the sweep start under the same rule,
     else "<before> / <after>";
   - stat → "<value> <unit> <label>" (from the middle of the first stat's entry, then each stat's
-    first frame), with the riding honesty line (and disclaimer) under each when it rides; E1 → the
+    first frame), with its part of the riding line under it when one rides; E1 → the
     credit line (else the brand name). The honesty line is also in the transcript's header.
   - Classic cuts: the title, each capture's label (+ note under the same rule) from the middle of
     its incoming crossfade, each section card's name and the credit line.
