@@ -1250,16 +1250,19 @@ def _stats(
             b.cross(on.vantage, dissolve, rest)  # from another vantage: the camera cuts to rest
         entry = dissolve["f1"] - dissolve["f0"] if dissolve else dip
         # The first figure lands on the first beat after its entry; the next ones on their first
-        # frame, as the text before them crossfades out. Label and source fade in with the figure
-        # and stay until the shot's end, long enough to read at 17 characters a second.
-        # (The flash margin may hold the run's picture before the first figure lands, "N1.0", and any
-        # stat longer before the next, "N<n>".)
+        # frame, once the text before them has faded out (over that stat's last B/3). Each figure
+        # slides in whole over half a beat; label and source fade in after it (`text_in`) and stay
+        # until the shot's end (or its last B/3 before another stat), long enough to read at 17
+        # characters a second. (The flash margin may hold the run's picture before the first
+        # figure lands, "N1.0", and any stat longer before the next, "N<n>".)
         n = sum(s["kind"] == "stat" for s in b.shots) + 1
         land = f0 + (-(-entry // B) + b.holds.get(f"N{n}.0", 0)) * B if k == 0 else f0
+        text_in = land + round(B / 2)
         if k == 0:
-            first_text_in = land
+            first_text_in = text_in
         read = " ".join(filter(None, (item["label"], item["source"])))
-        need = land - f0 + third + cue_frames(read, fps)
+        out = third if k + 1 < len(items) else 0  # its text leaves before the next figure lands
+        need = text_in - f0 + third + cue_frames(read, fps) + out
         if honesty and k == len(items) - 1:  # the riding honesty line reads in full by the run's end
             need = max(need, first_text_in + third + cue_frames(honesty, fps) - f0)
         beats = max(STAT_MIN_BEATS, -(-need // B)) + b.holds.get(f"N{n}", 0)
@@ -1330,7 +1333,7 @@ def _stats(
                 "dissolve": dissolve,
                 "dip": dip,
                 "land": land,
-                "text_in": land,
+                "text_in": text_in,
                 "honesty": honesty,
                 "move": move,
             },

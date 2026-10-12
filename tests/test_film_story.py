@@ -731,10 +731,11 @@ def test_stats_are_facts_only(tmp_path):
         "13,100", "sq ft", "of old pool", "Site plan",
     )  # fmt: skip
     assert stat["facts"] == ["area"] and stat["surface"] == "paper" and stat["backdrop"] == "plain"
-    # The figure lands on the first beat after the dip from the image, with its label and source,
+    # The figure lands on the first beat after the dip from the image, then its label and source,
     # which then stay readable at 17 characters a second, so the shot is longer than 4 beats here.
     third = round(B / 3)
-    assert stat["land"] == stat["text_in"] == stat["f0"] + -(-stat["dip"] // B) * B
+    assert stat["land"] == stat["f0"] + -(-stat["dip"] // B) * B
+    assert stat["text_in"] == stat["land"] + round(B / 2)  # once the figure is whole
     visible = stat["f1"] - (stat["text_in"] + third)
     assert visible >= math.ceil(len("of old pool Site plan") * 12 / 17) and stat["f1"] - stat["f0"] >= 4 * B
     assert any("'42' is not a {fact:} token" in w for w in plan.warnings), plan.warnings
@@ -758,7 +759,12 @@ def test_stats_are_facts_only(tmp_path):
     tiny(root, chapters=[two], films={"16x9": {"stats_surface": "paper"}})
     project2 = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
     n1, n2 = (s for s in _plan(project2).plan["shots"] if s["kind"] == "stat")
-    assert (n2["f0"], n2["dip"], n2["land"], n2["text_in"]) == (n1["f1"], 0, n2["f0"], n2["f0"])
+    assert (n2["f0"], n2["dip"], n2["land"], n2["text_in"]) == (
+        n1["f1"],
+        0,
+        n2["f0"],
+        n2["f0"] + round(B / 2),
+    )
     # By default stats sit over a picture, under a panel in the chapter's surface (else paper).
     tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]], "surface": "night"}])
     night = _plan(_facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]}))
@@ -850,7 +856,9 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
     crossfades. The stat whose fact the pool hotspot prints pushes toward it and frames it clear of
     the panel (16:9); the other drifts or holds. Every frame from a stat's text_in to its end shows
     its words, every frame of the run from the first landing shows a figure (no blank frame), and
-    each text keeps 4.5:1 over what is under it, measured on rendered frames."""
+    each text keeps 4.5:1 over what is under it, measured on rendered frames. The text changes in
+    sequence: no frame shows a label or unit beside a figure that is not whole, or two stats' text at
+    once, and the panel is never up without text."""
     project = _big(tmp_path, monkeypatch, surface)
     plan = _plan(project, fid)
     p = plan.plan
@@ -864,7 +872,8 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
     held = p["flash"]["held"].get("N1.0", 0)  # the flash margin may hold the picture before the figure
     assert (d["from"], d["f0"], d["f1"]) == ("C1", n1["f0"], n1["f0"] + D)
     assert n1["land"] == n1["f0"] + B * (1 + held)
-    assert n2["dissolve"] is None and n2["f0"] == n1["f1"] and n2["land"] == n2["text_in"] == n2["f0"]
+    assert n2["dissolve"] is None and n2["f0"] == n1["f1"] and n2["land"] == n2["f0"]
+    assert n1["text_in"] == n1["land"] + round(B / 2) and n2["text_in"] == n2["land"] + round(B / 2)
     assert n1["move"]["subjects"] == [] and n1["move"]["how"] in ("drift", "hold")
     if fid == "16x9":
         move = n2["move"]
@@ -891,8 +900,8 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
         L = cut.layers[stat["id"]]
         words = _cores(L["rest"], w, h)
         figure = _cores(L["glyphs"], w, h)
-        fully = stat["land"] + 2 * (len(L["glyphs"]) - 1) + half
-        end = stat["f1"]
+        fully = stat["land"] + half  # the figure slides in as one block
+        end = stat["f1"] - (round(B / 3) if stat is n1 else 0)  # N1's text leaves before N2 lands
         for f in range(stat["text_in"], end):
             frame = cut.frame_at(f).astype(np.int16)
             with _NoText(cut):
@@ -901,16 +910,47 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
             assert seen > 12, (stat["id"], f, seen)  # its words are on screen
             if f >= fully:
                 assert np.abs(frame[figure] - bare[figure]).max(axis=1).mean() > 12, (stat["id"], f)
-            if f in (max(stat["key"], fully), stat["f1"] - 1):  # every text's contrast over what is under it
+            if f in (max(stat["key"], fully), end - 1):  # every text's contrast over what is under it
                 for layers in ([*L["glyphs"]], L["rest"], [cut.stat_runs[stat["id"]]["ride"]]):
                     ys, xs = _cores(layers, w, h)
                     ink = np.median(_lum(frame[ys, xs]))
                     under = _lum(bare[ys, xs])
                     ratio = (np.maximum(ink, under) + 0.05) / (np.minimum(ink, under) + 0.05)
                     assert np.quantile(ratio, 0.05) >= 4.5, (stat["id"], f, np.quantile(ratio, 0.05))
-    # No blank frame: from N1's figure landing to the run's end, some figure is on screen.
+    # In sequence: before a figure is whole its words are not on screen; N1's text is gone before
+    # N2's figure starts to land; no frame of the panel without a figure or words coming in.
+    third = round(B / 3)
+    n1_cores = [_cores(cut.layers["N1"][k], w, h) for k in ("glyphs", "rest")]
+    for stat in (n1, n2):
+        L = cut.layers[stat["id"]]
+        words = _cores(L["rest"], w, h)
+        for f in range(max(stat["land"] - third, stat["f0"]), stat["text_in"]):
+            frame = cut.frame_at(f).astype(np.int16)
+            with _NoText(cut):
+                bare = cut.frame_at(f).astype(np.int16)
+            assert np.abs(frame[words] - bare[words]).max(axis=1).mean() < 3, (stat["id"], f)
+    frame = cut.frame_at(n2["f0"] - 1).astype(np.int16)  # N1's last frame: its text is gone
+    with _NoText(cut):
+        bare = cut.frame_at(n2["f0"] - 1).astype(np.int16)
+    for c in n1_cores:
+        assert np.abs(frame[c] - bare[c]).max(axis=1).mean() < 3, "N1 left over"
+    panel = cut.stat_runs["N1"]["panel"]
+    ys, xs = np.nonzero(panel.alpha[..., 0] > 0.5 * panel.alpha.max())
+    ys, xs = ys + panel.y, xs + panel.x
+    for f in range(n1["f0"], n1["land"] - third):  # before the panel's B/3: the bare picture
+        frame = cut.frame_at(f).astype(np.int16)
+        saved = cut.stat_runs["N1"]["panel"]
+        cut.stat_runs["N1"]["panel"] = None
+        try:
+            without = cut.frame_at(f).astype(np.int16)
+        finally:
+            cut.stat_runs["N1"]["panel"] = saved
+        assert np.abs(frame[ys, xs] - without[ys, xs]).max() <= 1, f
+    # No blank frame: from N1's figure landing to the run's end, some figure is on screen (but for
+    # the change, N1 out over its last B/3 and N2 in over half a beat).
     figures = [_cores(cut.layers[s["id"]]["glyphs"], w, h) for s in (n1, n2)]
-    for f in range(n1["land"] + 2 * len(cut.layers["N1"]["glyphs"]) + half, n2["f1"]):
+    change = range(n1["f1"] - round(B / 3), n2["land"] + half)
+    for f in [f for f in range(n1["land"] + half, n2["f1"]) if f not in change]:
         frame = cut.frame_at(f).astype(np.int16)
         with _NoText(cut):
             bare = cut.frame_at(f).astype(np.int16)

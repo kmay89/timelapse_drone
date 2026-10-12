@@ -699,14 +699,16 @@ small masters leave little to push, they are 85 and 73 beats.
     run's first stat opens with a D-frame `dissolve` from the image before it (from the curtain: only
     the strip still showing `before` changes) whose overlays leave over its first half; the next
     stats have no dissolve and no dip: the picture and the camera carry on and only the text
-    crossfades (the previous stat's text out over the first B/3 frames as the new figure slides in
-    and its label and source fade in). After a card the first stat dips in from night.
+    changes, in sequence (the previous stat's text out over its last B/3 frames, then the new
+    figure slides in on the beat, then its label and source fade in). After a card the first stat
+    dips in from night.
   - Panel: one feathered box (padding 44 units, sigma 16) behind all of the run's ink, in the run's
     **tint**, the stats chapter's `surface` (default paper, as on the web), with ink text on paper
     and paper text on night. Its opacity is measured (`cut._measure_panel`): the least of 0.30…0.95
     at which the text colour keeps 7:1 (`STAT_CONTRAST`; WCAG 1.4.3 asks 4.5:1 of small text) over
     the 99.5th-worst percentile of the picture under the run's ink box, sampled on every beat along
-    the camera path. It arrives over the rest of the entry beat, whole as the figure lands, and stays
+    the camera path. It comes in with the text, over the B/3 frames before the first figure lands
+    (a held entry, `N1.0`, shows the bare picture until then, never an empty panel), and stays
     through the run. Recorded in plan.json `checks.scrims`.
   - Placement (`place`): `low` (the stats' bottoms on one line above the riding honesty line, which
     rests on the safe bottom, or above the tag in 9:16) or `high` (the figures' cap tops on the
@@ -726,22 +728,24 @@ small masters leave little to push, they are 85 and 73 beats.
     A push of more than 1.25 output px per master px is a "soft push" warning, as for steps.
   - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
     (tabular figures without raqm; other glyphs keep their own advance), shifted so the first
-    glyph's ink starts on the text column with the label. Each glyph slides up into a mask over B/2
-    frames, staggered by 2 frames, from `land` (the first beat after the entry for the first stat of
-    a run, the shot's first frame for the next). The mask ends at the figure's own ink bottom (its
+    glyph's ink starts on the text column with the label. The figure and its unit slide up into a
+    mask as one block over B/2 frames from `land` (the first beat after the entry for the first stat
+    of a run, the shot's first frame for the next), so no frame shows part of a figure beside its
+    unit and label. The mask ends at the figure's own ink bottom (its
     baseline, or a comma's tail), so a rising glyph never shows above the label. The value is the
     plan's printed fact text: it never counts.
   - Unit at 0.35× the value size after it; label and "Source: <source>" below, fully opaque, at 52
     and 34 units in 16:9 and 86 and 58 in 9:16 (read on a phone: x-heights of 44 and 30 px at 1080
-    wide). They fade in over B/3 at `text_in` (= `land`).
-  - Length: max(4, ceil((text_in − f0 + B/3 + cue_frames(label + source)) / B)) beats, so label and
-    source are fully on screen for as long as they take to read at 17 characters a second (the
-    figure itself is read at a glance); the last stat of a run carrying the honesty line is
-    lengthened until that line, on from the first `text_in`, reads too.
-  - Text holds to the shot's last frame: what follows dissolves (an image) or dips (a card, the end
-    card) from the stat as it is, panel and text included.
+    wide). They fade in over B/3 at `text_in` (= `land` + B/2: once the figure is whole).
+  - Length: max(4, ceil((text_in − f0 + B/3 + cue_frames(label + source) + out) / B)) beats (`out`:
+    B/3 before another stat of the run), so label and source are fully on screen for as long as
+    they take to read at 17 characters a second (the figure itself is read at a glance); the last
+    stat of a run carrying the honesty line is lengthened until that line, on from the first
+    `text_in`, reads too.
+  - The last stat's text holds to the shot's last frame: what follows dissolves (an image) or dips
+    (a card, the end card) from the stat as it is, panel and text included.
   - Plain card (`backdrop: plain`; a FilmSpec `stats_surface` night | paper asks for it): the old
-    card on that surface, no panel, entered by a dip (`dip`); consecutive stats crossfade their
+    card on that surface, no panel, entered by a dip (`dip`); consecutive stats change their
     text the same way with no dip; before an image its text fades out over its last B/3 frames and
     the image dips in from the bare surface.
 - **Dips**: every dip and dissolve is D frames, except one that crosses between paper and another

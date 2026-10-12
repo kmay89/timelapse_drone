@@ -6,7 +6,7 @@ pytest's cache between sessions, or VANTAGE_TEST_FOOTAGE), aligns it into master
 For each film: the meter measures at most 2 flash transitions per region in any second (the
 planner's margin, film/margin.py; WCAG 2.3.1 allows 3); every step that asks for a push really
 pushes (zoom ≥ 1.2) and its subject ends inside the frame and outside its words' ink; every frame
-of a stat from its landing shows its words and, once in, its figure; the film spends at most 6 s on
+of a stat from its words' landing to its text's exit shows its words and, once in, its figure; the film spends at most 6 s on
 night after its last picture; and its length is within the target (9:16 40–48 s, 16:9 40–54 s with
 every chapter, the screen loop at most 80 s).
 """
@@ -149,8 +149,10 @@ def test_full_size_stats_always_show_their_ink(full, fid):
         layers = cut.layers[stat["id"]]
         words = _cores(layers["rest"], w, h)
         figure = _cores(layers["glyphs"], w, h)
-        fully = stat["land"] + 2 * (len(layers["glyphs"]) - 1) + round(B / 2)
-        for f in range(stat["text_in"] + round(B / 3), stat["f1"], 3):  # once its fade in is over
+        fully = stat["land"] + round(B / 2)  # the figure slides in as one block
+        nxt = p["shots"][p["shots"].index(stat) + 1]
+        end = stat["f1"] - (round(B / 3) if nxt["kind"] == "stat" else 0)  # its text leaves first
+        for f in range(stat["text_in"] + round(B / 3), end, 3):  # once its fade in is over
             frame = cut.frame_at(f).astype(np.int16)
             with _NoText(cut):
                 bare = cut.frame_at(f).astype(np.int16)

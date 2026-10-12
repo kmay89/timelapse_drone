@@ -1210,9 +1210,11 @@ class _Cut:
     def _stat_text(
         self, frame: np.ndarray, j: int, f: int, opacity: float = 1.0, *, landed: bool = False
     ) -> None:
-        """Stat j's figure and words at frame f: glyphs slide up into their mask (2-frame stagger,
-        half a beat each) from `land`, already the true figure; unit, label and source fade in over
-        B/3 from `text_in`. `landed` draws them all in place (a stat being crossfaded out)."""
+        """Stat j's figure and words at frame f: the figure and its unit slide up into their mask as
+        one block over half a beat from `land` (never a partial figure), already the true figure;
+        label and source fade in over B/3 from `text_in`, once the figure is whole. Before another
+        stat of the run, all of it fades out over the shot's last B/3 frames, so the next figure lands
+        on a clear panel. `landed` draws it all in place (a stat being dissolved out)."""
         if opacity <= 0.002:
             return
         shot, L = self.shots[j], self.layers[self.shots[j]["id"]]
@@ -1220,25 +1222,28 @@ class _Cut:
         dist = bottom - top
         half = max(1, round(self.fpb / 2))
         land = shot.get("land", shot["f0"])
-        for k, glyph in enumerate(L["glyphs"]):
-            e = 1.0 if landed else ramp(f, land + 2 * k, half)
+        nxt = self.shots[j + 1] if j + 1 < len(self.shots) else None
+        if not landed and nxt is not None and nxt["kind"] == "stat":
+            opacity *= 1 - ramp(f, shot["f1"] - self.third, self.third)
+            if opacity <= 0.002:
+                return
+        e = 1.0 if landed else ramp(f, land, half)
+        for glyph in L["glyphs"]:
             _put(frame, glyph, opacity, dist * (1 - e), clip=(0, top, self.width, bottom))
-        e = 1.0 if landed else ramp(f, shot.get("text_in", shot["f0"] + self.fpb), self.third)
+        e = 1.0 if landed else ramp(f, shot.get("text_in", land + half), self.third)
         for layer in L["rest"]:
             _put(frame, layer, e * opacity)
 
     def _stat_overlays(
         self, frame: np.ndarray, i: int, f: int, intro: float = 1.0, panel: float | None = None
     ) -> None:
-        """A stat's panel (over a picture), the previous stat's text crossfading out over the first
-        B/3 frames, its own text, and the riding honesty line, which stays on through the run."""
+        """A stat's panel (over a picture), its text, and the riding honesty line, which comes in
+        with the run's first words and stays on through the run."""
         shot = self.shots[i]
         run = self.stat_runs[shot["id"]]
         prev = self.shots[i - 1] if i else None
         within = prev is not None and prev["kind"] == "stat"
         _put(frame, run["panel"], 1.0 if within else intro if panel is None else panel)
-        if within:
-            self._stat_text(frame, i - 1, f, (1 - ramp(f, shot["f0"], self.third)) * intro, landed=True)
         self._stat_text(frame, i, f, intro)
         if run["ride"] is not None:
             seen = 1.0 if within else ramp(f, shot.get("text_in", shot["f0"]), self.third)
@@ -1247,9 +1252,10 @@ class _Cut:
     def _stat(self, i: int, f: int) -> np.ndarray:
         """A stat over its picture (`file`: the camera keeps moving through the run) or on a plain
         surface. The first of a run dissolves in from the image before it (whose overlays leave over
-        the first half while the panel arrives over the second) or dips from a surface; the next
-        stat of the run starts on the beat with no dip: only the text crossfades. Its text holds to
-        the shot's last frame; what follows the run dissolves or dips from it as it is."""
+        the first half; the panel arrives over the B/3 before the figure lands) or dips from a
+        surface; the next stat of the run starts on the beat with no dip, after this one's text has
+        faded out over its last B/3. The last stat's text holds to the shot's last frame; what
+        follows the run dissolves or dips from it as it is."""
         shot = self.shots[i]
         f0, f1 = shot["f0"], shot["f1"]
         prev = self.shots[i - 1] if i else None
@@ -1280,9 +1286,10 @@ class _Cut:
             if prev is not None and prev["kind"] in ("capture", "curtain", "stat"):
                 self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
             intro = ramp(f, d["f0"] + half, d["f1"] - d["f0"] - half)
-        # The panel arrives over the rest of the entry beat, whole as the figure lands.
-        a = d["f0"] + (d["f1"] - d["f0"]) // 2 if mixed and d is not None else f0
+        # The panel comes in with the text: over the B/3 before the figure lands, whole as it
+        # lands (a held entry, "N1.0", shows the bare picture until then).
         land = shot.get("land", f0)
+        a = max(land - self.third, d["f0"] + (d["f1"] - d["f0"]) // 2 if mixed and d is not None else f0)
         panel = ramp(f, a, max(1, land - a)) if land > a else intro
         self._stat_overlays(frame, i, f, intro, panel)
         self._put_tag(frame)
