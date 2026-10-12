@@ -8,6 +8,7 @@ frame centre tells which capture is on screen.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import json
 import math
@@ -25,7 +26,7 @@ from test_film import FILM, SIZE, make_project
 from vantage.cli import check_project
 from vantage.config import Project, load_project
 from vantage.film import beat
-from vantage.film.cut import STAT_CONTRAST, _Cut
+from vantage.film.cut import CURTAIN_LABEL, RISE, STAT_CONTRAST, _Cut, words_set
 from vantage.film.layout import Layout
 from vantage.film.plan import SIMULATED_NOTE, check_films, plan_films, resolve_films
 from vantage.film.render import _render_one, film_jobs, render_film
@@ -1646,3 +1647,52 @@ def test_poster_comes_from_the_main_story_not_a_montage(tmp_path):
     p = _plan(_facts(project.root, area=AREA), "9x16").plan
     shot = next(s for s in p["shots"] if s["f0"] <= p["poster"] < s["f1"])
     assert shot["kind"] == "capture" and shot["vantage"] == "site" and not shot.get("montage"), shot
+
+
+def test_a_curtains_lines_share_one_size_and_land_with_their_picture(tmp_path):
+    """Every line of a curtain is set at one size (`words_scale`, on at most two balanced lines), and
+    lands on the beat nearest its sweep's midpoint, so it arrives with the picture it names; it
+    stays until the next line lands (or the curtain ends), at least as long as it takes to read."""
+    from vantage.film.tracks import cue_frames
+
+    lines = ["The old lot, as it was left in the spring.", "Half.", "The new park in its first summer."]
+    compare = {
+        **COMPARE,
+        "steps": [
+            {"text": t, "split": sp, "film": {"line": t}}
+            for t, sp in zip(lines, (0.8, 0.5, 0.2), strict=True)
+        ],
+    }
+    project = tiny(tmp_path / "p", chapters=[compare], film={"vertical": True})
+    for fid in ("16x9", "9x16"):
+        plan = _plan(project, fid)
+        p = plan.plan
+        curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
+        steps, keys = curtain["steps"], curtain["keys"]
+        third = round(B / 3)
+        for k, step in enumerate(steps):
+            sweep = (keys[k]["b"], keys[k + 1]["a"])  # from the last key's hold to this split
+            assert step["land"] % B == 0 and sweep[0] < step["land"] < sweep[1], (fid, k, step, sweep)
+            end = steps[k + 1]["land"] - third if k + 1 < len(steps) else curtain["f1"]
+            assert end - (step["land"] + third) >= cue_frames(step["words"], 12), (fid, k)
+        scale = curtain["words_scale"]
+        assert 0 < scale <= 1.0
+        cut = _Cut(project, plan)
+        style = dataclasses.replace(CURTAIN_LABEL, size=CURTAIN_LABEL.size * curtain["label_scale"])
+        cap_top = curtain["label_top"] + cut._cap(style)
+        boxes = [
+            (x, y, x + w, y + h)  # ink boxes are recorded as x, y, w, h
+            for x, y, w, h in (
+                i["box"] for i in cut.ink if i["shot"] == curtain["id"] and i["layer"] == "words"
+            )
+        ]
+        rise = RISE * cut.u
+        for step, box in zip(steps, boxes, strict=True):
+            # The renderer set every line at the curtain's one size, on at most two lines between
+            # the margins (before: each line shrunk on its own to fit one line).
+            ws = words_set(cut.type, cut.lay, step["words"], step["words_zone"], cap_top, scale)
+            assert ws.style.size == pytest.approx(120 * scale) and 1 <= len(ws.lines) <= 2, ws
+            assert box == pytest.approx([*ws.box[:3], ws.box[3] + rise], abs=2), (box, ws.box)
+            assert cut.lay.margin - 2 <= box[0] and box[2] <= cut.lay.right + 2, box
+        # The short line is not set larger than the long ones: its ink is no taller than one row.
+        assert boxes[1][3] - boxes[1][1] - rise <= 120 * scale * cut.u, boxes

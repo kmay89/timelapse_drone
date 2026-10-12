@@ -674,14 +674,21 @@ small masters leave little to push, they are 85 and 73 beats.
     returns to rest over the entry beat, and the previous shot's label, words and rail leave over the
     first half of the entry while the curtain's own overlays arrive over the second.
   - Then per step that has a split (steps with `film.skip` are left out; no split at all: one step at
-    0.5): 2 beats of smoothstep sweep to the split, then 2 beats of hold. `keys` holds the hold
+    0.5): 2 beats of smoothstep sweep to the split, then 2 beats of hold, or as many more as its
+    words need to read (below). `keys` holds the hold
     windows in frames, eased by `keyed` exactly like the camera. A step's focus is clamped like a push
     (no subject recentring) and eases in over the sweep.
-  - Words (landing on the sweep's downbeat, out at the next sweep): `film.line`, else the step's
-    `**bold**` lead, else its first sentence when that prints at most 40 characters
-    (`story.curtain_words`), so the centrepiece is not silent; the full step text is for the tracks.
-    A line followed by another fades out over the B/3 frames before the next downbeat instead, so
-    two lines are never on screen over each other (`cut._line`). Each line's zone is chosen like a
+  - Words (`land`: the beat nearest the sweep's midpoint, a beat after its downbeat, so a line
+    arrives with the picture it names): `film.line`, else the step's `**bold**` lead, else its first
+    sentence when that prints at most 40 characters (`story.curtain_words`), so the centrepiece is
+    not silent; the full step text is for the tracks. Every line of a curtain is set at one size
+    (`words_scale` on the curtain shot: the largest share of the 120-unit lead size at which each
+    line breaks into at most two balanced lines, `cut.words_scale`; two lines sit 1.06 apart, the
+    last on the low baseline, the first under the label line when high), so lines never grow and
+    shrink in turn. A line stays until the next one lands, fading out over the B/3 frames before it
+    (or from the next sweep's downbeat when that step has no line, or to the curtain's end), so two
+    lines are never on screen over each other (`cut._line`); the step holds as many beats past 2 as
+    the line needs to be fully on screen for as long as it takes to read at 17 characters a second. Each line's zone is chosen like a
     capture step's (see **Words zones**): its subject is the step's focus and what changed from
     before to after, along the camera from its landing to the next sweep; it keeps the previous
     line's zone while that is clear.

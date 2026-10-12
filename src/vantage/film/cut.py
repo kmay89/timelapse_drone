@@ -291,18 +291,52 @@ def words_zones(lay: Layout) -> tuple[str, ...]:
 
 @dataclasses.dataclass(frozen=True)
 class WordsSet:
-    """A step's words as set in a zone: style, the text's origin (x, baseline) and its ink box."""
+    """A step's words as set in a zone: style, the text's origin (x, the first line's baseline), its
+    ink box and, for words on more than one line (a curtain's), each line and its baseline."""
 
     zone: str
     style: _Style
     x: float
     baseline: float
     box: Box4  # x0, y0, x1, y1 of the ink, at rest (it rises RISE units into place from below)
+    lines: tuple[str, ...] = ()
+    baselines: tuple[float, ...] = ()
 
 
-def words_set(t: _Type, lay: Layout, words: str, zone: str, label_base: float) -> WordsSet:
+WORDS_LEADING = 1.06  # a curtain's words on two lines: display type, set close
+
+
+def words_lines(t: _Type, lay: Layout, words: str, scale: float) -> list[str]:
+    """`words` at LEAD × scale broken into balanced lines between the margins."""
+    return t.wrap(words, LEAD, lay.text_width, scale, balanced=True)
+
+
+def words_scale(t: _Type, lay: Layout, texts: Sequence[str], lines: int = 2) -> float:
+    """The largest scale (at most 1) of LEAD at which each of `texts` breaks into at most `lines`
+    balanced lines whose ink fits between the margins: one size for every line of a curtain."""
+    scale = 1.0
+    for _ in range(40):
+        ok = True
+        for text in texts:
+            rows = words_lines(t, lay, text, scale)
+            style = dataclasses.replace(LEAD, size=LEAD.size * scale)
+            ink = max(t.font(style).getbbox(row, anchor="ls")[2] for row in rows)
+            ok = ok and len(rows) <= lines and ink <= lay.text_width
+        if ok:
+            break
+        scale *= 0.97
+    return round(scale, 4)
+
+
+def words_set(
+    t: _Type, lay: Layout, words: str, zone: str, label_base: float, scale: float | None = None
+) -> WordsSet:
     """Lead words in `zone` (shrunk to fit between the margins, overhangs included). `label_base`:
-    the baseline of the label line a `high` zone hangs under."""
+    the baseline of the label line a `high` zone hangs under. With `scale` (a curtain's one size,
+    `words_scale`), the words are set at LEAD × scale on balanced lines instead: the last line on
+    the low baselines, the first under the label line when high."""
+    if scale is not None:
+        return _words_lines(t, lay, words, zone, label_base, scale)
     size = 1.0
     w = t.width(words, LEAD)
     if w > lay.text_width:
@@ -325,6 +359,29 @@ def words_set(t: _Type, lay: Layout, words: str, zone: str, label_base: float) -
     else:
         raise ValueError(f"unknown words zone {zone!r}")
     return WordsSet(zone, style, x, baseline, (x + left, baseline + top, x + right, baseline + bottom))
+
+
+def _words_lines(t: _Type, lay: Layout, words: str, zone: str, label_base: float, scale: float) -> WordsSet:
+    style = _Style(LEAD.role, LEAD.size * scale, LEAD.weight, leading=WORDS_LEADING)
+    font = t.font(style)
+    rows = words_lines(t, lay, words, scale)
+    step = style.size * t.unit * style.leading
+    boxes = [font.getbbox(row, anchor="ls") for row in rows]
+    if zone == "high":
+        first = label_base + WORDS_GAP * t.unit - font.getbbox("Hdl", anchor="ls")[1]
+    elif zone in ("low", "low-right"):
+        first = float(lay.lead_baseline) - step * (len(rows) - 1)
+    else:
+        raise ValueError(f"unknown words zone {zone!r}")
+    bases = tuple(first + k * step for k in range(len(rows)))
+    x = float(lay.margin)
+    if zone == "low-right":
+        x = lay.right - max(bx[2] for bx in boxes)
+    box = (
+        x + min(bx[0] for bx in boxes), bases[0] + boxes[0][1],
+        x + max(bx[2] for bx in boxes), bases[-1] + boxes[-1][3],
+    )  # fmt: skip
+    return WordsSet(zone, style, x, first, box, tuple(rows), bases)
 
 
 def stat_subject_box(lay: Layout, run: StatRun) -> tuple[float, float, float, float]:
@@ -729,13 +786,19 @@ class _Cut:
             self._note(None, "rail", (self.rail_ends[0] - k, y - k, self.rail_ends[1] + k, y + k))
 
     def _words(
-        self, words: str, sid: str | None, zone: str | None, label_base: float
+        self, words: str, sid: str | None, zone: str | None, label_base: float, scale: float | None = None
     ) -> tuple[_Layer, _Layer]:
-        """A step's words in their zone (`words_set`; plans before zones: low) and their scrim."""
+        """A step's words in their zone (`words_set`; plans before zones: low) and their scrim;
+        with `scale`, a curtain's words at its one size on balanced lines."""
         u = self.u
-        ws = words_set(self.type, self.lay, words, zone or "low", label_base)
+        ws = words_set(self.type, self.lay, words, zone or "low", label_base, scale)
+        items = (
+            [(ws.x, y, row, ws.style, "l") for row, y in zip(ws.lines, ws.baselines, strict=True)]
+            if ws.lines
+            else [(ws.x, ws.baseline, words, ws.style, "l")]
+        )
         layer, box = self._ink(
-            [(ws.x, ws.baseline, words, ws.style, "l")],
+            items,
             shadow=0.8,
             blur=7,
             note=(sid, "words"),
@@ -757,7 +820,9 @@ class _Cut:
         words, word_scrims, index = [], [], {}
         for k, step in enumerate(shot["steps"]):
             if step.get("words"):
-                layer, scrim = self._words(step["words"], sid, step.get("words_zone"), cap_top)
+                layer, scrim = self._words(
+                    step["words"], sid, step.get("words_zone"), cap_top, shot.get("words_scale")
+                )
                 index[k] = len(words)
                 words.append(layer)
                 word_scrims.append(scrim)
@@ -1168,17 +1233,18 @@ class _Cut:
             _put(frame, L["words"][index[k]], e * out * opacity, RISE * u * (1 - e))
 
     def _line(self, shot: dict[str, Any], k: int, f: int) -> tuple[float, float]:
-        """(fade in, fade out) of curtain step k's line at frame f: in over B/3 from its landing, out
-        over B/3 from the next sweep's downbeat, or, when the next step has a line too, over the B/3
-        before it, so the next one lands on a clear zone (never two lines over each other)."""
+        """(fade in, fade out) of curtain step k's line at frame f: in over B/3 from its landing (at
+        its sweep's midpoint), out over B/3 from the next sweep's downbeat, or, when the next step
+        has a line too, over the B/3 before that line lands, so it lands on a clear zone (never two
+        lines over each other)."""
         steps, index = shot["steps"], self.curtain_words[shot["id"]]
         land = steps[k].get("land")
         if land is None or f < land:
             return 0.0, 0.0
         out = 1.0
         if k + 1 < len(steps):
-            nxt = steps[k + 1]["f0"]
-            out = 1 - ramp(f, nxt - self.third if k + 1 in index else nxt, self.third)
+            nxt = steps[k + 1]
+            out = 1 - ramp(f, nxt["land"] - self.third if k + 1 in index else nxt["f0"], self.third)
         return ramp(f, land, self.third), out
 
     def _curtain(self, i: int, f: int) -> np.ndarray:

@@ -954,10 +954,10 @@ class _Placer:
             self.t, dataclasses.replace(CURTAIN_LABEL, size=CURTAIN_LABEL.size * scale)
         )
 
-    def set(self, words: str, zone: str, label_base: float) -> Any:
+    def set(self, words: str, zone: str, label_base: float, scale: float | None = None) -> Any:
         from vantage.film.cut import words_set
 
-        return words_set(self.t, self.lay, words, zone, label_base)
+        return words_set(self.t, self.lay, words, zone, label_base, scale)
 
     def aim_box(self, words: str, zone: str, label_base: float) -> Box:
         """Where a push may put its subjects with the words in `zone`: above the low words
@@ -971,12 +971,14 @@ class _Placer:
         bottom = self.set(words, zone, label_base).box[3]
         return u0, u1, (bottom + (RISE + 40) * u) / lay.height, (lay.rail_y - 40 * u) / lay.height
 
-    def box(self, words: str, zone: str, label_base: float) -> tuple[float, float, float, float]:
+    def box(
+        self, words: str, zone: str, label_base: float, scale: float | None = None
+    ) -> tuple[float, float, float, float]:
         """The words' ink in `zone` with their scrim's padding and rise, as frame fractions."""
         from vantage.film.cut import RISE, WORDS_PAD
 
         lay, u = self.lay, self.lay.unit
-        x0, y0, x1, y1 = self.set(words, zone, label_base).box
+        x0, y0, x1, y1 = self.set(words, zone, label_base, scale).box
         px, py = WORDS_PAD[0] * u, WORDS_PAD[1] * u
         return (
             (x0 - px) / lay.width, (y0 - py) / lay.height,
@@ -993,6 +995,7 @@ class _Placer:
         files: Sequence[str],
         paths: dict[str, list[Any]],
         default: str,
+        scale: float | None = None,
     ) -> dict[str, Any]:
         """The zone for a step's words and why: `default` (the step before's zone, else the first)
         while it is clear (`under` at most WORDS_CLEAR) or within WORDS_MARGIN of the least, else
@@ -1006,7 +1009,7 @@ class _Placer:
 
         on, ratio = {}, {}
         for zone in self.zones:
-            box = self.box(words, zone, label_base)
+            box = self.box(words, zone, label_base, scale)
             on[zone] = round(under(subject, paths[zone], box), 3)
             ratio[zone] = round(
                 min(
@@ -2251,17 +2254,41 @@ def _curtain_shot(
     scale, label_top, (wb, wa) = _curtain_labels(project, fonts, lay, [before_label, after_label], tagged)
     placer = b.placer
     zone = placer.zones[0] if placer is not None else None  # each line keeps the last line's zone if clear
-    for j, step, split in c.steps:
+    lines: list[tuple[str | None, str | None]] = []
+    for j, step, _ in c.steps:
+        line, line_from = (
+            curtain_words(step, lambda t: len(FactNotes(project.facts.facts).plain(t) or ""))
+            if step is not None
+            else (None, None)
+        )
+        words = say(line, f"{where} step {j} film words") if line else None
+        lines.append((words, line_from if words else None))
+    # Every line of the curtain at one size, on at most two balanced lines (`cut.words_scale`).
+    words_scale = None
+    if placer is not None and any(w for w, _ in lines):
+        from vantage.film.cut import words_scale as one_size
+
+        words_scale = one_size(placer.t, lay, [w for w, _ in lines if w])
+    for k, (j, step, split) in enumerate(c.steps):
         record: dict[str, Any] = {"index": j, "split": split, "f0": t, "words": None, "words_from": None}
         target = rest
         slot = f"{cid}.{len(steps) + 1}"
+        words, line_from = lines[k]
+        slow = b.slows.get(slot, 0) * B  # the flash margin's slower move, then its sweep
+        # Words land on the beat nearest the sweep's midpoint, with the picture they name, and stay
+        # until the next line lands (or the curtain ends): the step holds 2 beats after its sweep,
+        # longer when its words need it to be read at 17 characters a second.
+        land = t + B + (slow // (2 * B)) * B
+        hold = 2
+        if words:
+            record.update(words=words, words_from=line_from, land=land)
+            # Fully in B/3 after landing, until B/3 before the next line lands (a beat into the next
+            # sweep), as the next sweep starts when that has no line, or to the curtain's end.
+            third = b.grid.third
+            after = B - 2 * third if k + 1 < len(lines) and lines[k + 1][0] else 0
+            need = cue_frames(words, b.grid.fps) + third + (land - t) - (2 * B + slow) - after
+            hold = max(2, -(-need // B))
         if step is not None:
-            line, line_from = curtain_words(
-                step, lambda t: len(FactNotes(project.facts.facts).plain(t) or "")
-            )
-            words = say(line, f"{where} step {j} film words") if line else None
-            if words:
-                record.update(words=words, words_from=line_from, land=t)
             requested = step.film.focus if step.film and step.film.focus else step.focus
             record["focus_requested"] = list(requested) if requested else None
             if requested:
@@ -2272,26 +2299,26 @@ def _curtain_shot(
                 record.update(aimed)
                 if aimed["push"]:
                     target = aimed_cam
-        slow = b.slows.get(slot, 0) * B  # the flash margin's slower move, then its sweep
         now = cam.windows[-1]
         start = max(t, now["b"])  # after an ease back that is still going
         end = max(t + 2 * B + slow, start + b.ease)
         if (now["x"], now["y"], now["zoom"]) != target:
             record["move"] = [start, end]
+        span = (2 + hold) * B + slow
         cam.until(t)
-        cam.hold(end, target, max(end, t + 4 * B + slow))
+        cam.hold(end, target, max(end, t + span))
         if placer is not None and zone is not None and record["words"]:
             record.update(
                 _curtain_zone(
-                    b, c, f"{c.chapter} step {j}", step, record["words"], placer, (scale, label_top), t, zone,
-                    4 * B + slow,
+                    b, c, f"{c.chapter} step {j}", step, record["words"], placer, (scale, label_top), land,
+                    zone, t + span + B - land, words_scale,
                 )
             )  # fmt: skip
             zone = record["words_zone"]
         held = b.holds.get(slot, 0) * B
-        keys.append({"a": t + 2 * B + slow, "b": t + 4 * B + slow + held, "split": split})
+        keys.append({"a": t + 2 * B + slow, "b": t + span + held, "split": split})
         steps.append(record)
-        t += 4 * B + slow + held
+        t += span + held
     # Labels show only while the rule (3 units wide) is at least 8 px clear of their ink.
     ink = [lay.margin + wb, lay.right - wa]
     half = 1.5 * lay.unit
@@ -2327,6 +2354,7 @@ def _curtain_shot(
             "from_after": same,
             "keys": keys,
             "steps": steps,
+            **({"words_scale": words_scale} if words_scale is not None else {}),
         },
         (t - f0) // B,
     )
@@ -2350,10 +2378,12 @@ def _curtain_zone(
     t: int,
     default: str,
     span: int | None = None,
+    words_scale: float | None = None,
 ) -> dict[str, Any]:
-    """The zone of a curtain step's line, up from the sweep's downbeat `t` to the next sweep (4
-    beats, or `span` frames), over the camera's path; its subject is the step's focus and what changed from before to
-    after (a curtain shows both: the contrast is the least over either picture)."""
+    """The zone of a curtain step's line, from its landing `t` for 4 beats (or `span` frames: to the
+    next line's landing), over the camera's path; its subject is the step's focus and what changed
+    from before to after (a curtain shows both: the contrast is the least over either picture);
+    `words_scale`: the curtain's one size for its lines."""
     from vantage.film.subject import subject_map
 
     B = b.grid.fpb
@@ -2365,7 +2395,9 @@ def _curtain_zone(
         points = [(requested[0], requested[1])] if requested else []
         subject = subject_map(placer.seen, c.after.file, c.before.file, points)
         paths = dict.fromkeys(placer.zones, path)  # a curtain's push has no subjects: one path for all
-        return placer.choose(b, label, words, base, subject, [c.before.file, c.after.file], paths, default)
+        return placer.choose(
+            b, label, words, base, subject, [c.before.file, c.after.file], paths, default, words_scale
+        )
 
     return placer.zone(b, label, words, choose)
 

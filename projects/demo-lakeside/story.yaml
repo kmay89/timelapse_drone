@@ -143,12 +143,14 @@ chapters:
     steps:
       - text: "The old park, as it was left in {fact:last-season}."
         split: 0.85
+        film: { line: "The old park, left in {fact:last-season}." }
       - text: The fan of the wave pool survives as the outline of the beach.
         split: 0.5
         film: { line: The pool became the beach. }
         focus: [0.44, 0.46, 1.7]
       - text: The new park, in its first late summer.
         split: 0.12
+        film: { line: "The new park, its first summer." }
     hotspots:
       - { id: beach, x: 0.441, y: 0.417, label: Pool to beach }
       - { id: gatehouse-west, x: 0.316, y: 0.849, label: "Gatehouse, kept" }
