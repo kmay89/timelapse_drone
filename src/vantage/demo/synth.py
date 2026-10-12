@@ -2189,8 +2189,11 @@ def _write_video(
     utc = when - dt.timedelta(hours=v.utc_offset_h)
     meta = ["-metadata", f"creation_time={utc:%Y-%m-%dT%H:%M:%S}.{utc.microsecond // 1000:03d}Z"]
     homs, srt = [], []
+    # threads=0: x264 picks its own thread count, as it always has for the synthetic footage. The
+    # demo's story.yaml is authored against the crop this footage aligns to; the films' pinned count
+    # (ENCODER_THREADS) shifts the overview crop by 2% of the frame.
     with FrameWriter(
-        path, cam.width, cam.height, fps=mode.fps, crf=mode.crf, preset=mode.preset, extra=meta
+        path, cam.width, cam.height, fps=mode.fps, crf=mode.crf, preset=mode.preset, extra=meta, threads=0
     ) as out:
         for i in range(n):
             c = _hover(cam, i / mode.fps, phase)

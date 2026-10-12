@@ -38,7 +38,7 @@ twelve computer-generated flights (`projects/demo-lakeside/`). Nothing in it is 
 | `<slug>.html` | AirDrop, desktop, archive | everything inline in one file |
 | `<slug>-lite.html` | email (≤ 15 MB) | key images only; reads well in iOS Quick Look with JS off |
 | `<slug>-offline.zip` | desktop, long-term archive | the site folder, opens from disk |
-| `film/<slug>-16x9.mp4`, `-9x16.mp4` | meetings, social, Photos | branded title and end cards, date rail |
+| `film/<slug>-16x9.mp4`, `-9x16.mp4` | meetings, social, Photos | cut from the story on a beat grid: lead words, pushes, a before/after curtain, sourced figures, date rail (or `output.film.cut: classic`) |
 | `HOW-TO-VIEW.txt`, `SHA256SUMS`, `build.json` | recipients, integrity, provenance | |
 
 ## How a client project flows

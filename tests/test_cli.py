@@ -377,3 +377,15 @@ def test_new_escapes_hostile_titles_and_validate_checks_timezone_and_gallery(tmp
     assert result.exit_code == 1
     for needle in ("'Mars/Olympus'", "archive/gone.jpg", "'first'"):
         assert needle in result.output
+
+
+def test_film_release_refuses_a_draft_before_writing(tmp_path: Path, project_dir: Path) -> None:
+    result = _invoke(tmp_path, "film", "riverside-park", "--release")
+    assert result.exit_code == 1 and "draft: true" in result.output
+    assert not (tmp_path / "dist").exists()
+
+
+def test_film_refuses_an_unknown_film_id(tmp_path: Path, project_dir: Path) -> None:
+    result = _invoke(tmp_path, "film", "riverside-park", "--film", "16x9", "--film", "square")
+    assert result.exit_code == 1 and "unknown film 'square'" in result.output
+    assert not (tmp_path / "dist").exists()

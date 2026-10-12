@@ -336,6 +336,17 @@ test.describe("interactions", () => {
     expect(most, "scrolling through the chapter never showed the second step's card").toBeGreaterThan(0.9);
   });
 
+  test("stats: a link that takes focus before its row has risen in shows at once", async ({ page }) => {
+    // Tab scrolls a link only to the screen's edge, where a row can sit short of the line it rises in at.
+    const { ch } = await open(page, "stats");
+    const item = section(page, ch).getByRole("list").last().getByRole("listitem").filter({ has: page.getByRole("link") }).first();
+    test.skip(!(await item.count()), "no stat in this story has a link");
+    const { top, vh } = await geometry(item);
+    await scrollToY(page, top - vh * 0.97);
+    await item.getByRole("link").first().evaluate((a) => a.focus({ preventScroll: true }));
+    await expect.poll(() => effectiveOpacity(page.locator(":focus")), { timeout: 3_000 }).toBeGreaterThan(0.5);
+  });
+
   test("chrome: Share and Contents come before the story in the tab order, as they do on screen", async ({ page }) => {
     await page.goto("./");
     const menu = page.getByRole("navigation", { name: "Story" }).getByRole("button", { name: "Contents" });

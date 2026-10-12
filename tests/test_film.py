@@ -14,7 +14,8 @@ import pytest
 import yaml
 
 from vantage.config import Project, load_project
-from vantage.film.render import _Film, _sections, capture_labels, render_film
+from vantage.film.plan import _sections, plan_films
+from vantage.film.render import _Film, capture_labels, render_film
 from vantage.media.ffmpeg import extract_frame, probe
 from vantage.models import AlignInfo, MasterCapture, MastersIndex, MastersVantage
 
@@ -91,7 +92,8 @@ def make_project(
     return load_project(root)
 
 
-FILM = {
+FILM = {  # the classic cut: these tests time its hold/fade timeline
+    "cut": "classic",
     "width": 320,
     "height": 180,
     "fps": 12,
@@ -150,7 +152,17 @@ def test_render_film_without_vertical_removes_stale_cut(tmp_path, monkeypatch):
     (out / "tiny-site-9x16.jpg").write_bytes(b"old")
 
     assert [f.name for f in render_film(project, out)] == ["tiny-site-16x9.mp4"]
-    assert sorted(p.name for p in out.iterdir()) == ["tiny-site-16x9.jpg", "tiny-site-16x9.mp4"]
+    assert sorted(p.name for p in out.iterdir()) == [
+        "tiny-site-16x9-web.mp4",
+        "tiny-site-16x9.chapters.vtt",
+        "tiny-site-16x9.jpg",
+        "tiny-site-16x9.mp4",
+        "tiny-site-16x9.plan.json",
+        "tiny-site-16x9.srt",
+        "tiny-site-16x9.storyboard.jpg",
+        "tiny-site-16x9.txt",
+        "tiny-site-16x9.vtt",
+    ]
 
 
 def test_render_film_is_reproducible_and_never_leaves_partial_mp4s(tmp_path, monkeypatch):
@@ -165,9 +177,19 @@ def test_render_film_is_reproducible_and_never_leaves_partial_mp4s(tmp_path, mon
         render_film(project, out)
 
     # Packaging ships every film/*.mp4: only finished films may match, and they are byte-identical.
-    assert sorted(p.name for p in second.iterdir()) == ["tiny-site-16x9.jpg", "tiny-site-16x9.mp4"]
-    for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.jpg"):
-        assert (first / name).read_bytes() == (second / name).read_bytes()
+    assert sorted(p.name for p in second.iterdir()) == [
+        "tiny-site-16x9-web.mp4",
+        "tiny-site-16x9.chapters.vtt",
+        "tiny-site-16x9.jpg",
+        "tiny-site-16x9.mp4",
+        "tiny-site-16x9.plan.json",
+        "tiny-site-16x9.srt",
+        "tiny-site-16x9.storyboard.jpg",
+        "tiny-site-16x9.txt",
+        "tiny-site-16x9.vtt",
+    ]
+    for path in sorted(first.iterdir()):  # films (with their embedded tracks), sidecars, plan, storyboard
+        assert path.read_bytes() == (second / path.name).read_bytes(), path.name
 
 
 @pytest.mark.parametrize(
@@ -245,11 +267,11 @@ def test_cards_and_lower_thirds_print_facts_not_tokens(tmp_path, monkeypatch):
     monkeypatch.setattr(
         _Film,
         "_stack",
-        lambda self, blocks: stack(self, stacked.extend(b[0] or "" for b in blocks) or blocks),
+        lambda self, blocks, sid=None: stack(self, stacked.extend(b[0] or "" for b in blocks) or blocks, sid),
     )
 
     sections = _sections(project, MastersIndex.load(project.masters_dir / "index.json"))
-    _Film(project, sections, 320, 180, portrait=False)
+    _Film(project, plan_films(project, only=["16x9"])["16x9"])
 
     assert sections[0].name == "Over Testville"
     assert (sections[0].shots[-1].label, sections[0].shots[-1].note) == (

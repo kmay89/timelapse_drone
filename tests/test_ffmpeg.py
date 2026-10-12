@@ -180,3 +180,27 @@ def test_frame_writer_reports_why_ffmpeg_quit_before_flush(
 
     with pytest.raises(ffmpeg.FFmpegError, match=r"(?s)encode failed \(1\).*Invalid data found"):
         _within(encode)
+
+
+def test_frame_writer_extra_outputs(tmp_path: Path) -> None:
+    """One rawvideo pipe, two encodes: the main output's bytes equal a single-output run."""
+    rng = np.random.default_rng(7)
+    frames = [rng.integers(0, 256, (H, W, 3), dtype=np.uint8) for _ in range(12)]
+    exact = ["-fflags", "+bitexact", "-flags:v", "+bitexact", "-map_metadata", "-1"]
+    small = ["-c:v", "libx264", "-crf", "35", "-preset", "ultrafast", "-pix_fmt", "yuv420p", *exact]
+
+    def encode(out: Path, extra_outputs: list[tuple[Path, list[str]]]) -> None:
+        with ffmpeg.FrameWriter(
+            out, W, H, fps=10, preset="veryfast", extra=exact, extra_outputs=extra_outputs
+        ) as writer:
+            for frame in frames:
+                writer.write(frame)
+
+    single, main, second = tmp_path / "single.mp4", tmp_path / "main.mp4", tmp_path / "sub" / "second.mp4"
+    _within(lambda: encode(single, []))
+    _within(lambda: encode(main, [(second, small)]))
+    assert main.read_bytes() == single.read_bytes()
+    assert second.is_file() and second.read_bytes() != main.read_bytes()
+    info = ffmpeg.probe(second)
+    assert (info.codec, info.width, info.height) == ("h264", W, H)
+    assert info.duration_s == pytest.approx(ffmpeg.probe(main).duration_s)

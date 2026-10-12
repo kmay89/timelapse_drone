@@ -1,6 +1,6 @@
 # A GitHub Release with every offline deliverable of one story: the offline zip, both single files,
-# the films, HOW-TO-VIEW.txt, build.json and SHA256SUMS. Built with the release gates on
-# (`--release`: no draft, every {fact:…} known and approved).
+# the films with their captions and transcripts, HOW-TO-VIEW.txt, build.json and SHA256SUMS. Built
+# with the release gates on (`--release`: no draft, every {fact:…} known and approved).
 #
 #   tag v1.2.0                      engine release; ships the demo story as its sample
 #   tag <slug>@<edition>            e.g. demo-lakeside@2026-10, a story edition of projects/<slug>
@@ -115,8 +115,9 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           sha256sum --check --strict SHA256SUMS
-          assets=("$SLUG-offline.zip" "$SLUG.html" "$SLUG-lite.html" film/*.mp4
-                  HOW-TO-VIEW.txt build.json SHA256SUMS)
+          shopt -s nullglob  # a story without films (or without tracks) has none of these
+          assets=("$SLUG-offline.zip" "$SLUG.html" "$SLUG-lite.html" film/*.mp4 film/*.vtt film/*.srt
+                  film/*.txt HOW-TO-VIEW.txt build.json SHA256SUMS)
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
           else

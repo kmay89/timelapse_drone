@@ -67,6 +67,15 @@ def ffprobe_bin() -> str:
 
 
 @cache
+def ffmpeg_version() -> str:
+    """The ffmpeg build, e.g. '6.1.1-3ubuntu5' (film render records and build.json name it: the
+    same plan and inputs give the same bytes only with the same build)."""
+    out = subprocess.run([ffmpeg_bin(), "-version"], capture_output=True, text=True, check=True).stdout
+    words = out.split()
+    return words[2] if len(words) > 2 and words[:2] == ["ffmpeg", "version"] else "unknown"
+
+
+@cache
 def encoders() -> frozenset[str]:
     out = subprocess.run(
         [ffmpeg_bin(), "-hide_banner", "-encoders"], capture_output=True, text=True, check=True
@@ -221,11 +230,22 @@ def iter_frames(
         stderr.text()
 
 
+ENCODER_THREADS = 4  # pinned so the same frames give the same bytes on any machine
+
+
 class FrameWriter:
     """Pipe BGR frames into ffmpeg to produce an H.264 (or HEVC) MP4.
 
     with FrameWriter(out, 1920, 1080, fps=30) as w:
         w.write(frame_bgr)
+
+    `extra_outputs` [(path, args)] adds more encodes of the same frames from the one rawvideo pipe:
+    each output's args are its complete output options (codec, rate control, filters, flags), so
+    every output is encoded independently and the main one's bytes equal a single-output run.
+
+    The encoder's thread count is pinned (`threads`, default ENCODER_THREADS): x264 splits its work
+    by thread count, and left on auto (1.5 × the CPUs it may use) the same frames give different
+    bytes on machines with different CPU counts. `threads=0` leaves it to x264 (auto).
     """
 
     def __init__(
@@ -239,9 +259,12 @@ class FrameWriter:
         crf: int = 20,
         preset: str = "medium",
         extra: Sequence[str] = (),
+        extra_outputs: Sequence[tuple[Path, Sequence[str]]] = (),
+        threads: int = ENCODER_THREADS,
     ) -> None:
         self.out, self.width, self.height = out, width, height
-        out.parent.mkdir(parents=True, exist_ok=True)
+        for path in (out, *(p for p, _ in extra_outputs)):
+            path.parent.mkdir(parents=True, exist_ok=True)
         if codec == "hevc":
             venc = ["-c:v", "libx265", "-tag:v", "hvc1", "-x265-params", "log-level=error"]
         else:
@@ -267,6 +290,8 @@ class FrameWriter:
             str(crf),
             "-preset",
             preset,
+            "-threads",
+            str(threads),
             "-pix_fmt",
             "yuv420p",
             "-movflags",
@@ -274,6 +299,8 @@ class FrameWriter:
             *extra,
             str(out),
         ]
+        for path, args in extra_outputs:
+            self.cmd += [*args, str(path)]
         self.proc: subprocess.Popen | None = None
         self._stderr: _StderrTail | None = None
 

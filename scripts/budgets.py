@@ -6,12 +6,17 @@
 
 Prints a table; exits 1 when anything is over budget, 2 when a build folder is missing.
 KB and MB are binary (1024, 1024²), the way `vantage package` counts its edition budgets.
+
+Films (when dist/<slug>/film exists): every <stem>.plan.json whose `encode.web` is not null needs
+film/<stem>-web.mp4 (a missing one exits 2), and each must fit the 25 MiB hosted-file limit. The
+main MP4s and film/usb/ are not budgeted: they go to R2 or GitHub Releases, not to static hosts.
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -79,6 +84,29 @@ def dist_checks(dist: Path, *, css_kb: float, lite_mb: float, single_mb: float) 
     ]
 
 
+def film_checks(dist: Path) -> tuple[list[Check], list[str]]:
+    """(web-copy budgets, missing web copies) for dist/<slug>/film; nothing when there is no film/."""
+    slug, film = dist.name, dist / "film"
+    if not film.is_dir():
+        return [], []
+    checks, missing = [], []
+    for plan_path in sorted(film.glob("*.plan.json")):
+        stem = plan_path.name.removesuffix(".plan.json")
+        try:
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            missing.append(f"{plan_path.as_posix()} (unreadable: {exc})")
+            continue
+        if not (plan.get("encode") or {}).get("web"):
+            continue
+        web = film / f"{stem}-web.mp4"
+        if not web.is_file():
+            missing.append(web.as_posix())
+            continue
+        checks.append(Check(f"{slug} film {stem}-web.mp4", web.stat().st_size, HOSTED_FILE_LIMIT))
+    return checks, missing
+
+
 def report(checks: list[Check]) -> str:
     width = max(len(c.name) for c in checks)
     rows = [f"{'check':<{width}}  {'size':>9}  {'budget':>9}"]
@@ -118,6 +146,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
             checks += dist_checks(dist, css_kb=args.css_kb, lite_mb=args.lite_mb, single_mb=args.single_mb)
+            films, missing = film_checks(dist)
+            if missing:
+                print(
+                    f"✗ missing {', '.join(missing)}; run `vantage film {dist.name}`",
+                    file=sys.stderr,
+                )
+                return 2
+            checks += films
     print(report(checks))
     over = [c.name for c in checks if not c.ok]
     if over:

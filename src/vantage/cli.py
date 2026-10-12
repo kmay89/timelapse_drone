@@ -241,12 +241,26 @@ def _build(project: Project, out: Path | None = None, *, release: bool = False) 
     return index
 
 
-def _film(project: Project) -> list[Path]:
+def _film(
+    project: Project,
+    *,
+    only: list[str] | None = None,
+    release: bool = False,
+    plan_only: bool = False,
+    hours: float | None = None,
+) -> list[Path]:
     from vantage.film.render import render_film
 
-    with log.step("render films"):
-        films = render_film(project, _dist(project) / "film")
-    log.ok("films → " + ", ".join(f"{_show(f)} ({_human(_size(f))})" for f in films))
+    options: dict[str, Any] = {"only": only} if only else {}
+    options |= {"release": True} if release else {}
+    options |= {"plan_only": True} if plan_only else {}
+    options |= {"hours": hours} if hours is not None else {}
+    with log.step("plan films" if plan_only else "render films"):
+        films = render_film(project, _dist(project) / "film", **options)
+    log.ok(
+        ("plans → " if plan_only else "films → ")
+        + ", ".join(f"{_show(f)} ({_human(_size(f))})" for f in films)
+    )
     return films
 
 
@@ -271,7 +285,7 @@ def _all(project: Project, *, film: bool = True, force: bool = False, release: b
     index = _build(project, release=release)
     outputs: list[tuple[str, Path]] = [("site", index.parent)]
     if film and project.config.output.film.enabled:
-        outputs += [("film", f) for f in _film(project)]
+        outputs += [("film", f) for f in _film(project, release=release)]
     elif film:
         log.info("films disabled in project.yaml (output.film.enabled: false)")
     outputs += [(name.replace("_", " "), p) for name, p in _package(project, release=release).items()]
@@ -454,6 +468,137 @@ def _check_outputs(project: Project, warnings: list[str]) -> None:
     ]
 
 
+FILM_WORDS_MAX = 40  # characters of on-screen words a step may put in a film
+_NUMBER_WORDS = (
+    "two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
+    "seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|"
+    "thousand|million|billion|dozen"
+)
+_BARE_NUMBER = re.compile(rf"\d[\d,.]*\d|\d|\b(?:{_NUMBER_WORDS})\b", re.IGNORECASE)
+
+
+def bare_numbers(text: str | None, years: tuple[str, ...] | set[str] = ()) -> list[str]:
+    """Numbers (digits or number words; not 'one') in `text` outside its {fact:} tokens. Years in
+    `years` (the flights' own, from the footage) are not counted."""
+    from vantage.config import FACT_TOKEN_RE
+
+    if not text:
+        return []
+    return [m for m in _BARE_NUMBER.findall(FACT_TOKEN_RE.sub(" ", text)) if m not in years]
+
+
+def _film_numbers(project: Project, warnings: list[str]) -> None:
+    """Warn about numbers outside {fact:} tokens in the text films print (on screen, in captions or
+    in the transcript): project.yaml title, subtitle and kicker, step text and film.line, capture
+    notes, stat labels and units, and the hero, scrub, compare and stats titles and kickers. Invariant 4: such figures belong in facts.yaml."""
+    from vantage.config import CompareChapter, HeroChapter, ScrubChapter, StatsChapter
+    from vantage.models import MastersIndex
+
+    years = {n.date.isoformat()[:4] for n in project.story.captures}
+    masters = project.masters_dir / "index.json"
+    if masters.is_file():
+        index = MastersIndex.load(masters)
+        years |= {c.date[:4] for v in index.vantages.values() for c in v.captures}
+    cfg = project.config
+    texts: list[tuple[str, str | None]] = [
+        ("project.yaml title", cfg.title),
+        ("project.yaml subtitle", cfg.subtitle),
+        ("project.yaml kicker", cfg.kicker),
+    ]
+    for n in project.story.captures:
+        texts.append((f"story.yaml captures {n.date.isoformat()} note", n.note))
+    for i, ch in enumerate(project.story.chapters):
+        cid = ch.id or f"{ch.type}-{i + 1}"
+        if isinstance(ch, HeroChapter | ScrubChapter | CompareChapter | StatsChapter):
+            texts += [(f"story.yaml {cid} kicker", ch.kicker), (f"story.yaml {cid} title", ch.title)]
+        if isinstance(ch, ScrubChapter | CompareChapter):
+            for j, step in enumerate(ch.steps):
+                texts.append((f"story.yaml {cid} step {j}", step.text))
+                if step.film is not None:
+                    texts.append((f"story.yaml {cid} step {j} film.line", step.film.line))
+        if isinstance(ch, StatsChapter):
+            for j, item in enumerate(ch.items):
+                texts += [
+                    (f"story.yaml {cid} stat {j} label", item.label),
+                    (f"story.yaml {cid} stat {j} unit", item.unit),
+                ]
+    for where, text in texts:
+        found = bare_numbers(text, years)
+        if found:
+            warnings.append(
+                f"{where}: {', '.join(map(repr, dict.fromkeys(found)))} outside a {{fact:}} token "
+                "(films print it on screen, in captions or in the transcript: make it a fact, or reword)"
+            )
+
+
+def _check_films(project: Project, warnings: list[str]) -> None:
+    """Film warnings: vantages films leave out (kind other than drone), long words, unknown chapters
+    in films.<id>.chapters, a beat grid faster than a dissolve, and pushes that are clamped or soft
+    at the masters' resolution."""
+    from vantage.config import CompareChapter, ScrubChapter
+    from vantage.film.beat import beat_grid
+    from vantage.film.plan import FILM_KINDS, plan_films, resolve_films
+    from vantage.film.story import lead_words
+    from vantage.site.facts import FactError, FactNotes
+
+    for v in project.story.vantages:
+        if v.kind not in FILM_KINDS and project.config.output.film.enabled:
+            warnings.append(
+                f"story.yaml vantage {v.id} (kind: {v.kind}): left out of the films, which show only "
+                "drone vantages (no honesty line or on-image tag for this kind yet)"
+            )
+    if project.config.output.film.enabled:
+        _film_numbers(project, warnings)
+    notes = FactNotes(project.facts.facts)
+    ids = [ch.id or f"{ch.type}-{i + 1}" for i, ch in enumerate(project.story.chapters)]
+    for cid, ch in zip(ids, project.story.chapters, strict=True):
+        if not isinstance(ch, ScrubChapter | CompareChapter):
+            continue
+        for j, step in enumerate(ch.steps):
+            raw, _ = lead_words(step)
+            try:
+                words = notes.plain(raw) if raw else None
+            except (FactError, KeyError):
+                continue  # reported by the facts check
+            if words and len(words) > FILM_WORDS_MAX:
+                warnings.append(
+                    f"story.yaml {cid} step {j}: film words are {len(words)} characters "
+                    f"(over {FILM_WORDS_MAX}; set film.line to something shorter): {words!r}"
+                )
+    for fid, spec in project.story.films.items():
+        if isinstance(spec.chapters, list):
+            unknown = [c for c in spec.chapters if c not in ids]
+            if unknown:
+                warnings.append(
+                    f"story.yaml films.{fid}.chapters: unknown chapter id(s) {', '.join(unknown)}"
+                )
+    try:
+        films = resolve_films(project)
+    except ValueError as exc:
+        warnings.append(f"films: {exc}")
+        return
+    story = [fid for fid, film in films.items() if film.cut == "story"]
+    for fid in list(story):
+        try:
+            beat_grid(project.config.output.film.fps, films[fid].bpm)
+        except ValueError as exc:
+            warnings.append(f"film {fid}: {exc}")
+            story.remove(fid)
+    if not story or not (project.masters_dir / "index.json").is_file():
+        return
+    try:
+        plans = plan_films(project, only=story)
+    except (OSError, ValueError) as exc:
+        warnings.append(f"films: cannot plan them ({exc})")
+        return
+    for fid, plan in plans.items():
+        warnings += [
+            f"film {fid}: {w}"
+            for w in plan.warnings
+            if any(k in w for k in ("clamped", "soft push", "upscaled"))
+        ]
+
+
 def check_project(project: Project) -> tuple[list[str], list[str]]:
     """Cross-checks beyond the YAML schema: (errors, warnings)."""
     errors: list[str] = []
@@ -470,6 +615,7 @@ def check_project(project: Project) -> tuple[list[str], list[str]]:
     _check_story(project, errors, warnings)
     _check_facts(project, errors, warnings)
     _check_outputs(project, warnings)
+    _check_films(project, warnings)
     todos = {
         rel: (project.root / rel).read_text(encoding="utf-8").count("TODO")
         for rel in ("project.yaml", "story.yaml", project.config.brand, "facts.yaml")
@@ -784,9 +930,33 @@ def build_cmd(
 
 
 @_command("film")
-def film_cmd(project: ProjectArg) -> None:
-    """Render the MP4 time-lapse films (16:9, plus 9:16 when enabled)."""
-    _film(_load(project))
+def film_cmd(
+    project: ProjectArg,
+    film: Annotated[
+        list[str] | None,
+        typer.Option("--film", help="Only this film id (repeatable), e.g. --film 16x9. Default: every film."),
+    ] = None,
+    plan_only: Annotated[
+        bool,
+        typer.Option(
+            "--plan-only", help="Write each film's plan.json, storyboard and tracks without encoding."
+        ),
+    ] = False,
+    release: Annotated[
+        bool,
+        typer.Option("--release", help="Refuse a draft project or {fact:…} tokens that are not releasable."),
+    ] = False,
+    hours: Annotated[
+        float | None,
+        typer.Option(
+            "--hours",
+            help="Repeat a loop film (--film screen) for H hours into film/usb/ without re-encoding (0 < H ≤ 12).",
+        ),
+    ] = None,
+) -> None:
+    """Plan and render the MP4 films (16:9, plus 9:16 when enabled) with plan.json, storyboard,
+    captions, chapters and transcript."""
+    _film(_load(project), only=film, release=release, plan_only=plan_only, hours=hours)
 
 
 @_command("package")

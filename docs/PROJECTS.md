@@ -58,8 +58,11 @@ Manual decisions are YAML, so they survive deleting `work/`: frame overrides are
 
 ## Approvals
 
-Releases need recorded approval of the copy and every fact. Keep `approvals.yaml` next to the
-project (it is not read by the build; it is the audit trail the publish skill checks):
+Releases need recorded approval of the copy, every fact and the films. Keep `approvals.yaml` next to
+the project. The build does not read it; it is the audit trail the publish skill checks. Only `films:`
+is ever read by the engine, and only when `output.film.require_approval: true`: then
+`vantage package --release` refuses a film whose plan hash (shown on its storyboard footer and in
+`film/<slug>-<id>.plan.json`) is not listed under any entry's `films`.
 
 ```yaml
 approvals:
@@ -70,6 +73,7 @@ approvals:
     build: "sha256 of <slug>.html from SHA256SUMS"
     copy: approved                     # story text as built
     facts: [opening-day, trees-planted] # facts.yaml ids confirmed (set them to client-approved)
+    films: [3f9a1c0b7d2e]              # plan hashes (or their first 12 characters) of approved films
     notes: "Hold the playground photo until the press release."
 ```
 

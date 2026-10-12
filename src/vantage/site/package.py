@@ -7,6 +7,15 @@ dist/<slug>/<slug>-lite.html     email-sized: ~1080 px JPEGs for the hero, compa
                                  and video posters; other images keep only their LQIP; no video
 dist/<slug>/<slug>-offline.zip   the site folder for file:// (no service worker / manifest)
 dist/<slug>/HOW-TO-VIEW.txt  SHA256SUMS  build.json
+
+Films already rendered into dist/<slug>/film are checked against the plans the current YAML, masters
+and facts would make (film/plan.py `film_records`): a release refuses any problem, a draft package
+logs them (a film's -web.mp4 and its tracks are checked against its plan like the film itself).
+build.json records every film plan; SHA256SUMS lists each film and its -web.mp4 with its plan.json,
+storyboard and tracks (.vtt, .srt, .chapters.vtt, .txt): only the files `film_records` accepted for a
+current film (`files`), so a left-over web copy or sidecar, a planned-only on-demand film and every
+film when output.film.enabled is false stay out. film/usb/ (a loop film repeated for a TV's USB
+player, film/loop.py) is never packaged, listed or hosted.
 """
 
 from __future__ import annotations
@@ -22,7 +31,7 @@ import os
 import platform
 import re
 import zipfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +40,8 @@ from PIL import Image
 
 from vantage import __version__, log
 from vantage.config import Project
+from vantage.film.plan import film_records
+from vantage.media.ffmpeg import FFmpegError, ffmpeg_version
 from vantage.site.build import ReleaseError, build_site, inside
 from vantage.site.facts import check_release
 from vantage.site.images import data_uri, encode, jpeg_bytes, resize
@@ -300,8 +311,17 @@ def _offline_zip(project: Project, site: Path, story: dict[str, Any], theme: str
     return out
 
 
-def _how_to_view(story: dict[str, Any], files: dict[str, Path], films: list[Path], out: Path) -> Path:
-    """Plain-language instructions that travel with the files."""
+def _how_to_view(
+    story: dict[str, Any],
+    files: dict[str, Path],
+    films: list[Path],
+    out: Path,
+    loops: Collection[str] = (),
+    *,
+    tracks: bool = False,
+) -> Path:
+    """Plain-language instructions that travel with the files (`loops`: the file names of loop films;
+    `tracks`: the films come with caption, chapter and transcript files)."""
     meta = story["meta"]
 
     def size(p: Path) -> str:
@@ -316,11 +336,14 @@ def _how_to_view(story: dict[str, Any], files: dict[str, Path], films: list[Path
     if "lite" in files:
         rows.append(("By email or message", files["lite"].name, "a small edition with the key images"))
     for film in films:
-        use = (
-            "for phones: save to Photos or send in a message"
-            if "9x16" in film.name
-            else "for screens and talks"
-        )
+        if film.name.endswith("-web.mp4"):
+            use = "a smaller copy for websites and uploads (under 25 MB)"
+        elif film.name in loops:
+            use = "silent loop for an event screen; set the player to repeat (ask for a long copy for a TV)"
+        elif "9x16" in film.name:
+            use = "for phones: save to Photos or send in a message"
+        else:
+            use = "for screens and talks"
         rows.append(("The films", f"film/{film.name}", use))
     width = max(len(name) for _, name, _ in rows)
     sizes = {name: size(out.parent / name) for _, name, _ in rows}
@@ -344,9 +367,20 @@ def _how_to_view(story: dict[str, Any], files: dict[str, Path], films: list[Path
             lines += ["", heading]
             section = heading
         lines.append(f"  {name:<{width}}  {sizes[name]:>8}  {what}")
-    if "lite" in files:
+        if "lite" in files and name == files["lite"].name:  # the note belongs to the lite edition
+            lines.append(
+                "  (On an iPhone the file opens as a preview: scroll to read; the link above is the full story.)"
+            )
+    captioned = [f.name for f in films if not f.name.endswith("-web.mp4") and f.name not in loops]
+    if tracks and captioned:
+        which = (
+            "each film"
+            if len(captioned) == len([f for f in films if not f.name.endswith("-web.mp4")])
+            else ("film/" + ", film/".join(captioned))
+        )
         lines.append(
-            "  (On an iPhone the file opens as a preview: scroll to read; the link above is the full story.)"
+            f"  Captions (.srt, .vtt) and a timed text transcript (.txt) come with {which}; the films have "
+            "no sound."
         )
     lines += [
         "",
@@ -366,10 +400,19 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _ffmpeg() -> str | None:
+    try:
+        return ffmpeg_version()
+    except (FFmpegError, OSError):
+        return None
+
+
 def package_project(project: Project, dist_dir: Path, *, release: bool = False) -> dict[str, Path]:
     """Package dist_dir/site into the offline deliverables. The site is built first when missing, and
     always rebuilt for a release: one already in dist may be an earlier draft build (Preview badge,
-    unverified facts) or predate the YAML that just passed the gates, and must not ship as a release."""
+    unverified facts) or predate the YAML that just passed the gates, and must not ship as a release.
+    A release also refuses films that are unplanned, stale, drafts, replaced, unapproved (when
+    output.film.require_approval) or that print a fact that is not releasable."""
     if release:
         problems = check_release(project)
         if problems:
@@ -381,6 +424,12 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
     elif not (site / "index.html").is_file():
         log.info(f"no site in {site}; building it first")
         build_site(project, site)
+    film_dir = dist_dir / "film"
+    film_info, film_problems = film_records(project, film_dir)
+    if release and film_problems:
+        raise ReleaseError("release package blocked by the films:\n  " + "\n  ".join(film_problems))
+    for problem in film_problems:
+        log.warn(problem)
     page = (site / "index.html").read_text(encoding="utf-8")
     story = read_story(page)
     theme_match = _THEME.search(page)
@@ -389,15 +438,25 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
     if project.config.output.single_file:
         files |= _single_files(project, site, story, theme, dist_dir)
     files["zip"] = _offline_zip(project, site, story, theme, dist_dir / f"{project.slug}-offline.zip")
-    films = sorted((dist_dir / "film").glob("*.mp4"))
-    files["how_to_view"] = _how_to_view(story, files, films, dist_dir / "HOW-TO-VIEW.txt")
+    shipped = sorted(dist_dir / f for record in film_info.values() for f in record["files"])
+    films = [p for p in shipped if p.suffix == ".mp4"]  # checked by film_records; never film/usb/
+    loops = {Path(record["mp4"]).name for record in film_info.values() if record["loop"] and record["mp4"]}
+    if not films and project.config.output.film.enabled:
+        log.warn(f"no films in {film_dir}; run `vantage film {project.slug}` to add them")
+    tracks = [p for p in shipped if p.suffix in (".vtt", ".srt", ".txt")]
+    ledger = [p for p in shipped if p.suffix != ".mp4"]
+    files["how_to_view"] = _how_to_view(
+        story, files, films, dist_dir / "HOW-TO-VIEW.txt", loops, tracks=bool(tracks)
+    )
     site_files = [p for p in site.rglob("*") if p.is_file()]
     for p in site_files:
         if p.stat().st_size > HOSTED_FILE_LIMIT:
             log.warn(
                 f"{p.relative_to(dist_dir)} is {p.stat().st_size / MIB:.1f} MiB; hosts like Cloudflare Pages cap files at 25 MiB"
             )
-    deliverables = sorted([*files.values(), *films], key=lambda p: p.relative_to(dist_dir).as_posix())
+    deliverables = sorted(
+        [*files.values(), *films, *ledger], key=lambda p: p.relative_to(dist_dir).as_posix()
+    )
     info = {
         "version": 1,
         "slug": project.slug,
@@ -407,12 +466,18 @@ def package_project(project: Project, dist_dir: Path, *, release: bool = False) 
         "draft": story["meta"]["draft"],
         "simulated": story["meta"]["simulated"],
         "unverifiedFacts": story["meta"].get("unverifiedFacts", 0),
-        "tools": {"vantage": __version__, "python": platform.python_version(), "pillow": PIL.__version__},
+        "tools": {
+            "vantage": __version__,
+            "python": platform.python_version(),
+            "pillow": PIL.__version__,
+            "ffmpeg": _ffmpeg(),
+        },
         "site": {"files": len(site_files), "bytes": sum(p.stat().st_size for p in site_files)},
         "files": {
             p.relative_to(dist_dir).as_posix(): {"bytes": p.stat().st_size, "sha256": _sha256(p)}
             for p in deliverables
         },
+        "films": film_info,
     }
     files["build_json"] = dist_dir / "build.json"
     files["build_json"].write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")

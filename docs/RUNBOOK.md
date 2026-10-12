@@ -92,6 +92,32 @@ git tag <slug>@2026-10 && git push origin <slug>@2026-10    # in the projects re
 Claude drafts the share message and you send it with `HOW-TO-VIEW.txt`. Do the real-iPhone checks in
 [DELIVERY.md](DELIVERY.md#release-process).
 
+## Event screen (a ribbon cutting, an open house, a lobby TV)
+
+The `screen` film is a silent loop for a TV or projector: 16:9, slower (75 bpm), large type inside a
+5 % margin that survives TV overscan, and seamless (it rises from night and dips back to it, so a
+player looping the file shows no jump). It is rendered only when asked for:
+
+```sh
+uv run vantage film <slug> --film screen --plan-only    # approve the cut from its storyboard
+uv run vantage film <slug> --film screen --release      # film/<slug>-screen.mp4 (one cycle, about a minute)
+uv run vantage film <slug> --film screen --hours 2      # film/usb/<slug>-screen-2h.mp4, stream copy in seconds
+```
+
+- Declare it once in story.yaml: `films: { screen: { preset: screen } }`. Every text it prints
+  (stats, step words, labels, cards) shows only facts that are releasable (or everything in a draft
+  project, tagged Preview), because nobody is there to explain them; `--release` refuses a draft,
+  and `--hours` refuses a loop of a project that is not a draft if it prints a fact that is not releasable.
+- Render both versions: the one-cycle MP4 (for players and laptops that loop a file) and the
+  `--hours` file (for TVs whose USB player plays a file once and stops).
+- Test-play both on the venue's own player at least **3 days ahead**: that it starts, loops without a
+  jump or a black flash, and that nothing is cut off at the edges.
+- Copy the file onto a USB stick formatted **exFAT or FAT32**. FAT32 holds at most 4 GiB per file:
+  `--hours` refuses anything over 3.9 GiB and names the largest H that fits. Bring a spare stick.
+- Never embed the loop on the site and never upload `film/usb/`: it is not packaged, hosted or
+  released. Use the 16:9 film (or its `-web.mp4`) online, with the embed markup in
+  [DELIVERY.md](DELIVERY.md#hosting-options) (controls, captions, transcript link, no autoplay).
+
 ## When something goes wrong
 
 | Problem | Where to look |
@@ -100,5 +126,6 @@ Claude drafts the share message and you send it with `HOW-TO-VIEW.txt`. Do the r
 | the time-lapse wobbles or ghosts | `/vantage-align-review`; the anaglyph shows which visit |
 | colours jump between months | `grade.strength` in `project.yaml` |
 | release build refuses | each line names the fact or setting (`draft: true`, unknown or unapproved fact) |
+| the event loop stops after one play on a TV | use the `--hours` file in `film/usb/`; check the stick is exFAT or FAT32 |
 | a file is over budget | `scripts/budgets.py` names it; lower image widths or move video to R2 |
 | browser tests fail | `npm run test:web:report`; `web-tests/README.md` lists the DOM contract |

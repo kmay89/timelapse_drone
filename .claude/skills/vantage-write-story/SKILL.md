@@ -51,6 +51,12 @@ imagery shows and what a source says.
 - **Scrub steps**: one per moment worth a sentence (`capture: "YYYY-MM-DD"`), optional
   `focus: [x, y, zoom]` (0–1, zoom ≥ 1) to push in on the detail the text names.
 - **Compare steps**: `split` 0–1 per step, so scrolling sweeps the curtain from before to after.
+- **Films** (cut from these chapters): a step's leading `**bold**` run lands on screen in the films;
+  set `film: {line: "Demolition."}` for shorter words (≤ 40 characters; compare steps show only
+  `film.line`), `film: {focus: [x, y, zoom]}` to aim the film's push elsewhere (default: the step's
+  `focus`, kept on the hotspots that appear or disappear at that step), `film: {skip: true}` to keep a
+  step out of films. Stats appear in films only when their value is a `{fact:}` token. Check the cut
+  with `uv run vantage film <project> --plan-only` and its storyboards.
 - **Hotspots**: `x, y` in the aligned frame (0–1; measure on the master, e.g. from a suggestion's
   box centre), `label` (≤ 4 words), `body` (one sentence), `from`/`to` capture refs for things that
   appear or disappear.

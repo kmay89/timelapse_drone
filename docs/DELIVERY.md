@@ -13,7 +13,12 @@ One build (`vantage all <project>`) writes every edition into `dist/<slug>/`:
 | Full single file | `<slug>.html` | desktop, AirDrop to a Mac, archive | `output.single_file_max_mb` (default 60 MB); video dropped first, then image quality |
 | Lite single file | `<slug>-lite.html` | email attachment, iOS Quick Look | ≤ `output.lite_max_mb` (default 15 MB); key images only, no video |
 | Offline zip | `<slug>-offline.zip` | desktop `file://`, long-term archive | release assets < 2 GiB each |
-| Films | `film/<slug>-16x9.mp4`, `-9x16.mp4` | everyone: meetings, Photos, social | H.264, plays everywhere |
+| Films | `film/<slug>-16x9.mp4`, `-9x16.mp4` | everyone: meetings, Photos, social | H.264, plays everywhere; story cut (default) or classic (`output.film.cut: classic`); the 9:16 cut keeps all text between 14 % and 72 % of the height, clear of the phone UI on the right |
+| Web films | `film/<slug>-16x9-web.mp4`, `-9x16-web.mp4` | websites, social and CMS uploads | ≤ 25 MiB each (checked by `scripts/budgets.py`); the same frames under a bitrate cap; `output.film.web: false` turns them off |
+| Event-screen loop | `film/<slug>-screen.mp4` (on request: `vantage film <slug> --film screen`) | a silent TV or projector at an event | 16:9, 75 bpm, large type inside a 5 % overscan margin; seamless (it rises from night and dips back to it); closed GOPs, no audio, no captions, no web copy; never embedded on the site |
+| USB loop file | `film/usb/<slug>-screen-<H>h.mp4` (`--hours H`, 0 < H ≤ 12) | a TV's own USB media player | the loop repeated by stream copy in seconds; refused over 3.9 GiB (FAT32); **not hosted, not packaged, not a release asset**: copy it to an exFAT or FAT32 stick yourself |
+| Film captions and transcript | `film/<slug>-<id>.vtt`, `.srt`, `.chapters.vtt`, `.txt` (every film but a loop) | social uploads, players, screen readers, search | made from the film's plan, so they match the picture; the captions (off by default) and named chapters are also embedded in each MP4; the `.txt` is a timed transcript, the films' text alternative (WCAG 1.2.1); `output.film.tracks: false` turns them off |
+| Film plans | `film/<slug>-<id>.plan.json`, `.storyboard.jpg` | approving a cut; proving what a film shows | `vantage film --plan-only` writes them in seconds; `package --release` refuses a film that no longer matches its plan |
 | Info | `HOW-TO-VIEW.txt`, `SHA256SUMS`, `build.json` | recipients, integrity, provenance | |
 
 `<html data-edition>` is `site`, `offline`, `single` or `lite`. Only the hosted site registers a
@@ -54,6 +59,37 @@ runtime turns into blob URLs on demand; videos are never `data:` sources.
 | GitHub Pages | 1 GB site; **public even from private repos** on Free/Pro/Team | **only the fictional demo** (`pages.yml`) |
 | GitHub Releases | each asset < 2 GiB, no total limit; private-repo assets need a GitHub login | versioned archive of the offline deliverables |
 
+Films: the `-web.mp4` copies are capped at 25 MiB, so they fit any static host next to the site.
+For a social upload, attach `film/<slug>-<id>.srt` as the caption file (YouTube, LinkedIn, Facebook
+and X accept SRT): platforms autoplay muted, and the captions carry the film's words to people who
+cannot see the type well. Each MP4 already embeds the same captions as a track that players offer
+but do not show until asked.
+The full-quality films (the demo's 16:9 film is about 31 MiB) go to R2 or GitHub Releases, not to a
+static host.
+
+Embedding a film on a web page (the client's site, a news post): films are not part of the Vantage
+site, so its reduced-motion handling does not reach them. Give the client this markup, with
+controls, no autoplay, the captions and chapters as tracks and a visible link to the transcript
+(the film's text alternative):
+
+```html
+<video controls playsinline preload="metadata" width="1920" height="1080"
+       poster="<slug>-16x9.jpg" style="max-width:100%;height:auto">
+  <source src="<slug>-16x9-web.mp4" type="video/mp4">
+  <track kind="captions" srclang="en" label="English" src="<slug>-16x9.vtt">
+  <track kind="chapters" srclang="en" src="<slug>-16x9.chapters.vtt">
+</video>
+<p><a href="<slug>-16x9.txt">Read the film as text (transcript)</a></p>
+```
+
+- Never `autoplay loop muted` on its own: the pushes and dissolves would play for people who ask for
+  reduced motion, with no way to pause them (WCAG 2.2.2). If a page must start the film by itself,
+  do it in script only when `matchMedia("(prefers-reduced-motion: no-preference)").matches`, and keep
+  `controls`.
+- Use the film's own `srclang` (project.yaml `lang`). The poster is `film/<slug>-16x9.jpg` in
+  `dist/<slug>/` (it is not in the package; leave `poster` out if you do not send it).
+- The event-screen loop has no tracks and is not for the web.
+
 Serve video from the site's own origin (or route `/media/*` to R2 through a Worker): cross-origin
 opaque responses cannot be range-sliced by the service worker.
 
@@ -84,12 +120,16 @@ Cloudflare Access or a Netlify password for review.
 ## Release process
 
 1. `/vantage-verify` passes; the person has looked at the iPhone and no-JS screenshots.
-2. The client approves copy and every fact (recorded as in [PROJECTS.md](PROJECTS.md#approvals)).
+2. The client approves copy and every fact, and the films from their storyboards
+   (`uv run vantage film <project> --plan-only` writes `film/<slug>-<id>.storyboard.jpg` and the
+   transcript `.txt` without encoding; the approval names each plan hash). All recorded as in [PROJECTS.md](PROJECTS.md#approvals).
 3. `draft: false`, then a gated build: `uv run vantage all <project> --release` (fails on drafts and
-   on unknown or unapproved facts), `uv run python scripts/budgets.py dist/<slug>`.
+   on unknown or unapproved facts, and on films that are stale, drafts, replaced by hand or, with
+   `output.film.require_approval`, unapproved), `uv run python scripts/budgets.py dist/<slug>`.
 4. Tag `<slug>@<edition>` (for example `<slug>@2026-10`) in the repo that holds the project. The
    release workflow builds from committed masters with the gates on, checks budgets and checksums,
-   and attaches the zip, both single files, the films, `HOW-TO-VIEW.txt`, `build.json` and
+   and attaches the zip, both single files, the films with their captions and transcripts,
+   `HOW-TO-VIEW.txt`, `build.json` and
    `SHA256SUMS` to a GitHub Release. Engine tags `v*` release the demo as a sample.
 5. Deploy `dist/<slug>/site/` to the host (`/vantage-publish` walks through it). Convention: each
    edition stays reachable at its own path (`/<slug>/v/<edition>/`) and `/<slug>/` serves the latest.

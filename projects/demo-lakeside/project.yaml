@@ -4,7 +4,7 @@
 #   uv run vantage demo --fast     # CI-sized
 slug: demo-lakeside
 title: Where the Wave Pool Was
-subtitle: Twelve flights over eighteen months, as an abandoned waterpark was handed back to the lake.
+subtitle: "{fact:flights} flights, one patch of sky, as an abandoned waterpark was handed back to the lake."
 kicker: Lakeside · 2025–2026
 dek: >-
   Every six or seven weeks a drone went back up over the south shore and took the same pictures from

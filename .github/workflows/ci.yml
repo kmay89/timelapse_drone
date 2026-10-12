@@ -61,12 +61,22 @@ jobs:
           for f in site/index.html site/sw.js site/manifest.webmanifest site/share.jpg \
                    demo-lakeside.html demo-lakeside-lite.html demo-lakeside-offline.zip \
                    film/demo-lakeside-16x9.mp4 film/demo-lakeside-9x16.mp4 \
+                   film/demo-lakeside-16x9-web.mp4 film/demo-lakeside-9x16-web.mp4 \
+                   film/demo-lakeside-16x9.plan.json film/demo-lakeside-9x16.plan.json \
+                   film/demo-lakeside-16x9.storyboard.jpg film/demo-lakeside-9x16.storyboard.jpg \
+                   film/demo-lakeside-16x9.vtt film/demo-lakeside-16x9.txt \
                    HOW-TO-VIEW.txt build.json SHA256SUMS; do
             test -s "$f" || { echo "::error::missing dist/demo-lakeside/$f"; exit 1; }
           done
           sha256sum --check --strict SHA256SUMS
       - name: Size budgets
         run: uv run python scripts/budgets.py dist/demo-lakeside
+      - name: Plan the event-screen loop (plan and storyboard only, no encode)
+        run: |
+          uv run vantage film demo-lakeside --film screen --plan-only
+          test -s dist/demo-lakeside/film/demo-lakeside-screen.plan.json
+          test -s dist/demo-lakeside/film/demo-lakeside-screen.storyboard.jpg
+          test ! -e dist/demo-lakeside/film/demo-lakeside-screen.mp4
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: demo-lakeside

@@ -62,6 +62,23 @@ first. For each chapter judge, and write down concrete fixes:
 - **Honesty**: simulated or draft disclosures present where required; every figure has a note.
 - **Chrome**: nothing overlaps the home indicator; no horizontal scroll; tap targets ≥ 44 pt.
 
+### Films
+
+`uv run vantage film <project> --plan-only` writes `dist/<slug>/film/<slug>-<id>.storyboard.jpg` (one
+tile per shot) in seconds; a full `vantage film` adds the MP4s. Read both storyboards (16:9 and 9:16)
+with the Read tool and judge:
+
+- **Cut**: title → series → curtain → stats → end card, in story order; footer `RELEASE-READY` (or the
+  unreleasable count) and every fact chip green for a release.
+- **Pushes**: each step's push shows the thing that changed (its subject hotspot inside the crop);
+  `plan.json` warnings name clamped or soft pushes.
+- **Safe zones**: on 9:16 every word and the rail sit between 14 % and 72 % of the height, clear of the
+  right edge; curtain labels never sit under the rule or the tag.
+- **Honesty**: the end card's honesty line matches the project (simulated or photographs), and the
+  stats print the fact text exactly, with a source.
+
+For motion, extract a few frames from the MP4 (curtain sweep, stat entry, end dip) and look at them too.
+
 ## 5. Iterate
 
 Fix the highest-impact issue, rebuild (`uv run vantage build <project>` takes about a second with the
