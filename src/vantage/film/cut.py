@@ -497,13 +497,21 @@ def title_rows(
     """(scale, lines of group indices) of the title: shrunk until every group fits between the
     margins and flowed onto balanced lines; `one_line`: all of it on one line, shrunk to fit."""
     width = lay.text_width
-    if one_line:
-        whole = t.width(" ".join(groups), TITLE)
-        return (min(1.0, width / whole * 0.98) if whole > 0 else 1.0), [list(range(len(groups)))]
-    scale = 1.0
-    widest = max(t.width(g, TITLE) for g in groups)
-    if widest > width:
+
+    def fit(texts: Sequence[str]) -> float:
+        """The scale at which the widest of `texts` fits `width` (with 2% to spare once shrunk),
+        measured at that scale: font sizes round to whole px and advances do not scale linearly."""
+        widest = max(t.width(s, TITLE) for s in texts)
+        if widest <= width:
+            return 1.0
         scale = width / widest * 0.98
+        while scale > 0.1 and max(t.width(s, TITLE, scale) for s in texts) > width * 0.98:
+            scale *= 0.99
+        return scale
+
+    if one_line:
+        return fit([" ".join(groups)]), [list(range(len(groups)))]
+    scale = fit(groups)
     space = t.width(" ", TITLE, scale)
     lines: list[list[int]] = [[]]
     x = 0.0
