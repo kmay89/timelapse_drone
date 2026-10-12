@@ -211,7 +211,9 @@ def test_derive_cut_shapes_and_grid(tmp_path):
     assert [s["kind"] for s in shots] == ["title", *["capture"] * 5, "end"]
     assert plan["grid"] == {"bpm": 90.0, "fpb": B, "dissolve": D, "beats": plan["frames"] // B}
     caps = shots[1:-1]
-    assert [(s["f1"] - s["f0"]) // B for s in caps] == [3, 1, 4, 1, 3]  # step, quiet, push, quiet, step
+    held = [plan["flash"]["held"].get(s["id"], 0) for s in caps]  # the flash margin's holds
+    beats = [b + h for b, h in zip([3, 1, 4, 1, 3], held, strict=True)]  # step, quiet, push, quiet, step
+    assert [(s["f1"] - s["f0"]) // B for s in caps] == beats, plan["flash"]
     assert caps[0]["dissolve"] is None and all(
         s["dissolve"]["f1"] - s["dissolve"]["f0"] == D for s in caps[1:]
     )
@@ -223,7 +225,7 @@ def test_derive_cut_shapes_and_grid(tmp_path):
             events.append(step["land"])
         if step and step["push"]:
             events.append(step["push_f0"])
-            assert step["push_f1"] == step["push_f0"] + B + round(B / 3)
+            assert step["push_f1"] == step["push_f0"] + 2 * B  # a landscape film: 2 beats
     assert all(f % B == 0 for f in events), events
     assert caps[0]["step"]["land"] == caps[0]["f0"] + B  # beat 1, even on the film's first image
     # The title holds until its kicker reads at 17 characters/s (from B/3) and then "A Tiny Site
@@ -240,7 +242,7 @@ def test_derive_cut_shapes_and_grid(tmp_path):
     # The push holds to the end of its shot and eases back from the next shot on.
     push = [c for c in plan["camera"] if c["zoom"] > 1]
     assert len(push) == 1 and (push[0]["a"], push[0]["b"]) == (
-        caps[2]["f0"] + 2 * B + round(B / 3),
+        caps[2]["f0"] + 3 * B,
         caps[3]["f0"],
     )
     check_plan(plan)
