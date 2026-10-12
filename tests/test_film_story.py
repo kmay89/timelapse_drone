@@ -25,7 +25,7 @@ from test_film import FILM, SIZE, make_project
 from vantage.cli import check_project
 from vantage.config import Project, load_project
 from vantage.film import beat
-from vantage.film.cut import _Cut
+from vantage.film.cut import STAT_CONTRAST, _Cut
 from vantage.film.layout import Layout
 from vantage.film.plan import SIMULATED_NOTE, check_films, plan_films, resolve_films
 from vantage.film.render import _render_one, film_jobs, render_film
@@ -877,13 +877,14 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
         v = (POOL["y"] - (cy - hh)) / (2 * hh) * p["height"]
         assert z > 1.08 and 0 <= (POOL["x"] - (cx - hw)) / (2 * hw) <= 1
         cut = _Cut(project, plan)
-        top, bottom = cut.scrims[0]["box"][1], sum(cut.scrims[0]["box"][1::2])
+        top, bottom = cut.panels[0]["box"][1], sum(cut.panels[0]["box"][1::2])
         assert v < top or v > bottom, (v, top, bottom)  # the hotspot is not under the panel's ink
     said = any("The camera moves in on The pool." in line["text"] for line in p["transcript"]["lines"])
     assert said == (n2["move"]["subjects"] == ["pool"])
     cut = _Cut(project, plan)
-    (scrim,) = cut.scrims
+    (scrim,) = cut.panels
     assert scrim["shots"] == ["N1", "N2"] and scrim["tint"] == (surface or "paper")
+    assert scrim["contrast"] >= STAT_CONTRAST, scrim  # as measured along the camera path
     w, h = cut.width, cut.height
     half = round(B / 2)
     for stat in (n1, n2):
@@ -891,7 +892,8 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
         words = _cores(L["rest"], w, h)
         figure = _cores(L["glyphs"], w, h)
         fully = stat["land"] + 2 * (len(L["glyphs"]) - 1) + half
-        for f in range(stat["text_in"], stat["f1"]):
+        end = stat["f1"]
+        for f in range(stat["text_in"], end):
             frame = cut.frame_at(f).astype(np.int16)
             with _NoText(cut):
                 bare = cut.frame_at(f).astype(np.int16)
@@ -1491,3 +1493,52 @@ def test_demo_story_cut(tmp_path):
         beach = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["words"] == "The beach.")
         assert beach["words_subject"][beach["words_zone"]] <= 0.5, beach
         assert beach["words_zone"] == "high" or fid == "16x9", beach
+
+
+@pytest.mark.parametrize("fid", ["16x9", "9x16"])
+def test_tag_and_date_labels_keep_small_text_contrast(tmp_path, monkeypatch, fid):
+    """The 'Simulated imagery' tag and the date labels are small type: their scrims are measured
+    (plan.json checks.scrims) so each keeps 4.5:1 over every picture. Measured on rendered frames:
+    the glyph cores' luminance against the 95th-percentile brightest pixel 1-4 px around them, on
+    every half beat of the film. In 9:16 the stat panel's feather ends clear of the tag."""
+    import cv2 as cv
+
+    from vantage.film.cut import PANEL_PAD, PANEL_SIGMA
+
+    project = _big(tmp_path, monkeypatch)
+    plan = _plan(project, fid)
+    cut = _Cut(project, plan)
+    records = {r["text"]: r for r in cut.scrims if "text" in r}
+    assert records["tag"]["contrast"] >= 4.5 and records["tag"]["alpha"] >= 0.3, records["tag"]
+    labels = [r for k, r in records.items() if k.endswith(" label")]
+    assert labels and all(r["contrast"] >= 4.5 for r in labels), labels
+
+    def rings(layer: Any) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
+        a = layer.alpha[..., 0]
+        m = (a > 0.02).astype(np.uint8)
+        ring = cv.dilate(m, np.ones((9, 9), np.uint8)) & (1 - cv.dilate(m, np.ones((3, 3), np.uint8)))
+        cy, cx = np.nonzero(a >= 0.9 * a.max())
+        ry, rx = np.nonzero(ring)
+        return (cy + layer.y, cx + layer.x), (ry + layer.y, rx + layer.x)
+
+    def ratio(frame: np.ndarray, core: Any, ring: Any) -> float:
+        lt, lb = float(np.median(_lum(frame[core]))), float(np.quantile(_lum(frame[ring]), 0.95))
+        return (max(lt, lb) + 0.05) / (min(lt, lb) + 0.05)
+
+    tag_core, tag_ring = rings(cut.tag)
+    shots = plan.plan["shots"]
+    B = plan.plan["grid"]["fpb"]
+    for f in range(0, plan.plan["frames"], B // 2):
+        shot = shots[max(k for k, s in enumerate(shots) if s["f0"] <= f)]
+        if shot["kind"] in ("end", "card"):
+            continue
+        frame = cut.frame_at(f)
+        assert ratio(frame, tag_core, tag_ring) >= 4.5, (fid, f, shot["id"])
+        d = shot.get("dissolve")
+        if shot["kind"] == "capture" and f >= max(shot["f0"] + B // 2, d["f1"] if d else 0):
+            core, ring = rings(cut.layers[shot["id"]]["label"])
+            assert ratio(frame, core, ring) >= 4.5, (fid, f, shot["id"], "label")
+    if fid == "9x16":
+        panel = cut.panels[0]["box"]
+        tag = next(i["box"] for i in cut.ink if i["layer"] == "tag")
+        assert panel[1] + panel[3] + (PANEL_PAD + 3 * PANEL_SIGMA) * cut.u <= tag[1], (panel, tag)

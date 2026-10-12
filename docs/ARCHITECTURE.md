@@ -684,7 +684,8 @@ small masters leave little to push, they are 85 and 73 beats.
     line's zone while that is clear.
   - Labels: `before_label` / `after_label` (else the capture labels) at the top-left and top-right,
     44 units, shrunk (`label_scale`) so each fits between its text edge and a rule at the centre, and
-    set under the tag when the tag is top-right (`label_top`). `label_ink` holds the inner ink edges
+    set a label line (44 units) under the tag when the tag is top-right (`label_top`), so the tag
+    and the after-label read as two blocks. `label_ink` holds the inner ink edges
     and `reveal` the frame intervals in which each label shows: only while the rule (3 units wide)
     is at least 8 px clear of its ink. A label fades in over B/3, out over the last B/3 frames of its
     interval, and is clipped to its own side of the rule.
@@ -875,8 +876,9 @@ renderer no longer has constants of its own.
   ([x, y, w, h]; rising text includes its rise travel; the rail includes its knob) and write plan.json
   `checks` (not hashed): `{"safe": [x0, y0, x1, y1], "ink": [{"shot": id | null, "layer": name,
   "box": [x, y, w, h]}], "outside": [indices]}`, and for a story cut with stats over a picture
-  `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "box": [x, y, w, h]}]` (each run's
-  measured panel and the contrast it gives). A box more than 1 px (antialiasing) outside the safe
+  `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "box": [x, y, w, h]}, {"text": "tag" |
+  "<shot id> label", "alpha", "contrast"}]` (each run's measured panel and the contrast it gives;
+  then the tag's and each date label's measured scrim, see below). A box more than 1 px (antialiasing) outside the safe
   rectangle is a plan warning; `vantage film --release` refuses it.
 
 Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
@@ -888,7 +890,15 @@ narrowest widest line, then the most even lines; title word groups are balanced 
 same way ("Where the / Wave Pool Was", not "Where the Wave Pool / Was"). Classic cuts keep greedy
 filling. Scrims are
 feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands;
-a stat run's panel is one such box in the run's tint, its opacity measured (see "stat").
+a stat run's panel is one such box in the run's tint, its opacity measured (see "stat"). The tag (22
+units, caps, fully opaque) and a capture's date label (52 units) are small text: their scrims are
+measured too (`_Cut._least_scrim`), the least opacity from 0.30 (tag) or 0.42 (label) up to 0.95 at
+which the text, composited over the scrimmed picture, keeps 4.5:1 between its glyph cores' median
+luminance and the 95th-percentile brightest pixel 1 to 4 px around its glyphs. The tag's is measured
+once over every half beat of the film (frames rendered without it: pictures, dissolves and panels),
+a date label's over its own shot's picture along the camera. A stat run's panel stays
+`TAG_CLEAR` (44 + 3·16 + 8) units clear of the tag (above it in 9:16, below a top-right tag), so a
+paper panel's feather never lightens the picture under the tag.
 In 9:16 (story and classic) every word, the end card and the rail stay between 0.14H and 0.72H, clear
 of the right edge.
 

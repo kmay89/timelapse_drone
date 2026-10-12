@@ -1075,7 +1075,8 @@ def _curtain_labels(
     project: Project, fonts: dict[str, Any], lay: Layout, texts: Sequence[str], tagged: bool
 ) -> tuple[float, int, list[float]]:
     """(scale, cap-top y, advance widths in px) of the curtain labels as film/cut.py sets them: each
-    label fits between its text edge and a rule at the centre, and the row sits under a top-right tag when there is one."""
+    label fits between its text edge and a rule at the centre, and the row sits a label line under a
+    top-right tag when there is one."""
     from vantage.film.cut import CURTAIN_LABEL, TAG
     from vantage.film.plan import font_path
     from vantage.film.render import _Type
@@ -1087,8 +1088,8 @@ def _curtain_labels(
     widest = max(t.width(text, CURTAIN_LABEL) for text in texts)
     scale = min(1.0, room / widest) if widest > 0 else 1.0
     top = lay.label_top
-    if tagged and lay.tag == "top-right":
-        top += round(-t.font(TAG).getbbox("H", anchor="ls")[1] + 18 * lay.unit)
+    if tagged and lay.tag == "top-right":  # a label line's height under the tag: two blocks, not one
+        top += round(-t.font(TAG).getbbox("H", anchor="ls")[1] + CURTAIN_LABEL.size * lay.unit)
     return scale, top, [t.width(text, CURTAIN_LABEL, scale) for text in texts]
 
 

@@ -14,9 +14,12 @@ Every typeset layer's ink box (with its rise travel) is kept in `ink` for plan.j
 Curtains split two warps of the same camera at the rule (before left, after right) under a 3-unit
 accent rule and grip; their labels are clipped to their own side and shown only inside the plan's
 reveal intervals. A run of stats is set once (`stat_run`, shared with film/story.py): each figure on
-a fixed digit advance, one layer per glyph sliding into a mask, over a picture under one panel in
-the run's tint whose opacity is measured so the text keeps STAT_CONTRAST over the picture along the
-camera path (`scrims`, for plan.json `checks`); consecutive stats crossfade their text only. Cards,
+a fixed digit advance, the figure and its unit sliding into a mask as one block, over a picture
+under one panel in the run's tint whose opacity is measured so the text keeps STAT_CONTRAST over the
+picture along the camera path; the panel comes in with the first figure, and one stat's text fades
+out before the next figure lands (never two figures, and never a partial one, on screen). The tag's
+and each date label's scrim are measured too, so their small type keeps 4.5:1 over every picture
+(`scrims`, for plan.json `checks`). Cards,
 plain stat cards and the end card dip to and from their surface in display gamma, like the classic
 cut. Every image pixel is a crop, a dissolve, a curtain split or a dip of registered masters; text,
 scrims, panels and the rail are overlays.
@@ -53,7 +56,7 @@ KICKER = _Style("numeric", 38, 600, "accent", tracking=0.22, upper=True)
 TITLE = _Style("display", 124, 400, leading=1.08)
 DATE = _Style("numeric", 52, 600, tracking=0.08, upper=True)
 LEAD = _Style("display", 120, 500)
-TAG = _Style("numeric", 22, 600, alpha=0.85, tracking=0.16, upper=True)
+TAG = _Style("numeric", 22, 600, tracking=0.16, upper=True)
 CARD_TITLE = _Style("display", 96, 400, leading=1.08)
 BRAND = _Style("display", 92, 400, leading=1.08)
 CREDIT = _Style("text", 36, 400, alpha=0.9, leading=1.35)
@@ -75,7 +78,12 @@ STAT_LABEL = _Style("text", 52, 400, "ink", leading=1.22)
 STAT_SOURCE = _Style("text", 34, 400, "ink")
 RIDE = _Style("text", 30, 400, "ink", leading=1.3)
 STAT_CONTRAST = 7.0  # WCAG 1.4.3 asks 4.5:1 of small text (7:1 at AAA): the panel is measured to this
+SMALL_CONTRAST = 4.5  # WCAG 1.4.3 for small text: the tag and the date labels keep this over the picture
+TAG_SCRIM, LABEL_SCRIM = 0.3, 0.42  # the least scrim behind the tag and a date label (raised as measured)
 PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 sigma clear of the ink
+# Units between a stat run's ink and the tag's: the panel's padding and feather (3 sigma) end 8 units
+# clear of the tag, so a paper panel never lightens the picture under the tag's paper type.
+TAG_CLEAR = PANEL_PAD + 3 * PANEL_SIGMA + 8
 END_STYLES = {
     "brand": BRAND, "credit": CREDIT, "role": ROLE, "partner": PARTNER, "link": LINK, "url": URL,
     "honesty": HONESTY, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
@@ -182,9 +190,9 @@ def stat_run(
     top_y, bottom_y = float(lay.top), float(lay.bottom)
     tag_cap = _cap_of(t, TAG)
     if tagged and lay.tag == "rail-right":  # the 9:16 tag sits right above the rail: stay above it
-        bottom_y = min(bottom_y, lay.rail_y - 18 * u - tag_cap - 26 * u)
-    if tagged and lay.tag == "top-right":  # like the curtain labels: under the tag
-        top_y = max(top_y, lay.label_top + tag_cap + 18 * u)
+        bottom_y = min(bottom_y, lay.rail_y - 18 * u - tag_cap - TAG_CLEAR * u)
+    if tagged and lay.tag == "top-right":  # under the tag, the panel clear of it
+        top_y = max(top_y, lay.top + tag_cap + TAG_CLEAR * u)
     elif place == "high":
         top_y = max(top_y, float(lay.label_top))
     scale = 1.0
@@ -440,7 +448,10 @@ class _Cut:
         self.zmax = max([1.0, *(c["zoom"] for c in cams)])
         self.masters = inputs["masters"]
         self._levels: dict[str, tuple[np.ndarray, np.ndarray | None]] = {}
-        self.tag_scrim: _Layer | None = None
+        self.tag_scrim: _Layer | None = None  # its unit mask: drawn at the measured `levels["tag"]`
+        self.levels: dict[str, float] = {}  # measured scrim opacities: "tag", "<shot id> label", …
+        self.measured: list[dict[str, Any]] = []  # their records, for plan.json checks
+        self._bare_text = False  # measuring: frames without the tag and labels being measured
         words = list(p["tag"])
         if p.get("draft"):
             words.append(f"plan {plan.hash[:6]}")
@@ -527,13 +538,113 @@ class _Cut:
         if not scrim:  # the paper variant: same place and box as the tag, recorded once
             return self._ink([(lay.right, base, text, style, "r")], shadow=0.0)[0]
         layer, box = self._ink([(lay.right, base, text, style, "r")], shadow=0.6, blur=3, note=(None, "tag"))
-        self.tag_scrim = self._scrim(box, 0.3)
+        self.tag_scrim = self._scrim(box, 1.0)
         return layer
 
     def _put_tag(self, frame: np.ndarray) -> None:
-        if self.tag is not None:
-            _put(frame, self.tag_scrim, 1.0)
+        if self.tag is not None and not self._bare_text:
+            _put(frame, self.tag_scrim, self._tag_level())
             _put(frame, self.tag, 1.0)
+
+    # ------------------------------------------------------- contrast --- #
+
+    def _least_scrim(
+        self, layer: _Layer, scrim: _Layer, backgrounds: Sequence[np.ndarray], floor: float
+    ) -> tuple[float, float]:
+        """(alpha, contrast): the least opacity (floor to 0.95) of a night `scrim` (a unit mask) at
+        which a text `layer` keeps SMALL_CONTRAST in every one of `backgrounds` (frames without that
+        text), and the worst contrast it gives. Contrast as a reader meets it: the text composited
+        over the scrimmed picture, the median luminance of its glyph cores against the 95th-percentile
+        brightest pixel 1 to 4 px around the glyphs (where small type's edges are read)."""
+        from vantage.film.safety import _BGR_WEIGHTS, _SRGB_TO_LINEAR
+
+        weights = _BGR_WEIGHTS.astype(np.float64)
+        lh, lw = layer.alpha.shape[:2]
+        y0, x0 = max(layer.y, 0), max(layer.x, 0)
+        y1, x1 = min(layer.y + lh, self.height), min(layer.x + lw, self.width)
+        a_text = layer.alpha[y0 - layer.y : y1 - layer.y, x0 - layer.x : x1 - layer.x]
+        rgb = layer.rgb[y0 - layer.y : y1 - layer.y, x0 - layer.x : x1 - layer.x]
+        m = np.zeros((y1 - y0, x1 - x0, 1), np.float32)  # the scrim's unit mask over the text's box
+        sy0, sx0 = max(y0, scrim.y), max(x0, scrim.x)
+        sy1, sx1 = min(y1, scrim.y + scrim.alpha.shape[0]), min(x1, scrim.x + scrim.alpha.shape[1])
+        if sy1 > sy0 and sx1 > sx0:
+            m[sy0 - y0 : sy1 - y0, sx0 - x0 : sx1 - x0] = scrim.alpha[
+                sy0 - scrim.y : sy1 - scrim.y, sx0 - scrim.x : sx1 - scrim.x
+            ]
+        ink = a_text[..., 0]  # coverage, its shadow's halo included
+        core = ink >= 0.9 * max(float(ink.max()), 1e-6)
+        near = (ink > 0.02).astype(np.uint8)
+        ring = (
+            cv2.dilate(near, np.ones((9, 9), np.uint8)) & (1 - cv2.dilate(near, np.ones((3, 3), np.uint8)))
+        ) > 0
+        crops = [bg[y0:y1, x0:x1].astype(np.float32) for bg in backgrounds]
+
+        def ratio(alpha: float) -> float:
+            worst = 21.0
+            for bg in crops:
+                mixed = bg * (1 - alpha * m) + self.night * (alpha * m)
+                out = np.clip(mixed * (1 - a_text) + rgb + 0.5, 0, 255).astype(np.uint8)
+                lum = _SRGB_TO_LINEAR[out] @ weights
+                lt, lb = float(np.median(lum[core])), float(np.quantile(lum[ring], 0.95))
+                worst = min(worst, (max(lt, lb) + 0.05) / (min(lt, lb) + 0.05))
+            return worst
+
+        lo, hi = round(floor * 100), 95
+        if not crops or not core.any() or not ring.any() or ratio(lo / 100) >= SMALL_CONTRAST:
+            return lo / 100, ratio(lo / 100) if crops and core.any() and ring.any() else 21.0
+        if ratio(hi / 100) < SMALL_CONTRAST:
+            return hi / 100, ratio(hi / 100)
+        while hi - lo > 1:  # the contrast only grows with the scrim
+            mid = (lo + hi) // 2
+            if ratio(mid / 100) >= SMALL_CONTRAST:
+                hi = mid
+            else:
+                lo = mid
+        return hi / 100, ratio(hi / 100)
+
+    def _sampled(self, f0: int, f1: int) -> list[int]:
+        """The frames a scrim is measured on: every half beat from f0, and f1 − 1."""
+        return sorted({*range(f0, f1, max(1, self.fpb // 2)), f1 - 1}) if f1 > f0 else []
+
+    def _tag_level(self) -> float:
+        """The tag's scrim opacity: measured once over every half beat of the film (frames rendered
+        without the tag: pictures, dissolves, panels and all), so its small type keeps 4.5:1."""
+        if "tag" not in self.levels:
+            assert self.tag is not None and self.tag_scrim is not None
+            self._bare_text = True
+            try:
+                frames = [self.frame_at(f) for f in self._sampled(0, self.frames)]
+            finally:
+                self._bare_text = False
+            alpha, contrast = self._least_scrim(self.tag, self.tag_scrim, frames, TAG_SCRIM)
+            self.levels["tag"] = alpha
+            self.measured.append({"text": "tag", "alpha": alpha, "contrast": round(contrast, 2)})
+        return self.levels["tag"]
+
+    def _label_level(self, i: int) -> float:
+        """A capture's date label scrim: measured over its own picture (every half beat of the shot,
+        along the camera) so the label keeps 4.5:1."""
+        shot = self.shots[i]
+        key = f"{shot['id']} label"
+        if key not in self.levels:
+            L = self.layers[shot["id"]]
+            frames = [self._bare(i, f) for f in self._sampled(shot["f0"], shot["f1"])]
+            alpha, contrast = self._least_scrim(L["label"], L["label_scrim"], frames, LABEL_SCRIM)
+            self.levels[key] = alpha
+            self.measured.append({"text": key, "alpha": alpha, "contrast": round(contrast, 2)})
+        return self.levels[key]
+
+    @property
+    def scrims(self) -> list[dict[str, Any]]:
+        """Every measured scrim, for plan.json checks: the stat panels, then the tag's and each date
+        label's (measured here if no frame has needed them yet)."""
+        if self.tag is not None and self.tag_scrim is not None:
+            self._tag_level()
+        for i, shot in enumerate(self.shots):
+            if shot["kind"] == "capture":
+                self._label_level(i)
+        order = {"tag": -1, **{f"{s['id']} label": k for k, s in enumerate(self.shots)}}
+        return [*self.panels, *sorted(self.measured, key=lambda r: order.get(r["text"], 0))]
 
     def _surface_tag(self, frame: np.ndarray, surface: str) -> None:
         """A loop film's tag on a card, stat or end card (night or paper); other films carry their
@@ -577,7 +688,7 @@ class _Cut:
         self.curtain_keys: dict[str, tuple[list[Window], list[float]]] = {}
         self.stat_mask: dict[str, tuple[int, int]] = {}
         self.stat_runs: dict[str, dict[str, Any]] = {}  # shot id → its run's panel and honesty line
-        self.scrims: list[dict[str, Any]] = []  # measured stat panels, for plan.json checks
+        self.panels: list[dict[str, Any]] = []  # measured stat panels, for plan.json checks
         for i, shot in enumerate(self.shots):
             sid, kind = shot["id"], shot["kind"]
             text = {item["role"]: item["text"] for item in shot["text"]}
@@ -586,7 +697,7 @@ class _Cut:
             elif kind == "capture":
                 cap_top = lay.label_top + self._cap(DATE)
                 label, box = self._ink([(lay.margin, cap_top, shot["label"], DATE, "l")], note=(sid, "label"))
-                entry: dict[str, Any] = {"label": label, "label_scrim": self._scrim(box, 0.42)}
+                entry: dict[str, Any] = {"label": label, "label_scrim": self._scrim(box, 1.0)}
                 words = text.get("words")
                 if words:
                     zone = (shot.get("step") or {}).get("words_zone")
@@ -728,7 +839,7 @@ class _Cut:
             tint = np.array(self.paper if surface == "paper" else self.night, np.float32)
             alpha, contrast = self._measure_panel(run, geo.box, tint, color)
             panel = self._scrim(geo.box, alpha, color=tint, pad=(PANEL_PAD, PANEL_PAD), sigma=PANEL_SIGMA)
-            self.scrims.append(
+            self.panels.append(
                 {"shots": [s["id"] for s in run], "tint": surface, "alpha": round(alpha, 3),
                  "contrast": round(contrast, 2), "box": ink_box(*geo.box)}
             )  # fmt: skip
@@ -1007,7 +1118,7 @@ class _Cut:
         last = shot["f1"] - 1
         if shot["kind"] == "capture":
             _put(frame, self.rail_scrim, opacity)
-            _put(frame, L["label_scrim"], opacity)
+            _put(frame, L["label_scrim"], opacity * self._label_level(j))
             _put(frame, L["label"], opacity)
             if "words" in L and (shot.get("step") or {}).get("land") is not None:
                 _put(frame, L["words_scrim"], opacity)
@@ -1266,10 +1377,10 @@ class _Cut:
         # Scrims, then text.
         _put(frame, self.rail_scrim, rail_in)
         if P is not None:
-            _put(frame, P["label_scrim"], 1 - w)
-            _put(frame, L["label_scrim"], w)
+            _put(frame, P["label_scrim"], (1 - w) * self._label_level(i - 1))
+            _put(frame, L["label_scrim"], w * self._label_level(i))
         else:
-            _put(frame, L["label_scrim"], intro)
+            _put(frame, L["label_scrim"], intro * self._label_level(i))
         d = shot["dissolve"]
         swap = d is None or f >= d["f0"] + (d["f1"] - d["f0"]) // 2
         _put(frame, L["label"] if swap or P is None else P["label"], intro)
