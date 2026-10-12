@@ -556,7 +556,7 @@ chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's wor
 - The `screen` preset sets cut story, aspect 16x9, loop true, bpm 75, type_scale 1.6, safe 0.05 on
   every side (the `screen` layout), auto false, title_beats 4, end_beats 4, and capture beats 2 (no
   step), 4 (a step) and 5 (a push) where other films have 1, 3 and 4 (`FilmDef.beats`, preset only).
-  Its pushes go in and ease back over 2 beats (B + B/3 in other films).
+  Its pushes go in and ease back over 2 beats (as in the 16:9 cut; B + B/3 in the 9:16).
   Loop films have no web encode and no embedded tracks. A loop film needs the story cut.
 - `vantage film` (no `--film`) plans and renders the `auto` films; `--film ID` names any enabled film.
 - The 16:9 size is `output.film.width × height`; the 9:16 size is `short × short·16/9`. `VANTAGE_FAST=1`
@@ -604,7 +604,7 @@ its first figure sits on the montage's last picture and the next on the main van
 neither the middle of the film nor its close is one photograph, and the film closes on its figures
 over the site seen anew. Explore, text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
 plays the main vantage's captures as one quiet series. For the demo at full size the 16:9 cut is
-80 beats (48.0 s: two figures and two montage pictures, story.yaml `films.16x9`) and the 9:16 79
+79 beats (47.4 s: two figures and two montage pictures, story.yaml `films.16x9`) and the 9:16 79
 (47.4 s: two figures and three montage pictures, `films.9x16`), each with 5.4 s on night (the end
 card) after the stats (the first over the shoreline montage's last picture, the second over the
 overview's latest), and with the
@@ -640,14 +640,17 @@ small masters leave little to push, they are 77 and 77 beats.
     do-not-print fact drops the words with a warning). They land at beat 1 (`step.land`; on the
     film's first image too, so the picture plays clean for a beat after the title), rise 14 units while fading in over B/3 frames, and fade out with the next
     dissolve. Where they sit is chosen per step (see **Words zones**).
-  - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`) and holds
-    to the end of the shot. It eases back as slowly as it went in: over B + B/3 frames from the next
-    shot's first frame (through its dissolve), or, when the next shot pushes too, the camera glides
-    from one target to the next. Before a curtain it eases back over B + B/3 from the curtain's first
+  - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`; beat 3
+    in a landscape or loop film, below) and holds to the end of the shot. It eases back as slowly as
+    it went in (`ease`): from the next shot's first frame (through its dissolve), or, when the next
+    shot pushes too, the camera glides from one target to the next. Before a curtain it eases back
+    over `ease` from the curtain's first
     frame; before a card, stat or the end card it holds while the image dips out. `check_plan`
-    refuses any camera move shorter than B + B/3 frames. In a loop film both ways take 2 beats
-    (`push_f1` = beat 3): the unattended screen moves calmly, and at full size a 1.8× pull back over
-    B + B/3 swept a bright path through one meter region 4 times in a second.
+    refuses any camera move shorter than B + B/3 frames. In a landscape film and a loop film both
+    ways take 2 beats (`push_f1` = beat 3, `story._Builder.ease`): a 1.6× push in 0.8 s, held and
+    pulled back, lurched on a desktop or a TV, and in the unattended loop at full size a 1.8× pull
+    back over B + B/3 swept a bright path through one meter region 4 times in a second. The 9:16
+    cut, read on a phone in the hand, keeps B + B/3.
   - The flash margin (see Safety) may hold a capture: its picture plays `held` beats longer before
     its words land and its push starts (`land` and `push_f0` move on by as many beats); soften its
     push (`step.gentled`: the share of the log zoom it keeps, z_eff = z^gentled); or slow it by a beat per level (it then eases
@@ -769,7 +772,7 @@ small masters leave little to push, they are 77 and 77 beats.
   - Camera (`move`: `{how, subjects, focus, upscale, f0, f1}`, plus `gentled`, the share of its log
     zoom kept, when the flash margin softened its push): a stat whose facts are printed in
     the label or body of a hotspot of a scrub or compare chapter on that vantage, shown at that
-    capture, pushes toward it from its landing to B/3 before its end (at least B + B/3 frames):
+    capture, pushes toward it from its landing to B/3 before its end (at least `ease` frames):
     `aim` asks for zoom 1.6 (`STAT_ZOOM`), clamped by `max_upscale` and lowered until the hotspot
     sits in the safe zone clear of the panel, within `MAX_TRAVEL` of the rest view (`how:
     focus+subject:<id>`). Any other stat drifts in by 4 % (`drift`) to B/3 before its end, or holds
@@ -780,7 +783,7 @@ small masters leave little to push, they are 77 and 77 beats.
     same picture (the montage's, a stat's) carries it on as one move from where it began
     (`_Camera.drift`), so the picture never stops on a stat's beat; the stats it carries share its
     `focus` and `f1`. A push before a stat's picture eases back to the rest view over its first
-    B + B/3 frames.
+    `ease` frames.
     A push of more than 1.25 output px per master px is a "soft push" warning, as for steps.
   - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
     (tabular figures without raqm; other glyphs keep their own advance), shifted so the first

@@ -715,10 +715,12 @@ class _Builder:
 
     @property
     def ease(self) -> int:
-        """Frames a push takes to go in, and to ease back: B + B/3, or 2 beats in a loop film, whose
-        unattended screen should move calmly and whose meter must pass at full size (a fast pull back
-        sweeps a bright path through a region more than 3 times a second)."""
-        return 2 * self.grid.fpb if self.film.loop else self.grid.fpb + self.grid.third
+        """Frames a push takes to go in, and to ease back: B + B/3 in a portrait film, or 2 beats in
+        a landscape one (a 1.6× push over B + B/3 lurches on a desktop or a TV) and in a loop film,
+        whose unattended screen should move calmly and whose meter must pass at full size (a fast
+        pull back sweeps a bright path through a region more than 3 times a second)."""
+        landscape = self.layout.width > self.layout.height
+        return 2 * self.grid.fpb if self.film.loop or landscape else self.grid.fpb + self.grid.third
 
     def push_ease(self, sid: str) -> int:
         """Frames the push of shot `sid` takes: `ease`, plus a beat per level the flash margin slowed

@@ -1421,16 +1421,24 @@ def test_words_plan_is_deterministic(tmp_path):
 
 
 def test_push_eases_back_as_slowly_as_it_went_in(tmp_path):
-    """Every camera move lasts at least a push (B + B/3 frames): the release after a push no longer
-    snaps back inside the next dissolve; check_plan refuses a faster move."""
+    """Every camera move lasts at least a push: B + B/3 frames in a portrait film, 2 beats in a
+    landscape one (a 1.6× push in under a second lurches on a desktop or a TV), so the release after
+    a push never snaps back inside the next dissolve; check_plan refuses a move under B + B/3."""
     steps = [STEPS[0], {**STEPS[1], "focus": [0.5, 0.5, 1.6]}, STEPS[2]]
     project = tiny(tmp_path / "p", steps=steps, chapters=[COMPARE])
     p = _plan(project).plan
     push = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["push"])
-    assert push["push_f1"] - push["push_f0"] == B + 3  # B + B/3 at B = 8
+    assert push["push_f1"] - push["push_f0"] == 2 * B
     cams = p["camera"]
     moves = [w1["a"] - w0["b"] for w0, w1 in itertools.pairwise(cams)]
-    assert moves and min(moves) >= B + 3, cams
+    assert moves and min(moves) >= 2 * B, cams
+    # A portrait film keeps B + B/3 (B/3 = 3 at B = 8): read on a phone in the hand.
+    from vantage.film.story import _Builder
+
+    portrait = dataclasses.replace(resolve_films(project)["16x9"], aspect="9x16", loop=False)
+    lay = Layout.from_record(180, 320, p["layout"])
+    b = _Builder(project, portrait, beat.beat_grid(12, 90), lay, [], 0)
+    assert b.ease == B + 3
     fast = json.loads(json.dumps(p))
     fast["camera"][1]["a"] = fast["camera"][0]["b"] + 4
     with pytest.raises(PlanError, match="faster than a push"):
