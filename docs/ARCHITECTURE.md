@@ -1076,8 +1076,9 @@ of the right edge.
   size (tests/test_film_full.py, slow), and so does the CI-sized demo (ci.yml's demo job fails on a
   film whose `render.flash` exceeds its limit). `.github/workflows/films.yml` runs the slow film
   tests (full-size footage cached by the generator's source) on pull requests that touch
-  `src/vantage/film/`, `src/vantage/demo/`, `tests/test_film_*.py` or the demo project, and on
-  demand: the only CI that renders real pushes.
+  `src/vantage/film/`, `src/vantage/demo/`, `tests/test_film*.py`, the demo project or what every
+  film depends on (`config.py`, `models.py`, `media/`, `process/`, `site/facts.py`, the bundled
+  fonts, `pyproject.toml`, `uv.lock`), and on demand: the only CI that renders real pushes.
 
 ### plan.json
 

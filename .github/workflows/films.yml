@@ -2,8 +2,10 @@
 # footage whose masters clamp every push to about 1.03x, so only full-size masters exercise real
 # pushes, the flash margin on the films a client gets, stat type and the 40-48 s length. Runs the
 # slow film tests (tests/test_film_*.py -m slow) on pull requests that touch the film engine, the
-# demo or its project, and on demand. The synthesized full-size footage is cached by the generator's
-# source, so a run that does not change src/vantage/demo/ only aligns and renders (about 15 min).
+# demo or its project, or what every film depends on (film settings, plan hashing, the encoder, the
+# masters, the facts, the bundled fonts, the locked dependencies), and on demand. The synthesized
+# full-size footage is cached by the generator's source, so a run that does not change
+# src/vantage/demo/ only aligns and renders (about 15 min).
 name: Films
 
 on:
@@ -11,7 +13,16 @@ on:
     paths:
       - "src/vantage/film/**"
       - "src/vantage/demo/**"
+      - "src/vantage/config.py" # FilmSettings / FilmSpec defaults (flash_limit, bpm, max_upscale, fps)
+      - "src/vantage/models.py" # FilmPlan, plan hashing, canonical JSON
+      - "src/vantage/media/**" # the bitexact encode
+      - "src/vantage/process/**" # the masters every film is cut from
+      - "src/vantage/site/facts.py" # the {fact:} values films print
+      - "src/vantage/runtime/fonts/**" # the bundled faces film type is set in
+      - "uv.lock" # OpenCV, Pillow and numpy rasterize every frame and proxy
+      - "pyproject.toml"
       - "tests/test_film_*.py"
+      - "tests/test_film.py"
       - "projects/demo-lakeside/**"
       - ".github/workflows/films.yml"
   workflow_dispatch:
