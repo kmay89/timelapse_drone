@@ -650,6 +650,11 @@ def test_curtain_split_halves(tmp_path):
             if k not in shown[side]:
                 assert cut._reveal(curtain, side, k) == 0.0
     assert min(shown[0]) > curtain["keys"][0]["b"]  # before is hidden at split 0, then revealed
+    # Under the top-right tag, the labels sit at least a label's height lower: two blocks, not one.
+    tag = next(i["box"] for i in cut.ink if i["layer"] == "tag")
+    for side in ("before", "after"):
+        label = next(i["box"] for i in cut.ink if i["shot"] == curtain["id"] and i["layer"] == side)
+        assert label[1] - (tag[1] + tag[3]) >= label[3], (side, label, tag)
 
 
 def test_curtain_words_fall_back_like_scrub_steps(tmp_path):
