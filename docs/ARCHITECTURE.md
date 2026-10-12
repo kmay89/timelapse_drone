@@ -554,7 +554,7 @@ chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's wor
 - Precedence: explicit FilmSpec field > preset > output.film (`cut`, `bpm`, `max_upscale`) > built-in
   default. A new id's aspect is 16x9 unless the id is `9x16`.
 - The `screen` preset sets cut story, aspect 16x9, loop true, bpm 75, type_scale 1.6, safe 0.05 on
-  every side (the `screen` layout), auto false, title_beats 4, end_beats 4, and capture beats 2 (no
+  every side (the `screen` layout), auto false, title_beats 4, end_beats 3, and capture beats 2 (no
   step), 4 (a step) and 5 (a push) where other films have 1, 3 and 4 (`FilmDef.beats`, preset only).
   Its pushes go in and ease back over 2 beats (as in the 16:9 cut; B + B/3 in the 9:16).
   Loop films have no web encode and no embedded tracks. A loop film needs the story cut.
@@ -837,31 +837,36 @@ small masters leave little to push, they are 77 and 77 beats.
   - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
   - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
 - **Loop films** (`loop: true`; the `screen` preset):
-  - A `rise` (`R1`, 2 beats) opens the film: frame 0 is a pure night fill, easing in display gamma
+  - A `rise` (`R1`, 1 beat, `LOOP_BEATS`) opens the film: frame 0 is a pure night fill, easing in display gamma
     (`ramp(f, f0 + 1, n)`, 0 on its first frame) onto the title's image at rest under the title's
     30 % scrim, with the tag. When a series follows the title, its rail is shown with the knob
     sweeping back from the last tick to tick 0; the rail then stays (knob at 0) through the title into
     the first capture instead of fading in.
-  - The title starts at 2B (its `groups` and `key` are relative to its own `f0`).
+  - The title starts at B (its `groups` and `key` are relative to its own `f0`).
   - Every text needs releasable facts unless the project is a draft: a stat item, step words,
     capture label or note, card or title text that prints any other fact is left out with a plan
     warning ("left out of the loop"), since the loop plays unattended (a label falls back to its
     date). `--hours` refuses a loop plan of a project that is not a draft if it still prints a fact
     that is not releasable.
-  - The end card (`end_beats`, 4) prints only the brand name and, when `output.base_url` is set, the
-    short URL in large type (text role `url`, 64 units × type_scale); no credits, partners, fine
-    print or honesty line (the `honesty` field is still recorded). No QR code in v1.
+  - The end card (`end_beats`, 3, or as long as its words take to read at 17 characters a second
+    after its dip) prints only the brand name and, when `output.base_url` is set, the short URL in
+    large type (text role `url`, 64 units × type_scale); no credits, partners, fine print or honesty
+    line (the `honesty` field is still recorded). No QR code in v1. So the seam between the last
+    picture and the first is short: for the demo 4 beats of card (3.2 s, its dip included), a beat
+    of dip and the first half of a beat's rise, about 4.4 s.
   - With no disclaimer on its end card and no tracks, a loop keeps its `tag` ("Simulated imagery",
     "Preview") on every shot: on cards, plain stat cards and the end card too, in ink without a
-    scrim on paper (stats over a picture carry it as every image does). No honesty line rides
-    along its stats.
+    scrim on paper (stats over a picture carry it as every image does). An unattended screen prints
+    figures with no end card to qualify them, so a loop with stats has the honesty line and the
+    brand's disclaimer ride under them (`ride: true`), as a cut whose card is full does, at the
+    screen's type size, and its last stat lasts until they read.
   - The end card is lengthened by a beat when needed so the film's length is a whole number of GOPs
     (2B frames): N % 2B == 0.
-  - A `dip` (`D1`, 2 beats) closes the film: the end card eases in display gamma to the night fill,
+  - A `dip` (`D1`, 1 beat) closes the film: the end card eases in display gamma to the night fill,
     reaching it on frame N (`ramp(f, f0, n + 1)`), one past the last frame. So frame(N) == frame(0),
     byte for byte, and a player looping the file shows no seam. The renderer checks it before
     encoding (`render.check_seam`).
-  - For the demo the screen cycle is 88 beats at 75 bpm (2112 frames, 70.4 s at 30 fps), with the
+  - For the demo the screen cycle is 86 beats at 75 bpm (2064 frames, 68.8 s at 30 fps), with the
     same two stats as the cuts (`films.screen.stats`).
 - **Push target**: `film.focus` when given (`target: film.focus`, used as given); otherwise the
   step's `focus`, recentred to the crop nearest it that puts the step's **subject hotspots** inside

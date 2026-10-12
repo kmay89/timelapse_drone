@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 from test_film_story import COMPARE, STATS, STEPS, STORY_FILM, _facts, tiny
 from vantage.config import Project
@@ -22,6 +23,7 @@ from vantage.film import loop, render
 from vantage.film.cut import _Cut
 from vantage.film.plan import plan_films, resolve_films
 from vantage.film.render import render_film
+from vantage.film.story import HONESTY
 from vantage.media.ffmpeg import ffprobe_bin, probe
 from vantage.models import FilmPlan
 from vantage.site.package import package_project
@@ -55,7 +57,7 @@ def test_screen_preset_resolution(tmp_path):
     assert (screen.auto, screen.loop, screen.bpm, screen.type_scale, screen.safe) == (
         False, True, 75.0, 1.6, (0.05, 0.05, 0.05, 0.05),
     )  # fmt: skip
-    assert (screen.title_beats, screen.end_beats, screen.beats) == (4, 4, (2, 4, 5))
+    assert (screen.title_beats, screen.end_beats, screen.beats) == (4, 3, (2, 4, 5))
     plan = _screen(project)
     p = plan.plan
     assert (p["preset"], p["loop"], p["grid"]["fpb"], p["layout"]["name"]) == ("screen", True, B, "screen")
@@ -64,8 +66,10 @@ def test_screen_preset_resolution(tmp_path):
     kinds = [s["kind"] for s in p["shots"]]
     assert kinds[:2] == ["rise", "title"] and kinds[-2:] == ["end", "dip"]
     rise, dip = p["shots"][0], p["shots"][-1]
-    assert (rise["id"], rise["f0"], rise["f1"]) == ("R1", 0, 2 * B)
-    assert (dip["id"], dip["f1"]) == ("D1", p["frames"]) and dip["f1"] - dip["f0"] == 2 * B
+    assert (rise["id"], rise["f0"], rise["f1"]) == ("R1", 0, B)  # a beat each: little time on night
+    assert (dip["id"], dip["f1"]) == ("D1", p["frames"]) and dip["f1"] - dip["f0"] == B
+    end = p["shots"][-2]
+    assert 3 * B <= end["f1"] - end["f0"] <= 4 * B, end  # 3 beats, and one more to make whole GOPs
     # Captures linger: 2 beats quiet, 4 with a step, 5 with a push.
     caps = [s for s in p["shots"] if s["kind"] == "capture"]
     beats = [(s["f1"] - s["f0"]) // B for s in caps]
@@ -263,6 +267,34 @@ def test_loop_discloses_on_every_shot(tmp_path):
         ys, xs = np.nonzero(diff > 30)
         assert len(xs) > 20, kind  # the tag's ink ...
         assert xs.min() > cut.width / 2 and ys.max() < cut.height / 4, kind  # ... top right
+
+
+def test_loop_stats_carry_the_honesty_line_and_disclaimer(tmp_path):
+    """A loop has no end-card disclaimer, so the figures it prints carry one: the honesty line and the
+    brand's disclaimer ride under its stats, at the screen's type size, read in full by the run's
+    end; the end card stays the brand alone."""
+    root = tmp_path / "p"
+    stats = {**STATS, "items": [STATS["items"][2]]}
+    tiny(root, films=SCREEN, chapters=[stats], simulated=True)
+    brand = root / "brand" / "brand.yaml"
+    data = yaml.safe_load(brand.read_text(encoding="utf-8"))
+    data["disclaimer"] = "A demonstration: its places and figures are fictional."
+    brand.write_text(yaml.safe_dump(data), encoding="utf-8")
+    project = _facts(root, area={"text": "13,100", "status": "verified", "sources": ["plan"]})
+    plan = _screen(project)
+    p = plan.plan
+    (stat,) = (s for s in p["shots"] if s["kind"] == "stat")
+    end = next(s for s in p["shots"] if s["kind"] == "end")
+    assert stat["honesty"] == f"{HONESTY['simulated']} {data['disclaimer']}", stat["honesty"]
+    assert end["ride"] and [t["role"] for t in end["text"]] == ["brand"]
+    fps = p["fps"]
+    assert stat["f1"] - stat["land"] >= math.ceil(len(stat["honesty"]) * fps / 17), stat
+    cut = _Cut(project, plan)
+    ride = next(i for i in cut.ink if i["shot"] == stat["id"] and i["layer"] == "honesty")
+    x0, y0, x1, y1 = cut.lay.rect
+    bx, by, bw, bh = ride["box"]
+    assert x0 - 1 <= bx and bx + bw <= x1 + 1 and y0 - 1 <= by and by + bh <= y1 + 1, ride
+    assert cut.stat_runs[stat["id"]]["ride"] is not None
 
 
 def test_cli_hours(tmp_path):

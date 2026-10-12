@@ -31,9 +31,10 @@
 
 A loop film (the `screen` preset) opens with a `rise` from pure night onto the title's image (the
 rail's knob sweeping back to its first tick) and closes with a `dip` back to pure night, so frame N
-(one past the last) equals frame 0. Its end card is only the brand and the short URL, every text
-it prints needs releasable facts (unless the project is a draft), and its end card is lengthened by a beat
-when needed so the film is a whole number of GOPs (2 beats).
+(one past the last) equals frame 0, a beat each. Its end card is only the brand and the short URL
+(the honesty line and the disclaimer ride under its stats instead), every text it prints needs
+releasable facts (unless the project is a draft), and its end card is lengthened by a beat when
+needed so the film is a whole number of GOPs (2 beats).
 
 Where a montage or a stat run dissolves in from another vantage's picture, that picture keeps its
 last framing through the dissolve (`dissolve.cam`) and the camera cuts to the new rest view.
@@ -1643,7 +1644,9 @@ def _stats(
 
 
 def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, Any]) -> dict[str, Any]:
-    """The end card's text and length. A loop's: the brand and the short URL, `end_beats`. Any other
+    """The end card's text and length. A loop's: the brand and the short URL, `end_beats` or as long
+    as they take to read after the dip, with the honesty line and the disclaimer riding under its
+    stats (when it has stats). Any other
     film's: the brand, credit line, partners and link, then the honesty line and the disclaimer
     (read, like the credit line: it says what is fictional) and the copyright as fine print (read at
     a glance, as legal text is). The card takes as long as its words take to read at 17 characters
@@ -1662,9 +1665,18 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
     if film.loop:  # a loop's end card: the brand and the URL in large type, nothing else
         if short_url:
             lines.append({"role": "url", "text": short_url})
+        # An unattended screen prints figures with no end card to qualify them: the honesty line
+        # and the disclaimer ride under its stats, as in a cut whose card is full.
+        riding, ride_facts = [], []
+        if has_stats:
+            disclaimer, ride_facts = b.said(brand.disclaimer, "brand.yaml disclaimer")
+            riding = [t for t in (honesty, disclaimer) if t]
         return {
-            "text": lines, "facts": list(say.facts), "ride": None, "ride_facts": [],
-            "beats": lambda dip: film.end_beats,
+            "text": lines, "facts": list(say.facts), "ride": " ".join(riding) or None,
+            "ride_facts": ride_facts,
+            "beats": lambda dip: max(
+                film.end_beats, -(-(dip + third + cue_frames(sentence(*(t["text"] for t in lines)), fps)) // B)
+            ),
         }  # fmt: skip
     credit = say(brand.credit_line, "brand.yaml credit_line") if brand.credit_line else None
     if credit:

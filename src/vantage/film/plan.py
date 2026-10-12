@@ -326,11 +326,11 @@ PRESETS: dict[str, dict[str, Any]] = {
         "safe": (0.05, 0.05, 0.05, 0.05),
         "auto": False,
         "title_beats": 4,
-        "end_beats": 4,
+        "end_beats": 3,
         "beats": (2, 4, 5),
     }
 }
-LOOP_BEATS = {"rise": 2, "dip": 2}  # a loop rises from night and dips back to it
+LOOP_BEATS = {"rise": 1, "dip": 1}  # a loop rises from night and dips back to it, a beat each
 GOP_BEATS = 2  # a loop film's GOP (and its length's multiple), in beats
 
 
