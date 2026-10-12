@@ -986,6 +986,41 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
         assert max(np.abs(frame[c] - bare[c]).max(axis=1).mean() for c in figures) > 12, f
 
 
+def test_stat_panel_calms_the_picture_under_it(tmp_path, monkeypatch):
+    """Under a stat panel the picture is blurred and taken half way to grey, not only tinted, so busy
+    or saturated detail (the masters' noise, their saturated hues) never punches through the text,
+    and the panel is measured with a margin over what WCAG asks (`aim`)."""
+    from vantage.film.cut import PANEL_MARGIN
+
+    project = _big(tmp_path, monkeypatch)
+    plan = _plan(project)
+    cut = _Cut(project, plan)
+    (scrim,) = cut.panels
+    assert scrim["aim"] == round(scrim["target"] * PANEL_MARGIN, 2)
+    assert scrim["contrast"] >= scrim["aim"] or scrim["alpha"] == 0.95, scrim
+    n2 = next(s for s in plan.plan["shots"] if s["id"] == "N2")
+    run = cut.stat_runs["N2"]
+    x, y, w, h = scrim["box"]
+    f = n2["key"]
+    with _NoText(cut):
+        calmed = cut.frame_at(f)[y : y + h, x : x + w]
+        mask, run["calm"] = run["calm"], None
+        try:
+            busy = cut.frame_at(f)[y : y + h, x : x + w]
+        finally:
+            run["calm"] = mask
+
+    def detail(img: np.ndarray) -> float:
+        lap = cv2.Laplacian(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float64), cv2.CV_64F)
+        return float(np.quantile(np.abs(lap), 0.75))  # the grain, not the one edge between tones
+
+    def chroma(img: np.ndarray) -> float:
+        return float((img.max(axis=2).astype(int) - img.min(axis=2)).mean())
+
+    assert detail(calmed) < 0.5 * detail(busy), (detail(calmed), detail(busy))
+    assert chroma(calmed) < 0.7 * chroma(busy), (chroma(calmed), chroma(busy))
+
+
 def test_stat_type_reads_on_a_phone(tmp_path, monkeypatch):
     """In 9:16 at 1080 wide a stat label's x-height is at least 44 px and its source's 30, and the
     whole run, honesty line included, stays inside the safe zone, above the tag. In 16:9 at 1080

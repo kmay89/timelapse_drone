@@ -741,7 +741,11 @@ small masters leave little to push, they are 77 and 77 beats.
     (`cut.panel_contrast`: 3:1 when every figure, unit, label, source and riding line is large, at
     least 18 pt seen on a phone, `LARGE_TEXT` = 66 px at a 1080 px short edge; else 4.5:1) over
     the 99.5th-worst percentile of the picture under the run's ink box, sampled on every beat of each
-    stat over its own picture along the camera path. It rises with the riding line over the beat
+    stat over its own picture along the camera path, to that target × 1.2 (`PANEL_MARGIN`; the
+    plan's `aim`), so it keeps a margin. Under the panel the picture is also calmed, not only tinted:
+    blurred by 8 units and taken half way to grey (`CALM_SIGMA`, `CALM_GREY`) under the panel's own
+    feathered mask and opacity, so a saturated boat or a pier's boards never punch through the text;
+    the measurement samples the calmed picture. It rises with the riding line over the beat
     before the first figure lands (`cut.panel_from`: from the shot's first frame, or half way
     through its dissolve, and at least B/3; a held entry, `N1.0`, shows the bare picture until
     then), so it never pops in, and stays through the run. Recorded in plan.json `checks.scrims`.
@@ -946,9 +950,9 @@ renderer no longer has constants of its own.
   ([x, y, w, h]; rising text includes its rise travel; the rail includes its knob) and write plan.json
   `checks` (not hashed): `{"safe": [x0, y0, x1, y1], "ink": [{"shot": id | null, "layer": name,
   "box": [x, y, w, h]}], "outside": [indices]}`, and for a story cut with stats over a picture
-  `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "target", "box": [x, y, w, h]}, {"text":
+  `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "target", "aim", "box": [x, y, w, h]}, {"text":
   "tag" | "<shot id> kicker" | "<shot id> label", "alpha", "contrast"}]` (each run's measured panel,
-  the contrast it gives and the one it was measured to;
+  the contrast it gives, the WCAG target and the margin it was measured to, `aim`;
   then the tag's, each title kicker's and each date label's measured scrim, see below). A box more than 1 px (antialiasing) outside the safe
   rectangle is a plan warning; `vantage film --release` refuses it.
 

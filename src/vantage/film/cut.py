@@ -15,8 +15,9 @@ Curtains split two warps of the same camera at the rule (before left, after righ
 accent rule and grip; their labels are clipped to their own side and shown only inside the plan's
 reveal intervals. A run of stats is set once (`stat_run`, shared with film/story.py): each figure on
 a fixed digit advance, the figure and its unit sliding into a mask as one block, over a picture
-under one panel in the run's tint whose opacity is measured so the text keeps the contrast WCAG 1.4.3
-asks of its size (`panel_contrast`) over each stat's picture along the camera path; the panel rises
+under one panel in the run's tint, over the picture calmed (blurred, half way to grey) under it, whose
+opacity is measured so the text keeps the contrast WCAG 1.4.3 asks of its size (`panel_contrast`),
+with a margin, over each stat's picture along the camera path; the panel rises
 over the beat before the first figure lands and stays while a stat on another picture dissolves in
 under it, and one stat's text fades out before the next figure lands (never two figures, and never a partial one, on screen). The tag's
 and each date label's scrim are measured too, so their small type keeps 4.5:1 over every picture
@@ -91,6 +92,11 @@ LARGE_TEXT = 24 * 1080 / 393
 TAG_SCRIM, LABEL_SCRIM = 0.3, 0.42  # the least scrim behind the tag and a date label (raised as measured)
 TITLE_SCRIM = 0.45  # the least scrim behind the title and its kicker (raised as the kicker needs)
 PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 sigma clear of the ink
+# Under a stat panel the picture is calmed, not only tinted: blurred by CALM_SIGMA units and taken
+# CALM_GREY of the way to grey (under the panel's own feathered mask), so a saturated kayak or the
+# boards of a pier never punch through the text; it stays a photograph, moving with the drift.
+CALM_SIGMA, CALM_GREY = 8.0, 0.5
+PANEL_MARGIN = 1.2  # a stat panel is measured to its WCAG target × this, so it keeps a margin
 # Units between a stat run's ink and the tag's: the panel's padding and feather (3 sigma) end 8 units
 # clear of the tag, so a paper panel never lightens the picture under the tag's paper type.
 TAG_CLEAR = PANEL_PAD + 3 * PANEL_SIGMA + 8
@@ -989,13 +995,20 @@ class _Cut:
         if first.get("file"):
             tint = np.array(self.paper if surface == "paper" else self.night, np.float32)
             target = panel_contrast(lay, geo)
-            alpha, contrast = self._measure_panel(run, geo.box, tint, color, target)
+            alpha, contrast = self._measure_panel(run, geo.box, tint, color, target * PANEL_MARGIN)
             panel = self._scrim(geo.box, alpha, color=tint, pad=(PANEL_PAD, PANEL_PAD), sigma=PANEL_SIGMA)
+            calm = np.ascontiguousarray(panel.alpha / max(alpha, 1e-6))  # the panel's unit mask
             self.panels.append(
                 {"shots": [s["id"] for s in run], "tint": surface, "alpha": round(alpha, 3),
-                 "contrast": round(contrast, 2), "target": target, "box": ink_box(*geo.box)}
+                 "contrast": round(contrast, 2), "target": target,
+                 "aim": round(target * PANEL_MARGIN, 2), "box": ink_box(*geo.box)}
             )  # fmt: skip
-        entry = {"panel": panel, "ride": ride, "first": first["id"]}
+        entry = {
+            "panel": panel,
+            "calm": calm if panel is not None else None,
+            "ride": ride,
+            "first": first["id"],
+        }
         for shot in run:
             self.stat_runs[shot["id"]] = entry
 
@@ -1004,14 +1017,20 @@ class _Cut:
     ) -> tuple[float, float]:
         """(alpha, contrast): the least panel opacity (0.30 to 0.95) at which the text colour keeps
         `target` over the 99.5th-worst percentile of the picture under the run's ink, sampled on
-        every beat of each stat over its own picture along the camera path (the luminance of what
-        the panel leaves showing, in display gamma as `_put` mixes it); and the contrast it gives."""
+        every beat of each stat over its own picture along the camera path, calmed as the panel
+        calms it (`_calmed`; the luminance of what the panel leaves showing, in display gamma as
+        `_put` mixes it); and the contrast it gives."""
         from vantage.film.safety import _BGR_WEIGHTS, _SRGB_TO_LINEAR
 
         x0, y0 = max(0, math.floor(box[0])), max(0, math.floor(box[1]))
         x1, y1 = min(self.width, math.ceil(box[2])), min(self.height, math.ceil(box[3]))
+        m = math.ceil(3 * CALM_SIGMA * self.u)  # the calming blur reads this far past the ink
+        X0, Y0 = max(0, x0 - m), max(0, y0 - m)
+        X1, Y1 = min(self.width, x1 + m), min(self.height, y1 + m)
         samples = [
-            self._warp(shot["file"], self.camera(f))[y0:y1:2, x0:x1:2].reshape(-1, 3)
+            self._calmed(self._warp(shot["file"], self.camera(f))[Y0:Y1, X0:X1])[
+                y0 - Y0 : y1 - Y0 : 2, x0 - X0 : x1 - X0 : 2
+            ].reshape(-1, 3)
             for shot in run
             for f in [*range(shot["f0"], shot["f1"], self.fpb), shot["f1"] - 1]
         ]
@@ -1032,6 +1051,27 @@ class _Cut:
             if (c := ratio(k / 100)) >= target:
                 return k / 100, c
         return 0.95, ratio(0.95)
+
+    def _calmed(self, img: np.ndarray) -> np.ndarray:
+        """`img` blurred by CALM_SIGMA units and taken CALM_GREY of the way to its grey."""
+        blurred = cv2.GaussianBlur(img, (0, 0), CALM_SIGMA * self.u)
+        grey = cv2.cvtColor(cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+        return cv2.addWeighted(blurred, 1 - CALM_GREY, grey, CALM_GREY, 0)
+
+    def _calm(self, frame: np.ndarray, run: dict[str, Any], opacity: float) -> None:
+        """Calm the picture under a stat run's panel (its unit mask × `opacity`), in place."""
+        panel, mask = run.get("panel"), run.get("calm")
+        if panel is None or mask is None or opacity <= 0.002:
+            return
+        h, w = mask.shape[:2]
+        y0, y1 = max(panel.y, 0), min(panel.y + h, self.height)
+        x0, x1 = max(panel.x, 0), min(panel.x + w, self.width)
+        if y1 <= y0 or x1 <= x0:
+            return
+        m = mask[y0 - panel.y : y1 - panel.y, x0 - panel.x : x1 - panel.x] * opacity
+        region = frame[y0:y1, x0:x1]
+        calm = self._calmed(region).astype(np.float32)
+        region[:] = np.clip(region * (1 - m) + calm * m + 0.5, 0, 255).astype(np.uint8)
 
     def _typeset_title(self, shot: dict[str, Any], text: dict[str, str]) -> None:
         lay, u, t = self.lay, self.u, self.type
@@ -1283,6 +1323,7 @@ class _Cut:
             self._curtain_overlays(frame, j, last, x, opacity)
         elif shot["kind"] == "stat":
             run = self.stat_runs[shot["id"]]
+            self._calm(frame, run, opacity)
             _put(frame, run["panel"], opacity)
             self._stat_text(frame, j, last, opacity, landed=True)
             _put(frame, run["ride"], opacity)
@@ -1423,7 +1464,9 @@ class _Cut:
         run = self.stat_runs[shot["id"]]
         prev = self.shots[i - 1] if i else None
         within = prev is not None and prev["kind"] == "stat"
-        _put(frame, run["panel"], 1.0 if within else intro if panel is None else panel)
+        shown = 1.0 if within else intro if panel is None else panel
+        self._calm(frame, run, shown)
+        _put(frame, run["panel"], shown)
         self._stat_text(frame, i, f, intro)
         if run["ride"] is not None:
             a, land = panel_from(shot, self.fpb), shot.get("land", shot["f0"])
