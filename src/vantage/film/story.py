@@ -1436,7 +1436,8 @@ def _stats(
     stat drifts in by DRIFT, keeping what changed on its picture in frame (`_drift_to`; consecutive
     drifts on one picture, a montage's included, are one move), or holds. Consecutive stats on one
     picture start on the beat with no dip and only the text crossfades. The riding `honesty` line
-    (with its `honesty_facts`) is captioned under every stat's cue and has its own transcript line.
+    (with its `honesty_facts`) is captioned once, its sentences spread under the stats' cues
+    (`Tracks.lasting`), and has its own transcript line.
     Returns the camera the run ends on when that is not the rest view (what follows eases back from
     it)."""
     project, film, lay = b.project, b.film, b.layout
