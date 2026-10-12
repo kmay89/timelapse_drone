@@ -1279,7 +1279,8 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   without one) to the next cue's start, the last to the film's end; sorted, never overlapping;
   consecutive cues with the same text merge. Every cue then gets `tracks.cue_frames`: at least
   1 s (`MIN_CUE_S`) and its length at 17 characters a second. A run of short cues that are only a
-  quiet capture's date label becomes one "<first> – <last>" cue ("June 2026 – August 2026"); any
+  quiet capture's date label becomes one cue naming each date ("June 2026, August 2026": two
+  pictures, never a range); any
   other short cue is held into the next cue, which starts later but ends where it did. Only the
   last cue can stay short (the film ends). A line printed under text that changes meanwhile (the
   line riding along under the stats) is captioned once, as second lines (a cue's `under`;
@@ -1290,12 +1291,15 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   - capture → "<label>. <words>" ("April 2025. Before."); its note is appended only when the whole
     cue stays at or under 17 characters per second of the cue's length (`tracks.CPS`);
   - curtain → one cue per step. A step that prints a line (film.line, its lead, its short first
-    sentence): "<before> / <after>: <line>", from the entry for the first step, else from when its
-    line lands and only the line when the whole does not read at 17 characters/s. A step without:
+    sentence): "<before> / <after>: <line>" from when its line lands, only the line when the whole
+    does not read at 17 characters/s; the first step's labels come in before its line, so they
+    have a cue of their own, "<before> / <after>", from the entry, and its line follows alone from
+    when it lands (never captioned before it is printed). A step without:
     "<before> / <after>: <step text, plain>" from the entry or the sweep start under the same rule,
     else "<before> / <after>";
   - stat → "<value> <unit> <label>" (from the middle of the first stat's entry, then each stat's
-    first frame), with its part of the riding line under it when one rides; E1 → the
+    first frame), ". Source: <source>" added when the whole cue, riding part included, still reads
+    at 17 characters/s, with its part of the riding line under it when one rides; E1 → the
     credit line (else the brand name). The honesty line is also in the transcript's header.
   - Classic cuts: the title, each capture's label (+ note under the same rule) from the middle of
     its incoming crossfade, each section card's name and the credit line.

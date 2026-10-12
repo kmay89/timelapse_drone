@@ -293,7 +293,7 @@ def test_package_lists_tracks(tmp_path, monkeypatch):
     # 0.8 s holds: too short for one date each, so the quiet labels read as spans.
     assert [c["text"] for c in plan.plan["captions"]][:3] == [
         "A Tiny Site",
-        "June 2025 – August 2025",
+        "June 2025, August 2025",  # each date shown, never a range
         "January 2026",
     ]
 
@@ -344,7 +344,8 @@ def test_every_cue_is_readable(tmp_path):
     assert [c for c in p["captions"] if c.get("lasting")]  # the riding line is captioned
     quiet = [s["label"] for s in p["shots"] if s["kind"] == "capture" and not s["step"]]
     assert len(quiet) >= 2
-    assert any(" – " in c["text"] for c in p["captions"])  # the quiet captures as one span
+    spans = [c["text"].split(", ") for c in p["captions"] if ", " in c["text"]]
+    assert any(len(d) > 1 and set(d) <= set(quiet) for d in spans)  # quiet dates as one cue, each named
     for c in p["captions"][:-1]:  # every word a cue carries, its part of a riding line included
         assert c["f1"] - c["f0"] >= tracks.cue_frames(c["text"], FPS), c
     starts = [c["f0"] for c in p["captions"]]
@@ -357,8 +358,13 @@ def test_every_cue_is_readable(tmp_path):
     t.cue(12, "A longer cue that ends the film here.", [])
     caps = t.record(60, title="T", subtitle=None, honesty="H")["captions"]
     assert [(c["f0"], c["f1"], c["text"]) for c in caps] == [
-        (0, 10, "May – June"), (10, 20, "Hi."), (20, 60, "A longer cue that ends the film here."),
+        (0, 10, "May, June"), (10, 20, "Hi."), (20, 60, "A longer cue that ends the film here."),
     ]  # fmt: skip
+    t = tracks.Tracks(10)
+    for k, month in enumerate(("May", "June", "July")):  # a middle date is never left out
+        t.cue(3 * k, month, span=month)
+    t.cue(9, "A longer cue that ends the film here.", [])
+    assert t.record(60, title="T", subtitle=None, honesty="H")["captions"][0]["text"] == "May, June, July"
 
 
 def test_tracks_say_the_curtain_lines_on_screen(tmp_path):
@@ -372,8 +378,9 @@ def test_tracks_say_the_curtain_lines_on_screen(tmp_path):
     p = _plan(project).plan
     curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
     inside = [c for c in p["captions"] if curtain["f0"] <= c["f0"] < curtain["f1"]]
-    assert [c["text"] for c in inside] == ["Then / Now: Old meets new.", "Then / Now: The new park."]
-    assert inside[1]["f0"] == curtain["steps"][1]["land"]  # from when the line lands
+    # The labels first, then each line from when it lands (never before it is printed).
+    assert [c["text"] for c in inside] == ["Then / Now", "Old meets new.", "Then / Now: The new park."]
+    assert inside[1]["f0"] >= curtain["steps"][0]["land"] and inside[2]["f0"] == curtain["steps"][1]["land"]
     line = next(ln["text"] for ln in p["transcript"]["lines"] if ln["text"].startswith("Split screen"))
     assert line.endswith(
         "The line moves to 50%, with the words “Old meets new”: Half and half: the old lot meets the new"
@@ -396,6 +403,17 @@ def test_a_riding_line_is_captioned_once_across_the_stat_cues():
     assert [c.get("lasting") for c in caps] == [None, "Simulated flights.", None, None]
     assert caps[1]["text"] == "12 drone flights over the build\nSimulated flights."
     assert caps[1]["facts"] == ["flights", "d"] and caps[2]["facts"] == ["area"]
+    # A stat's source joins its cue only when the whole, riding part included, reads in time.
+    for under, text in (
+        ("", "12 flights. Source: Flight logs"),
+        ("A riding line of fifty characters, give or take.", "12 flights"),
+    ):
+        t = tracks.Tracks(30)
+        t.cue(0, "12 flights", ["f"], ("12 flights. Source: Flight logs", ["f"]), under=(under, []))
+        t.cue(60, "Credits", [])
+        assert (
+            t.record(120, title="T", subtitle=None, honesty="H")["captions"][0]["text"].split("\n")[0] == text
+        )
 
     ride = "Real aerial photographs only; no in-between images. A demonstration: it is all fictional."
     cues = ["12 drone flights over the build", "13,100 sq ft of old pool, now beach"]

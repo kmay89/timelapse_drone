@@ -1642,9 +1642,10 @@ def _stats(
         if not plain and on.capture.file not in hashes:
             hashes[on.capture.file] = _sha256(project.masters_dir / on.capture.file)
         start_cue = f0 + entry // 2
-        b.tracks.cue(
-            start_cue, cues[k], item["facts"], under=(unders[k], honesty_facts) if unders[k] else None
-        )
+        # The source joins its figure's cue when the whole still reads at 17 characters a second.
+        more = (sentence(cues[k], f"Source: {item['source']}"), item["facts"]) if item["source"] else None
+        under = (unders[k], honesty_facts) if unders[k] else None
+        b.tracks.cue(start_cue, cues[k], item["facts"], more, under=under)
         figure = " ".join(filter(None, (item["value"], item["unit"])))
         source = f" (source: {item['source']})" if item["source"] else ""
         line, facts = f"Figure: {figure} {item['label']}{source}.", list(item["facts"])
@@ -2824,8 +2825,9 @@ def _curtain_tracks(
 ) -> None:
     """A curtain's chapter (the compare title), one caption cue per step and one transcript line
     describing the split and where the line moves. A step with words on screen: its cue is
-    '<before> / <after>: <words>' from the entry for the first step, else from when its words land,
-    the words alone when that does not read at 17 characters per second; the transcript gives the
+    '<before> / <after>: <words>' from when its words land, the words alone when that does not read
+    at 17 characters per second (the first step's: '<before> / <after>' from the entry, then its
+    words alone from when they land); the transcript gives the
     words, then the step's text. A step without: '<before> / <after>: <step text>' when that reads,
     else '<before> / <after>'."""
     before, after = shot["labels"]
@@ -2845,7 +2847,10 @@ def _curtain_tracks(
         if words:
             shown = f"{pair}: {plain_markdown(words)}"
             both = [*label_facts, *words_facts]
-            if k == 0:  # the labels and the first words come in together
+            if k == 0 and record["land"] > start:  # the labels come in first, the words when they land
+                b.tracks.cue(start, pair, label_facts)
+                b.tracks.cue(record["land"], plain_markdown(words), words_facts)
+            elif k == 0:
                 b.tracks.cue(start, shown, both)
             else:
                 b.tracks.cue(record["land"], plain_markdown(words), words_facts, (shown, both))

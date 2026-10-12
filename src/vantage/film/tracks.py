@@ -82,13 +82,14 @@ def cue_frames(text: str, fps: int) -> int:
 
 def _readable(captions: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
     """Give every cue its `cue_frames`: a run of short date-only cues (`span`, quiet captures)
-    becomes one '<first> – <last>' cue; any other short cue is held into the next cue's time (which
+    becomes one '<first>, <next>, …' cue (each date it shows: never a range); any other short cue is held into the next cue's time (which
     then starts later but ends where it did)."""
     out: list[dict[str, Any]] = []
     i = 0
     while i < len(captions):
         c, j = dict(captions[i]), i
         first = c.get("span")
+        dates = [first]
         while (
             first
             and c["f1"] - c["f0"] < cue_frames(c["text"], fps)
@@ -99,7 +100,8 @@ def _readable(captions: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
             j += 1
             nxt = captions[j]
             facts = list(dict.fromkeys([*c["facts"], *nxt["facts"]]))
-            c = {**c, "f1": nxt["f1"], "text": f"{first} – {nxt['span']}", "facts": facts}
+            dates.append(nxt["span"])
+            c = {**c, "f1": nxt["f1"], "text": ", ".join(dates), "facts": facts}
         c.pop("span", None)
         out.append(c)
         i = j + 1
@@ -143,7 +145,7 @@ class Tracks:
         under: tuple[str, Sequence[str]] | None = None,
     ) -> None:
         """A cue from f0; `span` (a quiet capture's date label) lets a run of short cues become one
-        '<first> – <last>' cue; `under` (text, facts) is its second line."""
+        '<first>, <next>' cue; `under` (text, facts) is its second line."""
         if self.enabled and text:
             self.cues.append(
                 {"f0": f0, "text": text, "facts": list(facts), "more": more, "span": span, "under": under}
@@ -173,7 +175,8 @@ class Tracks:
             if f1 <= cue["f0"]:
                 continue
             text, used, span = cue["text"], cue["facts"], cue.get("span")
-            if cue["more"] is not None and fits(cue["more"][0], cue["f0"], f1, self.fps):
+            below = f"\n{cue['under'][0]}" if cue["under"] and cue["under"][0] else ""
+            if cue["more"] is not None and fits(cue["more"][0] + below, cue["f0"], f1, self.fps):
                 text, used, span = cue["more"][0], list(cue["more"][1]), None
             text = one_line(text)
             if captions and captions[-1]["text"] == text and captions[-1]["f1"] == cue["f0"]:
