@@ -424,6 +424,79 @@ def _words_lines(t: _Type, lay: Layout, words: str, zone: str, label_base: float
     return WordsSet(zone, style, x, first, box, tuple(rows), bases)
 
 
+# --------------------------------------------------------------------------- #
+# The title: its word groups and where they sit (shared with film/story.py, which keeps it off the
+# picture's subject)
+# --------------------------------------------------------------------------- #
+
+TITLE_ONE_LINE = 0.75  # a title set on one line keeps at least this share of its wrapped size
+
+
+def title_groups(title: str) -> list[str]:
+    """The title's word groups (up to three, split by word count), which rise in turn."""
+    words = title.split()
+    n = len(words)
+    sizes = [n // 3 + (1 if g < n % 3 else 0) for g in range(min(3, n))]
+    groups, k = [], 0
+    for size in sizes:
+        groups.append(" ".join(words[k : k + size]))
+        k += size
+    return groups
+
+
+def title_rows(
+    t: _Type, lay: Layout, groups: Sequence[str], one_line: bool = False
+) -> tuple[float, list[list[int]]]:
+    """(scale, lines of group indices) of the title: shrunk until every group fits between the
+    margins and flowed onto balanced lines; `one_line`: all of it on one line, shrunk to fit."""
+    width = lay.text_width
+    if one_line:
+        whole = t.width(" ".join(groups), TITLE)
+        return (min(1.0, width / whole * 0.98) if whole > 0 else 1.0), [list(range(len(groups)))]
+    scale = 1.0
+    widest = max(t.width(g, TITLE) for g in groups)
+    if widest > width:
+        scale = width / widest * 0.98
+    space = t.width(" ", TITLE, scale)
+    lines: list[list[int]] = [[]]
+    x = 0.0
+    for g, text in enumerate(groups):
+        w = t.width(text, TITLE, scale)
+        if lines[-1] and x + space + w > width:
+            lines.append([])
+            x = 0.0
+        x += (space if lines[-1] else 0) + w
+        lines[-1].append(g)
+    if len(lines) > 1:  # the same number of lines, evened out: never a lone short last group
+        rows = balance(groups, len(lines), lambda a, b: t.width(" ".join(groups[a:b]), TITLE, scale), width)
+        if rows:
+            lines = [list(range(a, b)) for a, b in rows]
+    return scale, lines
+
+
+def title_box(t: _Type, lay: Layout, kicker: str | None, title: str, one_line: bool = False) -> Box4:
+    """The ink of the title's kicker and title (with the title's rise) as `_typeset_title` sets them,
+    in px; `one_line` as `title_rows`."""
+    u = t.unit
+    base_k = lay.label_top + _cap_of(t, KICKER)
+    top = float(lay.label_top) if kicker else math.inf
+    right = lay.margin + (t.width(kicker.upper(), KICKER) * 1.1 if kicker else 0.0)  # its tracking out
+    bottom = base_k if kicker else float(lay.label_top)
+    groups = title_groups(title)
+    if groups:
+        scale, lines = title_rows(t, lay, groups, one_line)
+        style = _Style(TITLE.role, TITLE.size * scale, TITLE.weight, leading=TITLE.leading)
+        base = (base_k if kicker else lay.label_top) + 30 * u + _cap_of(t, style)
+        step = style.size * u * style.leading
+        for row, line in enumerate(lines):
+            text = " ".join(groups[g] for g in line)
+            _x0, y0, x1, y1 = t.font(style).getbbox(text, anchor="ls")
+            top = min(top, base + row * step + y0)
+            right = max(right, lay.margin + x1)
+            bottom = max(bottom, base + row * step + y1 + RISE * u)
+    return float(lay.margin), top if top < math.inf else float(lay.label_top), right, bottom
+
+
 def panel_from(shot: dict[str, Any], fpb: int) -> int:
     """The frame a stat run's panel (and its riding line) starts to come in, from the run's first
     stat: a beat before its figure lands, so the panel rises with the picture rather than popping in,
@@ -798,33 +871,6 @@ class _Cut:
         elif surface != "paper" and self.tag_on_paper is not None:
             self._put_tag(frame)
 
-    def _wrap_groups(
-        self, groups: Sequence[str], style: _Style, width: float
-    ) -> tuple[float, list[list[int]]]:
-        """Shrink the title until every group fits; flow groups onto lines. (scale, lines of group idx)."""
-        t = self.type
-        scale = 1.0
-        widest = max(t.width(g, style) for g in groups)
-        if widest > width:
-            scale = width / widest * 0.98
-        space = t.width(" ", style, scale)
-        lines: list[list[int]] = [[]]
-        x = 0.0
-        for g, text in enumerate(groups):
-            w = t.width(text, style, scale)
-            if lines[-1] and x + space + w > width:
-                lines.append([])
-                x = 0.0
-            x += (space if lines[-1] else 0) + w
-            lines[-1].append(g)
-        if len(lines) > 1:  # the same number of lines, evened out: never a lone short last group
-            rows = balance(
-                groups, len(lines), lambda a, b: t.width(" ".join(groups[a:b]), style, scale), width
-            )
-            if rows:
-                lines = [list(range(a, b)) for a, b in rows]
-        return scale, lines
-
     def _typeset(self) -> None:
         lay, u = self.lay, self.u
         self.layers: dict[str, Any] = {}
@@ -1090,16 +1136,10 @@ class _Cut:
                 kick_layers.append(layer)
             boxes.append(box)  # the widest tracking, where it ends
             self._note(shot["id"], "kicker", box)
-        words = (text.get("title") or "").split()
-        n = len(words)
-        sizes = [n // 3 + (1 if g < n % 3 else 0) for g in range(min(3, n))]
-        groups, k = [], 0
-        for size in sizes:
-            groups.append(" ".join(words[k : k + size]))
-            k += size
+        groups = title_groups(text.get("title") or "")
         group_layers = []
         if groups:
-            scale, lines = self._wrap_groups(groups, TITLE, lay.text_width)
+            scale, lines = title_rows(t, lay, groups, one_line=shot.get("title_lines") == 1)
             style = _Style(TITLE.role, TITLE.size * scale, TITLE.weight, leading=TITLE.leading)
             space = t.width(" ", style)
             base = (base_k if kicker else lay.label_top) + 30 * u + self._cap(style)

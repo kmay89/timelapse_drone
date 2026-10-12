@@ -1187,6 +1187,33 @@ def _changed_at(root: Path, spots: dict[str, list[tuple[float, float]]]) -> None
 QUIET_STEPS = [STEPS[0], {"capture": DATES[2], "text": "**Demolition.** In ten weeks the slides are gone."}]
 
 
+@pytest.mark.parametrize(("y", "lines"), [(0.45, 1), (0.2, None)])
+def test_title_goes_on_one_line_off_what_changes(tmp_path, y, lines):
+    """The screen's large title wraps; when its second line would sit on what the film shows changing
+    on its picture (y 0.45), it goes on one line above it instead; when one line covers as much (the
+    change is up top, y 0.2), it keeps its lines and the plan warns that it sits on the subject."""
+    root = tmp_path / "p"
+    project = tiny(root, steps=QUIET_STEPS, films={"screen": {"preset": "screen"}}, simulated=True)
+    _changed_at(root, {DATES[4]: [(0.3, y), (0.6, y)]})
+    plan = plan_films(project, only=["screen"], fast=False)["screen"]
+    title = plan.plan["shots"][1]
+    assert title["kind"] == "title" and title.get("title_lines") == lines, title
+    assert title["title_subject"]["wrap"] > 1.0, title
+    warned = [w for w in plan.warnings if w.startswith("title:")]
+    cut = _Cut(project, plan)
+    rows = {i["box"][1] for i in cut.ink if i["shot"] == title["id"] and i["layer"].startswith("title ")}
+    if lines == 1:
+        assert title["title_subject"]["one line"] < 0.5 and not warned, (title, warned)
+        assert max(rows) - min(rows) <= 2, rows  # every group on one row
+        x0, y0, x1, y1 = cut.lay.rect
+        for i in cut.ink:
+            if i["shot"] == title["id"]:
+                bx, by, bw, bh = i["box"]
+                assert x0 - 1 <= bx and bx + bw <= x1 + 1 and y0 - 1 <= by and by + bh <= y1 + 1, i
+    else:
+        assert max(rows) - min(rows) > 10 and len(warned) == 1, (rows, warned)
+
+
 def _words_step(plan: FilmPlan) -> dict[str, Any]:
     return next(
         s["step"] for s in plan.plan["shots"] if s.get("step") and s["step"]["words"] == "Demolition."

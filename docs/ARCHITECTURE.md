@@ -620,7 +620,14 @@ small masters leave little to push, they are 77 and 77 beats.
   the scrim's removal never pops). The shot is lengthened until the kicker (on from B/3) and then
   the title (all in at 2B, or once the kicker is read) are on screen for as long as they take to
   read at 17 characters a second, plus the beat they leave over (the demo: 6 beats). Frame 0 is the
-  image.
+  image. The groups flow onto balanced lines (shrunk only when a group alone is too wide); the title
+  goes on one line instead (`title_lines: 1`, shrunk to fit, never under 0.75 of its wrapped size,
+  `cut.TITLE_ONE_LINE`) when its wrapped lines sit on what the film shows changing on its picture
+  (film/subject.py: the title picture against the vantage's last; `title_subject` {wrap, one line}:
+  how much of it each covers, the box padded like the title's scrim, at the rest view) by more than
+  0.5 and 0.25 more than one line does; a title that covers more than 1.0 either way is a plan
+  warning. The demo's screen loop (type_scale 1.6) sets "Where the Wave Pool Was" on one line above
+  the pool; the cuts keep their lines.
 - **capture** (one per capture of each series: `from`..`to` minus `exclude`d captures): 1 beat with
   no step, 3 with a step, 4 with a push (at least 3 when the film has a single image).
   - Every capture except the film's first image starts with a dissolve on its first frame: `_mix` in
@@ -1151,7 +1158,8 @@ Shots (in film order; `f0`, `f1` are frames, half-open; `key` is the storyboard 
 Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without one):
 
 - `title` (`T1`): `vantage`, `capture` (date), `file`, `groups` (the frames the title's word groups
-  start rising). Text roles `kicker`, `title`.
+  start rising), `title_subject` and `title_lines` (1, when the title goes on one line; see the
+  title above). Text roles `kicker`, `title`.
 - `capture` (`S01…`): `vantage`, `capture` (date), `label`, `file`, `dissolve` (`{from: <date> |
   <curtain or stat id> | "night" | "paper", f0, f1}`, plus `cam` [x, y, zoom] when the image before
   is another vantage's, or null on the film's first image), `series` (ordinal; a montage has its

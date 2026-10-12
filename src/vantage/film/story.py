@@ -776,7 +776,61 @@ class _Builder:
         return self.paper_dip if "paper" in (surface, theirs) and surface != theirs else self.grid.dissolve
 
 
-def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> dict[str, Any]:
+def _title_lines(
+    b: _Builder, kicker: str | None, title: str, cap: _Capture, last: str | None, geo: Geometry, rest: Cam
+) -> dict[str, Any]:
+    """Whether the title keeps its wrapped lines or goes on one line (`title_lines: 1`): its subject
+    is what the film shows changing on its picture (film/subject.py: the title picture against the
+    vantage's last); the wrapped title stays while it covers at most WORDS_CLEAR of it or within
+    WORDS_MARGIN of one line, else the title goes on one line (shrunk, never under TITLE_ONE_LINE of
+    its wrapped size), and a title on the subject either way (over WORDS_ON) is a warning."""
+    from vantage.film.cut import TITLE_ONE_LINE, title_box, title_groups, title_rows
+    from vantage.film.subject import subject_map, under
+
+    placer, lay = b.placer, b.layout
+    groups = title_groups(title)
+    if placer is None or not groups or last is None or last == cap.file:
+        return {}
+    t = placer.t
+    wrapped, rows = title_rows(t, lay, groups)
+    one, _ = title_rows(t, lay, groups, one_line=True)
+    subject = subject_map(placer.seen, cap.file, last, [])
+    u = lay.unit
+    crops = [_crop(geo, rest)]
+    on: dict[str, float] = {}
+    for name, single in (("wrap", False), ("one line", True)):
+        if single and (len(rows) < 2 or one < TITLE_ONE_LINE * wrapped):
+            continue
+        x0, y0, x1, y1 = title_box(t, lay, kicker, title, single)
+        box = ((x0 - 26 * u) / lay.width, (y0 - 18 * u) / lay.height,
+               (x1 + 26 * u) / lay.width, (y1 + 18 * u) / lay.height)  # fmt: skip
+        on[name] = round(under(subject, crops, box), 3)
+    pick = "wrap"
+    if "one line" in on and on["wrap"] > WORDS_CLEAR and on["wrap"] > on["one line"] + WORDS_MARGIN:
+        pick = "one line"
+    return {**({"title_lines": 1} if pick == "one line" else {}), "title_subject": on}
+
+
+def _warn_title(b: _Builder, title: str, record: dict[str, Any]) -> None:
+    """Warn when the title, as `_title_lines` set it, sits on its picture's subject."""
+    on = record.get("title_subject") or {}
+    pick = "one line" if record.get("title_lines") == 1 else "wrap"
+    if on.get(pick, 0.0) > WORDS_ON:
+        b.warnings.append(
+            f"title: {title!r} sits on what changes on its picture ({b.film.id}; {pick} covers "
+            f"{on[pick]:.1f}× its share of it)"
+        )
+
+
+def _title(
+    b: _Builder,
+    vantage: str,
+    cap: _Capture,
+    dates: Sequence[str],
+    last: str | None = None,
+    geo: Geometry | None = None,
+    rest: Cam = (0.5, 0.5, 1.0),
+) -> dict[str, Any]:
     project, cfg = b.project, b.project.config
     hero = next((ch for ch in project.story.chapters if isinstance(ch, HeroChapter)), None)
     kicker, kicker_facts = b.said(hero.kicker if hero else None, "hero kicker")
@@ -807,6 +861,9 @@ def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> di
         "file": cap.file,
         "groups": [f0 + B, f0 + B + third, f0 + B + 2 * third],
     }
+    if geo is not None:  # one line when the wrapped title sits on what changes on its picture
+        shot.update(b.decide("title:lines", lambda: _title_lines(b, kicker, title, cap, last, geo, rest)))
+        _warn_title(b, title, shot)
     # All in by 2B; held until kicker and title read at 17 characters a second, the kicker first (it
     # is in from B/3, while the title rises), then the title once it is in; out over the last beat.
     fps = b.grid.fps
@@ -1934,7 +1991,11 @@ def _derive_cut(
             {"id": "R1", "kind": "rise", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["rise"]
         )
         rise["key"] = rise["f0"] + B
-    _title(b, first.vantage, first_cap, [c.date for c in every])
+    seq = caps.of(first.vantage)
+    _title(
+        b, first.vantage, first_cap, [c.date for c in every], seq[-1].file if seq else None,
+        first.geometry, b.rest(first),
+    )  # fmt: skip
     cam = b.camera
     cam.hold(0, b.rest(first))
 
