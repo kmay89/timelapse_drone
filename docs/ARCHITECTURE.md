@@ -87,7 +87,7 @@ projects/
 tests/                   pytest (unit + synthetic end-to-end)
 web-tests/               Playwright (iPhone WebKit + Chromium) screenshots & interaction tests
 .claude/skills/          Claude Code skills that drive a new client project end to end
-.github/workflows/       CI, Pages deploy, releases
+.github/workflows/       CI, full-size films (films.yml), Pages deploy, releases
 docs/                    blueprint, research, capture guide, this file
 ```
 
@@ -1031,8 +1031,12 @@ of the right edge.
   `work/film/flash/<key>.json` (keyed by the proxy plan's hash, its sizes and a digest of the
   renderer's sources), so re-planning an unchanged film (`--plan-only`, the package stale check)
   renders no proxy. `vantage validate` plans without the margin (`plan_films(margin=False)`): it
-  reads only the plans' warnings. The demo films
-  measure at most 2 transitions a second at full size (tests/test_film_full.py, slow).
+  reads only the plans' warnings. The demo films measure at most 2 transitions a second at full
+  size (tests/test_film_full.py, slow), and so does the CI-sized demo (ci.yml's demo job fails on a
+  film whose `render.flash` exceeds its limit). `.github/workflows/films.yml` runs the slow film
+  tests (full-size footage cached by the generator's source) on pull requests that touch
+  `src/vantage/film/`, `src/vantage/demo/`, `tests/test_film_*.py` or the demo project, and on
+  demand: the only CI that renders real pushes.
 
 ### plan.json
 

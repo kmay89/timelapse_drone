@@ -6,9 +6,11 @@ pytest's cache between sessions, or VANTAGE_TEST_FOOTAGE), aligns it into master
 For each film: the meter measures at most 2 flash transitions per region in any second (the
 planner's margin, film/margin.py; WCAG 2.3.1 allows 3); every step that asks for a push really
 pushes (zoom ≥ 1.2) and its subject ends inside the frame and outside its words' ink; every frame
-of a stat from its words' landing to its text's exit shows its words and, once in, its figure; the
-film spends at most 6 s on night after its last picture; and its length is within the target (both
-cuts 40–48 s, the screen loop at most 80 s).
+of a stat from its words' landing to its text's exit shows its words and, once in, its figure;
+every measured scrim (the tag, date labels, title kickers, stat panels) keeps the contrast its text
+asks; the film spends at most 6 s on night after its last picture; and its length is within the
+target (both cuts 40–48 s, the screen loop at most 80 s). CI runs this module on pull requests that
+touch the films (.github/workflows/films.yml).
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import pytest
 
 from test_film_story import _cores, _NoText
 from vantage.config import Project, load_project
-from vantage.film.cut import _Cut
+from vantage.film.cut import SMALL_CONTRAST, _Cut
 from vantage.film.render import render_film
 from vantage.film.story import Geometry
 from vantage.models import FilmPlan, MastersIndex
@@ -182,3 +184,16 @@ def test_full_size_length_and_tail(full, fid):
     assert (p["frames"] - end["f0"]) / p["fps"] <= TAIL_S, (fid, end, p["frames"])
     images = [s for s in p["shots"] if s["kind"] in ("title", "capture", "curtain", "stat")]
     assert images[-1]["f1"] == end["f0"], fid  # the last picture runs into the end card's dip
+
+
+@pytest.mark.parametrize("fid", FILMS)
+def test_full_size_scrims_keep_their_contrast(full, fid):
+    """Every scrim the cut measured keeps its text's contrast over the full-size pictures it crosses
+    (WCAG 1.4.3): the tag, each date label and title kicker at 4.5:1, a stat panel at its target."""
+    plan = _plan(full, fid)
+    scrims = plan.checks["scrims"]
+    texts = {r.get("text") for r in scrims}
+    assert "tag" in texts and any(" label" in str(t) for t in texts), (fid, texts)
+    for record in scrims:
+        target = record.get("target", SMALL_CONTRAST)
+        assert record["contrast"] >= target, (fid, record)

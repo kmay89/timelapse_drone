@@ -89,10 +89,11 @@ confirmed from a primary source (October 2026); **[R]** reported or secondary; *
   Playwright 1.56 descriptors go up to iPhone 15 Pro Max [C]. Real Mobile Safari needs a macOS runner
   with the iOS Simulator (`xcrun simctl`), billed at macOS rates on private repos.
 - Lighthouse CI runs Chromium only: a performance proxy, not iOS verification ([LHCI](https://github.com/GoogleChrome/lighthouse-ci/blob/main/docs/getting-started.md)).
-- Workflows used here: `ci.yml` (python, demo + budgets, web), `pages.yml` (demo only), `release.yml`
-  (tags `v*` and `<slug>@<edition>`). Candidates for later: an iOS Simulator smoke test on release,
-  PR previews on Netlify/Cloudflare (Pages PR previews are not public), a reusable build workflow for
-  the private projects repo, `claude-code-action` for `@claude` mentions.
+- Workflows used here: `ci.yml` (python, demo + budgets, web), `films.yml` (slow full-size film tests
+  on film changes), `pages.yml` (demo only), `release.yml` (tags `v*` and `<slug>@<edition>`).
+  Candidates for later: an iOS Simulator smoke test on release, PR previews on Netlify/Cloudflare
+  (Pages PR previews are not public), a reusable build workflow for the private projects repo,
+  `claude-code-action` for `@claude` mentions.
 
 ## Claude Code mechanics
 

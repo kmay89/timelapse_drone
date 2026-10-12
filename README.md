@@ -88,8 +88,9 @@ npm ci && npm run test:web:local         # Playwright on Chromium (iPhone 15 Pro
 ```
 
 CI (`.github/workflows/`) runs lint and tests, builds the demo with budgets, then runs the browser
-suite on iPhone WebKit and desktop Chromium; pushes to `main` publish the demo to GitHub Pages; tags
-build releases. Working with Claude Code: [CLAUDE.md](CLAUDE.md).
+suite on iPhone WebKit and desktop Chromium; pull requests that touch the films also render the demo's
+films at full size (`films.yml`, the slow tests); pushes to `main` publish the demo to GitHub Pages;
+tags build releases. Working with Claude Code: [CLAUDE.md](CLAUDE.md).
 
 ## Documentation
 
