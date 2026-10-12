@@ -611,7 +611,8 @@ small masters leave little to push, they are 77 and 77 beats.
 
 - **title** (at least `title_beats`, 4): the first image (the first series capture, else the first
   curtain's before image) at rest under a 30 % night
-  scrim. The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
+  wash and a night scrim behind the text (0.45, raised until the kicker keeps 4.5:1, see the
+  scrims below; it comes in over beat 0). The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
   across beat 0; the title's word groups (up to three, split by word count) rise on frames B, B + B/3
   and B + 2B/3 (`groups`), all in by 2B. Text and scrim fade out over the last beat (B frames, so
   the scrim's removal never pops). The shot is lengthened until the kicker (on from B/3) and then
@@ -919,9 +920,9 @@ renderer no longer has constants of its own.
   `checks` (not hashed): `{"safe": [x0, y0, x1, y1], "ink": [{"shot": id | null, "layer": name,
   "box": [x, y, w, h]}], "outside": [indices]}`, and for a story cut with stats over a picture
   `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "target", "box": [x, y, w, h]}, {"text":
-  "tag" | "<shot id> label", "alpha", "contrast"}]` (each run's measured panel, the contrast it gives
-  and the one it was measured to;
-  then the tag's and each date label's measured scrim, see below). A box more than 1 px (antialiasing) outside the safe
+  "tag" | "<shot id> kicker" | "<shot id> label", "alpha", "contrast"}]` (each run's measured panel,
+  the contrast it gives and the one it was measured to;
+  then the tag's, each title kicker's and each date label's measured scrim, see below). A box more than 1 px (antialiasing) outside the safe
   rectangle is a plan warning; `vantage film --release` refuses it.
 
 Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
@@ -934,12 +935,14 @@ same way ("Where the / Wave Pool Was", not "Where the Wave Pool / Was"). Classic
 filling. Scrims are
 feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands;
 a stat run's panel is one such box in the run's tint, its opacity measured (see "stat"). The tag (22
-units, caps, fully opaque) and a capture's date label (52 units) are small text: their scrims are
-measured too (`_Cut._least_scrim`), the least opacity from 0.30 (tag) or 0.42 (label) up to 0.95 at
+units, caps, fully opaque), a title's kicker (38 units, accent) and a capture's date label (52 units)
+are small text: their scrims are measured too (`_Cut._least_scrim`), the least opacity from 0.30
+(tag), 0.45 (the title's scrim, for its kicker) or 0.42 (label) up to 0.95 at
 which the text, composited over the scrimmed picture, keeps 4.5:1 between its glyph cores' median
 luminance and the 95th-percentile brightest pixel 1 to 4 px around its glyphs. The tag's is measured
 once over every half beat of the film (frames rendered without it: pictures, dissolves and panels),
-a date label's over its own shot's picture along the camera. A stat run's panel stays
+a kicker's over its title's picture (under the title's wash) while its text is up, a date label's
+over its own shot's picture along the camera. A stat run's panel stays
 `TAG_CLEAR` (44 + 3·16 + 8) units clear of the tag (above it in 9:16, below a top-right tag), so a
 paper panel's feather never lightens the picture under the tag.
 In 9:16 (story and classic) every word, the end card and the rail stay between 0.14H and 0.72H, clear

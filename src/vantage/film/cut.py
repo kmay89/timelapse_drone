@@ -88,6 +88,7 @@ LARGE_CONTRAST = 3.0  # WCAG 1.4.3 for large text: a stat panel whose every text
 # wide on a phone (scaled with the short edge; type_scale makes text larger, not the threshold).
 LARGE_TEXT = 24 * 1080 / 393
 TAG_SCRIM, LABEL_SCRIM = 0.3, 0.42  # the least scrim behind the tag and a date label (raised as measured)
+TITLE_SCRIM = 0.45  # the least scrim behind the title and its kicker (raised as the kicker needs)
 PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 sigma clear of the ink
 # Units between a stat run's ink and the tag's: the panel's padding and feather (3 sigma) end 8 units
 # clear of the tag, so a paper panel never lightens the picture under the tag's paper type.
@@ -729,16 +730,39 @@ class _Cut:
             self.measured.append({"text": key, "alpha": alpha, "contrast": round(contrast, 2)})
         return self.levels[key]
 
+    def _title_level(self, i: int) -> float:
+        """A title's scrim: TITLE_SCRIM, raised over its own picture (every half beat while its text
+        is up, under the title's wash) until its kicker, small accent type, keeps 4.5:1."""
+        shot = self.shots[i]
+        key = f"{shot['id']} kicker"
+        if key not in self.levels:
+            L = self.layers[shot["id"]]
+            if not L["kicker"] or L["scrim"] is None:
+                return TITLE_SCRIM
+            frames = []
+            for f in self._sampled(shot["f0"], max(shot["f0"] + 1, shot["f1"] - self.fpb)):
+                frame = self._warp(shot["file"], self.camera(f))
+                frames.append(cv2.addWeighted(frame, 0.7, self.card_bg, 0.3, 0))  # `_title`'s wash
+            alpha, contrast = self._least_scrim(L["kicker"][-1], L["scrim"], frames, TITLE_SCRIM)
+            self.levels[key] = alpha
+            self.measured.append({"text": key, "alpha": alpha, "contrast": round(contrast, 2)})
+        return self.levels[key]
+
     @property
     def scrims(self) -> list[dict[str, Any]]:
-        """Every measured scrim, for plan.json checks: the stat panels, then the tag's and each date
-        label's (measured here if no frame has needed them yet)."""
+        """Every measured scrim, for plan.json checks: the stat panels, then the tag's, each title
+        kicker's and each date label's (measured here if no frame has needed them yet)."""
         if self.tag is not None and self.tag_scrim is not None:
             self._tag_level()
         for i, shot in enumerate(self.shots):
             if shot["kind"] == "capture":
                 self._label_level(i)
-        order = {"tag": -1, **{f"{s['id']} label": k for k, s in enumerate(self.shots)}}
+            elif shot["kind"] == "title":
+                self._title_level(i)
+        order = {
+            "tag": -1,
+            **{f"{s['id']} {what}": k for k, s in enumerate(self.shots) for what in ("label", "kicker")},
+        }
         return [*self.panels, *sorted(self.measured, key=lambda r: order.get(r["text"], 0))]
 
     def _surface_tag(self, frame: np.ndarray, surface: str) -> None:
@@ -1037,7 +1061,7 @@ class _Cut:
                 max(b[2] for b in boxes),
                 max(b[3] for b in boxes),
             )
-            scrim = self._scrim(bbox, 0.45, RISE * u)
+            scrim = self._scrim(bbox, 1.0, RISE * u)  # its unit mask: drawn at `_title_level`
         self.layers[shot["id"]] = {"kicker": kick_layers, "groups": group_layers, "scrim": scrim}
 
     def _stack(self, items: Sequence[dict[str, str]], sid: str | None = None) -> _Layer:
@@ -1452,7 +1476,10 @@ class _Cut:
         groups = shot["groups"]
         seen = [ramp(f, groups[g], third) for g in range(len(L["groups"]))]
         kick = ramp(f, shot["f0"], third) if L["kicker"] else 0.0
-        _put(frame, L["scrim"], max([kick, *seen]) * out)
+        # The scrim comes in over the kicker's whole beat (a raised one would otherwise darken the
+        # picture in a third of a beat), and is full before the title's first group rises.
+        under = ramp(f, shot["f0"], self.fpb) if L["kicker"] else 0.0
+        _put(frame, L["scrim"], max([under, *seen]) * out * self._title_level(i))
         if L["kicker"]:
             _put(frame, L["kicker"][min(f - shot["f0"], len(L["kicker"]) - 1)], kick * out)
         for g, layer in enumerate(L["groups"]):

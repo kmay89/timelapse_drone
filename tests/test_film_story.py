@@ -1640,6 +1640,36 @@ def test_tag_and_date_labels_keep_small_text_contrast(tmp_path, monkeypatch, fid
         assert panel[1] + panel[3] + (PANEL_PAD + 3 * PANEL_SIGMA) * cut.u <= tag[1], (panel, tag)
 
 
+def test_title_kicker_keeps_small_text_contrast_over_a_light_picture(tmp_path):
+    """The title's kicker is small accent type: over a light picture its scrim is raised from
+    TITLE_SCRIM until the kicker keeps 4.5:1 (plan.json checks.scrims, '<title id> kicker'), and the
+    rendered frame shows it."""
+    import cv2 as cv
+
+    from vantage.film.cut import TITLE_SCRIM
+
+    root = tmp_path / "p"
+    project = tiny(root, film={"width": 640, "height": 360})
+    for date in DATES:  # a pale, sunlit picture: the accent kicker over it alone is far under 4.5:1
+        img = np.full((SIZE[1], SIZE[0], 3), (214, 222, 226), np.uint8)
+        cv.imwrite(str(root / "masters" / "site" / f"{date}.jpg"), img)
+    plan = _plan(project)
+    cut = _Cut(project, plan)
+    title = next(s for s in plan.plan["shots"] if s["kind"] == "title")
+    record = next(r for r in cut.scrims if r.get("text") == f"{title['id']} kicker")
+    assert record["alpha"] > TITLE_SCRIM and record["contrast"] >= SMALL_CONTRAST, record
+    kicker = cut.layers[title["id"]]["kicker"][-1]
+    a = kicker.alpha[..., 0]
+    m = (a > 0.02).astype(np.uint8)
+    ring = cv.dilate(m, np.ones((9, 9), np.uint8)) & (1 - cv.dilate(m, np.ones((3, 3), np.uint8)))
+    cy, cx = np.nonzero(a >= 0.9 * a.max())
+    ry, rx = np.nonzero(ring)
+    frame = cut.frame_at(title["f0"] + (title["f1"] - title["f0"]) // 2)
+    lt = float(np.median(_lum(frame[cy + kicker.y, cx + kicker.x])))
+    lb = float(np.quantile(_lum(frame[ry + kicker.y, rx + kicker.x]), 0.95))
+    assert (max(lt, lb) + 0.05) / (min(lt, lb) + 0.05) >= SMALL_CONTRAST, (lt, lb)
+
+
 def test_a_film_names_its_stats_by_fact(tmp_path):
     """films.<id>.stats may name the items to show by the facts their values print, in that order;
     an id no item prints is a warning. A count, or a list of more than six or with repeats, is
