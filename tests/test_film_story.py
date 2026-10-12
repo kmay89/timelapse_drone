@@ -1878,7 +1878,7 @@ def test_cross_vantage_dissolve_may_cut_the_camera(tmp_path):
 
 @pytest.mark.slow
 def test_demo_story_cut(tmp_path):
-    """The fictional demo end to end (fast footage → masters → plans): both story cuts are 77 beats
+    """The fictional demo end to end (fast footage → masters → plans): both story cuts are 78 beats
     (two figures, two or three montage pictures: story.yaml films, and what the flash margin holds
     or softens), both close on their stats (the first over the shoreline montage's last picture, the
     second over the overview's latest), both within
@@ -1913,7 +1913,7 @@ def test_demo_story_cut(tmp_path):
     assert tower.id == "slide-tower"
     for fid, plan in plans.items():
         p = plan.plan
-        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 77, "9x16": 77}[fid], (fid, p["grid"])
+        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 78, "9x16": 78}[fid], (fid, p["grid"])
         check_plan(p)
         assert p["flash"]["limit"] == 2 and plan.checks["flash"]["estimate"] <= 2, (fid, plan.checks)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")

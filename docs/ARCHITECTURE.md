@@ -610,12 +610,12 @@ its first figure sits on the montage's last picture and the next on the main van
 neither the middle of the film nor its close is one photograph, and the film closes on its figures
 over the site seen anew. Explore, text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
 plays the main vantage's captures as one quiet series. For the demo at full size the 16:9 cut is
-79 beats (47.4 s: two figures and two montage pictures, story.yaml `films.16x9`) and the 9:16 79
-(47.4 s: two figures and three montage pictures, `films.9x16`), each with 5.4 s on night (the end
+80 beats (48.0 s: two figures and two montage pictures, story.yaml `films.16x9`) and the 9:16 80
+(48.0 s: two figures and three montage pictures, `films.9x16`), each with 5.4 s on night (the end
 card) after the stats (the first over the shoreline montage's last picture, the second over the
 overview's latest), and with the
 holds and softened pushes of its flash margin (see Safety); from the CI-sized demo footage, whose
-small masters leave little to push, they are 77 and 77 beats.
+small masters leave little to push, they are 78 and 78 beats.
 
 - **title** (at least `title_beats`, 4): the first image (the first series capture, else the first
   curtain's before image) at rest under a 30 % night
