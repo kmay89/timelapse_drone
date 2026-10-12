@@ -897,6 +897,7 @@ class _Cut:
             labels.append(layer)
             scrims.append(self._scrim(box, 0.42))
         words, word_scrims, index = [], [], {}
+        boxes: list[list[int]] = []
         for k, step in enumerate(shot["steps"]):
             if step.get("words"):
                 layer, scrim = self._words(
@@ -905,11 +906,13 @@ class _Cut:
                 index[k] = len(words)
                 words.append(layer)
                 word_scrims.append(scrim)
+                boxes.append(self.ink[-1]["box"])  # its ink, rise included: where the rule breaks
         self.layers[shot["id"]] = {
             "labels": labels,
             "label_scrims": scrims,
             "words": words,
             "words_scrims": word_scrims,
+            "words_boxes": boxes,
         }
         self.curtain_words[shot["id"]] = index
         self.curtain_keys[shot["id"]] = (
@@ -1282,15 +1285,24 @@ class _Cut:
             self._stat_text(frame, j, last, opacity, landed=True)
             _put(frame, run["ride"], opacity)
 
-    def _grip(self, frame: np.ndarray, x: float, opacity: float) -> None:
-        """The curtain rule (3 units, accent) and its grip (44 units at 0.56H) at x."""
+    def _grip(
+        self, frame: np.ndarray, x: float, opacity: float, gaps: Sequence[tuple[float, float, float]] = ()
+    ) -> None:
+        """The curtain rule (3 units, accent) and its grip (44 units at 0.56H) at x; the rule breaks
+        over each gap (y0, y1, strength: how far it fades there, the words' opacity)."""
         if opacity <= 0.002:
             return
         u, h = self.u, self.height
         y = 0.56 * h
         r = 22 * u
         before = frame.copy() if opacity < 0.998 else None
+        xa, xb = max(0, math.floor(x - 3 * u)), min(self.width, math.ceil(x + 3 * u) + 1)
+        under = frame[:, xa:xb].copy() if gaps else None
         _bar(frame, x - 1.5 * u, 0, x + 1.5 * u, h, self.accent)
+        for y0, y1, o in gaps:
+            a, b = max(0, math.floor(y0)), min(h, math.ceil(y1))
+            if b > a and under is not None:
+                frame[a:b, xa:xb] = cv2.addWeighted(under[a:b], o, frame[a:b, xa:xb], 1 - o, 0)
         _disc(frame, x, y, r, self.accent, self.night_bgr, 1.5 * u)
         for d in (-1, 1):  # chevrons
             pts = np.array([[x + d * 5 * u, y - 7 * u], [x + d * 11 * u, y], [x + d * 5 * u, y + 7 * u]])
@@ -1349,7 +1361,16 @@ class _Cut:
             self._ghost(frame, i - 1, 1 - ramp(f, shot["f0"], half))
         x = split * self.width
         edge = min(1.0, max(0.0, min(x, self.width - x) / (24 * self.u)))
-        self._grip(frame, x, fade * edge)
+        # The rule breaks behind a line it crosses (its ink box and 12 units round it), so it never
+        # slices through the words.
+        gaps = []
+        L, pad = self.layers[shot["id"]], 12 * self.u
+        for k, idx in self.curtain_words[shot["id"]].items():
+            bx, by, bw, bh = L["words_boxes"][idx]
+            e, out = self._line(shot, k, f)
+            if e * out > 0.002 and bx - pad <= x <= bx + bw + pad:
+                gaps.append((by - pad, by + bh + pad, e * out))
+        self._grip(frame, x, fade * edge, gaps)
         self._curtain_overlays(frame, i, f, x, fade)
         self._put_tag(frame)
         if d is not None and not mixed and w < 1:

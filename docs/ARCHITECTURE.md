@@ -709,6 +709,8 @@ small masters leave little to push, they are 77 and 77 beats.
     is at least 8 px clear of its ink. A label fades in over B/3, out over the last B/3 frames of its
     interval, and is clipped to its own side of the rule.
   - The rule is 3 units wide in the accent colour; the grip is a 44-unit disc with chevrons at 0.56H.
+    Where the rule crosses a step's line it breaks behind the line's ink box and 12 units round it
+    (fading as the line does), so it never slices through the words.
 - **stat** (`N1…`, at least 4 beats each, at most `stats`, default 3): items of the first stats chapter in
   scope, in order, whose value contains a `{fact:}` token. Any other item, and any item whose value,
   unit, label or source uses a do-not-print fact, is left out with a plan warning. The stats of a

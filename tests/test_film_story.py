@@ -1280,6 +1280,32 @@ def test_curtain_line_sits_clear_of_its_push(tmp_path):
     assert step["words"] == "The pad." and step["words_zone"] == "high", step
 
 
+def test_curtain_rule_breaks_behind_its_words(tmp_path):
+    """Where the curtain's rule crosses a step's line, it breaks behind the line's ink (and comes
+    back above and below it), so it never slices through the words."""
+    compare = {**COMPARE, "steps": [{"text": "Half and half, the pool and the beach.", "split": 0.5}]}
+    project = tiny(tmp_path / "p", chapters=[compare], film={"vertical": True})
+    for fid in ("16x9", "9x16"):
+        plan = _plan(project, fid)
+        curtain = next(s for s in plan.plan["shots"] if s["kind"] == "curtain")
+        cut = _Cut(project, plan)
+        bx, by, bw, bh = next(
+            i["box"] for i in cut.ink if i["shot"] == curtain["id"] and i["layer"] == "words"
+        )
+        f = curtain["keys"][-1]["b"] - 1  # held at 0.5, the line fully in
+        x = round(_split(curtain, f) * cut.width)
+        assert bx < x < bx + bw, (fid, x, (bx, bw))
+        frame = cut.frame_at(f).astype(np.int16)
+        grip, cut._grip = cut._grip, lambda *a, **k: None  # type: ignore[method-assign]
+        try:
+            bare = cut.frame_at(f).astype(np.int16)
+        finally:
+            cut._grip = grip  # type: ignore[method-assign]
+        rule = np.abs(frame[:, x - 2 : x + 3] - bare[:, x - 2 : x + 3]).max(axis=(1, 2))
+        assert rule[by + bh + 4 :].max() > 40 and rule[: max(1, by - 8)].max() > 40, fid  # it is there
+        assert rule[by : by + bh].max() <= 2, (fid, rule[by : by + bh].tolist())  # but not behind them
+
+
 def test_curtain_lines_hand_off_without_overlap(tmp_path):
     """Consecutive curtain lines share a zone: the first is out by the downbeat the next lands on."""
     compare = {
