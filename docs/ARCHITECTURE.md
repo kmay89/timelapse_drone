@@ -753,8 +753,9 @@ small masters leave little to push, they are 85 and 73 beats.
   - Length: max(4, ceil((text_in − f0 + B/3 + cue_frames(label + source) + out) / B)) beats (`out`:
     B/3 before another stat of the run), so label and source are fully on screen for as long as
     they take to read at 17 characters a second (the figure itself is read at a glance); the last
-    stat of a run carrying the honesty line is lengthened until that line, on from the first
-    `text_in`, reads too.
+    stat of a run carrying the honesty line (and the disclaimer after it) is lengthened until that
+    text, fully on from the first stat's `land` (it comes in with the panel over the B/3 before),
+    reads too.
   - The last stat's text holds to the shot's last frame: what follows dissolves (an image) or dips
     (a card, the end card) from the stat as it is, panel and text included.
   - Plain card (`backdrop: plain`; a FilmSpec `stats_surface` night | paper asks for it): the old
@@ -766,17 +767,22 @@ small masters leave little to push, they are 85 and 73 beats.
   30 fps), the shortest display-gamma dip from night to paper in which no frame pair changes
   luminance by 0.10 or more.
 - **end** (`E1`, one card on night): a dip (D frames from an image), then the brand name, credit
-  line, partners, the short `base_url`, the honesty line and the copyright and disclaimer as fine
-  print (27 units, read at a glance as legal text is). Its text fades in over B/3 after the dip and
+  line, partners, the short `base_url`, the honesty line, the disclaimer (30 units, read: it says
+  what is fictional) and the copyright as fine print (27 units, read at a glance as legal text is).
+  In a portrait film the whole card is set 1.35× larger (`END_PORTRAIT`; read on a phone in the
+  hand), shrinking to fit as before. Its text fades in over B/3 after the dip and
   fades to night over the film's last beat (the film ends on night). Length: as long as the credit
-  line, link and honesty line take to read at 17 characters a second, plus a beat to scan the
+  line, link, honesty line and disclaimer take to read at 17 characters a second, plus a beat to scan the
   partners and the last beat, and at least `end_beats` (6). When that would run over 6 s with its
   dip (`END_MAX_S`) and the film has stats, the honesty line **rides along** under the stat run
-  instead (`ride: true` here; the stats' `honesty`: 30 units in 16:9, 38 in 9:16, held from the
-  first stat's `text_in` to the run's end), then the partners are left out with a warning if that
-  makes the card fit. With no stats the card carries the honesty line however long it takes. The
+  instead (`ride: true` here; the stats' `honesty`: 30 units in 16:9, 38 in 9:16, in with the
+  panel over the B/3 before the first figure lands and held to the run's end, which lasts until it
+  reads), then the disclaimer too (after the honesty line, one riding text). A card still over 6 s
+  leaves the partners out (a warning), and one over 6 s even so is a warning too: with no stats the
+  card carries the honesty line and disclaimer however long they take. The
   honesty line says "simulated" when it is, so no SIMULATED_NOTE is added (classic cuts keep it).
-  For the demo the card is 9 beats (5.4 s) and the honesty line rides along the stats for 9.4 s.
+  For the demo the card is 9 beats (5.4 s) and the honesty line and disclaimer ride along the
+  stats for 9.2 s in the 9:16 cut.
   The honesty line comes from `provenance`:
   - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
   - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
@@ -1118,8 +1124,9 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
   (null on a plain card, else `{how: focus+subject:<id> | drift | hold[, subject off-frame:<id>],
   subjects, focus [x, y, zoom] | null, upscale, f0, f1}`). Text roles `value`, `unit`, `label`,
   `source`, `honesty`.
-- `end` (`E1`): `dip`, `honesty`, `ride` (the honesty line rides along the stats instead). Text
-  roles `brand`, `credit`, `role`, `partner`, `link`, `honesty` (unless it rides), `fine`; a loop's
+- `end` (`E1`): `dip`, `honesty`, `ride` (the honesty line, then the disclaimer, rides along the
+  stats instead). Text roles `brand`, `credit`, `role`, `partner`, `link`, `honesty` and
+  `disclaimer` (unless they ride), `fine`; a loop's
   end card has only `brand` and `url`.
 - `rise` (`R1`), `dip` (`D1`): loop films only, no extra fields and no text.
 

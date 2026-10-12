@@ -482,8 +482,8 @@ def test_flash_meter_regions_and_red():
 
 def test_end_card_is_short_and_the_honesty_line_rides_the_stats(tmp_path):
     """One closing card on night. Without stats it carries the honesty line and is as long as its
-    text takes to read at 17 characters a second after its dip (the partners a beat to scan), plus
-    the beat its text fades out over. With stats, a card that would run over END_MAX_S puts the
+    text takes to read at 17 characters a second after its dip, plus the beat its text fades out
+    over (over END_MAX_S, so without the partners' beat to scan). With stats, a card that would run over END_MAX_S puts the
     honesty line under the stat run instead, where it reads in full; the card then fits in 6 s.
     Transcript lines never start past the film's last frame."""
     from vantage.film.story import END_MAX_S
@@ -495,7 +495,9 @@ def test_end_card_is_short_and_the_honesty_line_rides_the_stats(tmp_path):
     (end,) = (s for s in plan["shots"] if s["kind"] == "end")
     assert {"role": "honesty", "text": HONESTY["photo"]} in end["text"] and not end["ride"]
     read = f"Made for testing. {HONESTY['photo']}"
-    assert end["f1"] - end["f0"] - end["dip"] - third - 2 * B >= cue_frames(read, 12)
+    # Over END_MAX_S with nothing to ride along with: the partners are left out (no beat to scan).
+    assert all(t["role"] not in ("role", "partner") for t in end["text"]), end["text"]
+    assert end["f1"] - end["f0"] - end["dip"] - third - B >= cue_frames(read, 12)
     assert end["f1"] == plan["frames"]
 
     tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 2}})
@@ -509,7 +511,7 @@ def test_end_card_is_short_and_the_honesty_line_rides_the_stats(tmp_path):
     assert (
         stat["honesty"] == HONESTY["photo"] and {"role": "honesty", "text": HONESTY["photo"]} in stat["text"]
     )
-    assert stat["f1"] - (stat["text_in"] + third) >= cue_frames(HONESTY["photo"], 12)
+    assert stat["f1"] - stat["land"] >= cue_frames(HONESTY["photo"], 12)  # in with the panel, at land
     assert all(line["f0"] < p["frames"] for line in p["transcript"]["lines"])
     assert p["captions"][-1]["text"] == "Made for testing."  # the end card's cue
     short = json.loads(json.dumps(p))
@@ -1650,6 +1652,43 @@ def test_poster_comes_from_the_main_story_not_a_montage(tmp_path):
     assert shot["kind"] == "capture" and shot["vantage"] == "site" and not shot.get("montage"), shot
 
 
+def test_the_disclaimer_is_read_and_rides_the_stats_when_the_card_is_full(tmp_path):
+    """The brand's disclaimer says what is fictional: it is read at 17 characters a second, not
+    glanced at like the copyright. When the end card would run over END_MAX_S, the honesty line and
+    then the disclaimer ride under the stats, where both read in full; without stats the card keeps
+    them and says it runs long."""
+    from vantage.film.story import END_MAX_S
+    from vantage.film.tracks import cue_frames
+
+    disclaimer = "A demonstration: every place, person and figure in it is fictional."
+    root = tmp_path / "p"
+    tiny(root, chapters=[{**STATS, "items": [STATS["items"][2]]}], films={"16x9": {"end_beats": 2}})
+    brand = yaml.safe_load((root / "brand" / "brand.yaml").read_text())
+    brand |= {"disclaimer": disclaimer, "copyright": "© 2026 Tiny Brand"}
+    (root / "brand" / "brand.yaml").write_text(yaml.safe_dump(brand))
+    plan = _plan(_facts(root, area=AREA))
+    p = plan.plan
+    (end,) = (s for s in p["shots"] if s["kind"] == "end")
+    (stat,) = (s for s in p["shots"] if s["kind"] == "stat")
+    assert stat["honesty"] == f"{HONESTY['photo']} {disclaimer}", stat["honesty"]
+    assert stat["f1"] - stat["land"] >= cue_frames(stat["honesty"], 12)
+    assert [t["role"] for t in end["text"]] == ["brand", "credit", "role", "partner", "fine"]
+    assert end["text"][-1]["text"] == "© 2026 Tiny Brand"
+    assert end["f1"] - end["f0"] <= END_MAX_S * 12 and not [w for w in plan.warnings if "end card" in w]
+
+    tiny(root, films={"16x9": {"end_beats": 2}})  # no stats: nothing to ride along with
+    (root / "brand" / "brand.yaml").write_text(yaml.safe_dump(brand))
+    plan = _plan(load_project(root))
+    (end,) = (s for s in plan.plan["shots"] if s["kind"] == "end")
+    roles = [t["role"] for t in end["text"]]
+    assert "honesty" in roles and "disclaimer" in roles and not end["ride"], roles
+    read = f"Made for testing. {HONESTY['photo']} {disclaimer}"
+    assert end["f1"] - end["f0"] - end["dip"] - round(B / 3) - B >= cue_frames(read, 12)
+    assert any("end card" in w and "over 6 s" in w for w in plan.warnings), plan.warnings
+    # The partners are left out even though the card still runs long without them.
+    assert "partner" not in roles and any("partners are left out" in w for w in plan.warnings), roles
+
+
 def test_a_curtains_lines_share_one_size_and_land_with_their_picture(tmp_path):
     """Every line of a curtain is set at one size (`words_scale`, on at most two balanced lines), and
     lands on the beat nearest its sweep's midpoint, so it arrives with the picture it names; it
@@ -1712,3 +1751,21 @@ def test_a_still_capture_does_not_warn_about_a_push_it_does_not_make(tmp_path):
     step = next(s["step"] for s in plan.plan["shots"] if s.get("step"))
     assert step["push"] is False and step["reason"] == "two captures", step
     assert not [w for w in plan.warnings if "soft push" in w or "clamped" in w], plan.warnings
+
+
+def test_a_portrait_end_card_is_set_larger_inside_the_safe_zone(tmp_path):
+    """A 9:16 film is read on a phone in the hand: its end card is set END_PORTRAIT larger (in units
+    of its frame) than the 16:9 card, and still fits between the safe top and bottom."""
+    from vantage.film.cut import END_PORTRAIT
+
+    project = tiny(tmp_path / "p", film={"vertical": True})
+    heights = {}
+    for fid in ("16x9", "9x16"):
+        plan = _plan(project, fid)
+        cut = _Cut(project, plan)
+        (end,) = (s for s in plan.plan["shots"] if s["kind"] == "end")
+        x, y, w, h = next(i["box"] for i in cut.ink if i["shot"] == end["id"] and i["layer"] == "stack")
+        assert cut.lay.top - 1 <= y and y + h <= cut.lay.bottom + 1, (fid, y, h)
+        assert cut.lay.margin - 1 <= x and x + w <= cut.lay.right + 1, (fid, x, w)
+        heights[fid] = h / cut.u
+    assert heights["9x16"] >= 0.95 * END_PORTRAIT * heights["16x9"], heights

@@ -66,6 +66,7 @@ LINK = _Style("text", 34, 500, "accent")
 URL = _Style("text", 64, 500, "accent")  # a loop's end card: the short URL, read across a room
 HONESTY = _Style("text", 38, 400, alpha=0.92, leading=1.35)
 FINE = _Style("text", 27, 400, alpha=0.62, leading=1.4)
+DISCLAIMER = _Style("text", 30, 400, alpha=0.9, leading=1.35)  # read, unlike the fine print
 CURTAIN_LABEL = _Style("numeric", 44, 600, tracking=0.06, upper=True)
 STAT_VALUE = _Style("numeric", 220, 500, "ink")
 STAT_UNIT = _Style("text", 220 * 0.35, 500, "ink")
@@ -86,8 +87,9 @@ PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 si
 TAG_CLEAR = PANEL_PAD + 3 * PANEL_SIGMA + 8
 END_STYLES = {
     "brand": BRAND, "credit": CREDIT, "role": ROLE, "partner": PARTNER, "link": LINK, "url": URL,
-    "honesty": HONESTY, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
+    "honesty": HONESTY, "disclaimer": DISCLAIMER, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
 }  # fmt: skip
+END_PORTRAIT = 1.35  # a portrait film's end card is read on a phone in the hand, like its stats
 RISE = 14  # units a text block rises while it fades in
 KNOB = 8.5  # units: the rail knob's radius with its ring (the rail's ends are inset by it)
 LRU = 4  # masters kept decoded (a dissolve needs two)
@@ -1000,7 +1002,8 @@ class _Cut:
         self.layers[shot["id"]] = {"kicker": kick_layers, "groups": group_layers, "scrim": scrim}
 
     def _stack(self, items: Sequence[dict[str, str]], sid: str | None = None) -> _Layer:
-        """Centred lines of a card or the end card, wrapped and shrunk to fit the safe zone."""
+        """Centred lines of a card or the end card (END_PORTRAIT larger in a portrait film), wrapped and
+        shrunk to fit the safe zone."""
         lay, u, t = self.lay, self.u, self.type
         blocks: list[tuple[str | None, _Style, float]] = []
         prev = None
@@ -1010,6 +1013,7 @@ class _Cut:
             gap = 0.0 if prev is None else 8.0
             if prev is not None and role != prev and not (prev == "role" and role == "partner"):
                 gap = 36.0 if role in ("role", "link", "honesty", "fine") and prev != "fine" else 22.0
+                gap = 14.0 if (prev, role) == ("honesty", "disclaimer") else gap
             if role == "credit" or (role == "title" and prev == "kicker"):
                 gap = 22.0
             if prev == "brand":
@@ -1019,7 +1023,7 @@ class _Cut:
             prev = role
         max_w = lay.text_width
         room = lay.bottom - lay.top
-        scale = 1.0
+        scale = END_PORTRAIT if lay.height > lay.width else 1.0
         for attempt in range(4):
             lines: list[tuple[str | None, _Style, float]] = []
             y = 0.0
@@ -1304,7 +1308,7 @@ class _Cut:
         self, frame: np.ndarray, i: int, f: int, intro: float = 1.0, panel: float | None = None
     ) -> None:
         """A stat's panel (over a picture), its text, and the riding honesty line, which comes in
-        with the run's first words and stays on through the run."""
+        with the panel (the B/3 before the first figure lands) and stays on through the run."""
         shot = self.shots[i]
         run = self.stat_runs[shot["id"]]
         prev = self.shots[i - 1] if i else None
@@ -1312,7 +1316,7 @@ class _Cut:
         _put(frame, run["panel"], 1.0 if within else intro if panel is None else panel)
         self._stat_text(frame, i, f, intro)
         if run["ride"] is not None:
-            seen = 1.0 if within else ramp(f, shot.get("text_in", shot["f0"]), self.third)
+            seen = 1.0 if within else ramp(f, shot.get("land", shot["f0"]) - self.third, self.third)
             _put(frame, run["ride"], seen * intro)
 
     def _stat(self, i: int, f: int) -> np.ndarray:

@@ -1264,7 +1264,7 @@ def _stats(
         None if x is None else ((tuple(x[0]) if x[0] else None), x[1])  # type: ignore[misc]
         for x in kept
     ]
-    first_text_in = 0
+    ride_in = 0  # the riding line comes in with the panel, over the B/3 before the first figure
     for k, item in enumerate(items):
         f0 = b.f
         dissolve: dict[str, Any] | None = None
@@ -1289,12 +1289,12 @@ def _stats(
         land = f0 + (-(-entry // B) + b.holds.get(f"N{n}.0", 0)) * B if k == 0 else f0
         text_in = land + round(B / 2)
         if k == 0:
-            first_text_in = text_in
+            ride_in = land - third
         read = " ".join(filter(None, (item["label"], item["source"])))
         out = third if k + 1 < len(items) else 0  # its text leaves before the next figure lands
         need = text_in - f0 + third + cue_frames(read, fps) + out
         if honesty and k == len(items) - 1:  # the riding honesty line reads in full by the run's end
-            need = max(need, first_text_in + third + cue_frames(honesty, fps) - f0)
+            need = max(need, ride_in + third + cue_frames(honesty, fps) - f0)
         beats = max(STAT_MIN_BEATS, -(-need // B)) + b.holds.get(f"N{n}", 0)
         f1 = f0 + beats * B
         move: dict[str, Any] | None = None
@@ -1395,12 +1395,15 @@ def _stats(
 
 def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, Any]) -> dict[str, Any]:
     """The end card's text and length. A loop's: the brand and the short URL, `end_beats`. Any other
-    film's: the brand, credit line, partners and link, then the honesty line and the copyright and
-    disclaimer as fine print (read at a glance, as legal text is). The card takes as long as its
-    words take to read at 17 characters a second after its dip (the partners a beat to scan), plus
-    the last beat its text fades out over, and at least `end_beats`; when that is over END_MAX_S
-    and the film has stats, the honesty line rides along under the stats instead (`ride`), then the
-    partners are left out (a warning) when that makes it fit. Returns {text, facts, ride, beats(dip)}."""
+    film's: the brand, credit line, partners and link, then the honesty line and the disclaimer
+    (read, like the credit line: it says what is fictional) and the copyright as fine print (read at
+    a glance, as legal text is). The card takes as long as its words take to read at 17 characters
+    a second after its dip (the partners a beat to scan), plus the last beat its text fades out
+    over, and at least `end_beats`. When that is over END_MAX_S and the film has stats, the honesty
+    line rides along under the stats instead (`ride`), then the disclaimer too; a card still over
+    END_MAX_S leaves the partners out (a warning), and one over it even so is a warning too (a film
+    without stats has nothing for its honesty line to ride along with).
+    Returns {text, facts, ride, beats(dip)}."""
     project, film = b.project, b.film
     brand, cfg = project.brand, project.config
     B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
@@ -1419,12 +1422,9 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
         for item in ({"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name})
     ]  # fmt: skip
     link = [{"role": "link", "text": short_url}] if short_url else []
-    fine = [
-        {"role": "fine", "text": t}
-        for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer"))
-        if text_ and (t := say(text_, f"brand.yaml {where}"))
-    ]
-    reading = " ".join(filter(None, (credit, short_url)))
+    disclaimer = say(brand.disclaimer, "brand.yaml disclaimer") if brand.disclaimer else None
+    copyright_ = say(brand.copyright, "brand.yaml copyright") if brand.copyright else None
+    fine = [{"role": "fine", "text": copyright_}] if copyright_ else []
     # The dip into the end card: from paper after a plain paper stat card, else D frames.
     paper_last = last_part[0] == "stats" and last_part[1][5] and last_part[1][1] == "paper"
     dip0 = b.paper_dip if paper_last else b.grid.dissolve
@@ -1433,23 +1433,36 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
         return max(film.end_beats, -(-(dip + third + cue_frames(read, fps) + (B if scan else 0) + B) // B))
 
     most = int(END_MAX_S * fps // B)
-    ride = None
-    if has_stats and need(sentence(reading, honesty), bool(partners), dip0) > most:
-        ride = honesty
-    read = reading if ride else sentence(reading, honesty)
-    if partners and need(read, True, dip0) > most >= need(read, False, dip0):
+    riding: list[str] = []  # what rides under the stats instead, in order
+    card = [t for t in (honesty, disclaimer) if t]
+
+    def read() -> str:
+        return sentence(" ".join(filter(None, (credit, short_url))), *card)
+
+    for text in (honesty, disclaimer):
+        if text and has_stats and need(read(), bool(partners), dip0) > most:
+            card.remove(text)
+            riding.append(text)
+    if partners and need(read(), True, dip0) > most:
         b.warnings.append(
             f"end card: the partners are left out of film {film.id} (with them it would run over "
             f"{END_MAX_S:g} s)"
         )
         partners = []
-    honest = [] if ride else [{"role": "honesty", "text": honesty}]
     scan = bool(partners)
+    if need(read(), scan, dip0) > most:
+        b.warnings.append(
+            f"end card: film {film.id}'s end card runs {need(read(), scan, dip0) * B / fps:.1f} s, over "
+            f"{END_MAX_S:g} s, to give its words time to read"
+            + ("" if has_stats else " (with no stats, the honesty line has nothing to ride along with)")
+        )
+    roles = {honesty: "honesty", disclaimer: "disclaimer"}
+    text = [*lines, *partners, *link, *({"role": roles[t], "text": t} for t in card), *fine]
     return {
-        "text": [*lines, *partners, *link, *honest, *fine],
+        "text": text,
         "facts": list(say.facts),
-        "ride": ride,
-        "beats": lambda dip: need(read, scan, dip),
+        "ride": " ".join(riding) or None,
+        "beats": lambda dip: need(read(), scan, dip),
     }
 
 
