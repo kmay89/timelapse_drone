@@ -202,8 +202,14 @@ def test_full_size_scrims_keep_their_contrast(full, fid):
 
 def test_full_size_default_films_keep_the_length_budget(full, tmp_path):
     """The demo on the engine's defaults (no per-film stats or montage) still makes cuts of at most
-    48 s: the length budget (`max_s`) trims montage pictures, then stats, and says what it left out."""
+    48 s: the length budget (`max_s`) trims montage pictures, then stats, and says what it left out.
+    And a stat run really pushes at full size: the demo's own films set their run after the
+    shoreline montage, whose picture has no hotspots, so its figures only drift; on the defaults the
+    16:9 cut's second figure (the meadow's parking spaces, over the overview) pushes to its hotspot,
+    which ends in frame and clear of the run's ink."""
     import yaml
+
+    from vantage.film.cut import stat_run
 
     project, _ = full
     root = tmp_path / "defaults"
@@ -220,3 +226,22 @@ def test_full_size_default_films_keep_the_length_budget(full, tmp_path):
         seconds = plan.plan["frames"] / plan.plan["fps"]
         assert seconds <= 48.0, (fid, seconds)
         assert [w for w in plan.warnings if "max_s" in w], (fid, plan.warnings)
+    defaults = load_project(root)
+    plan = plans["16x9"]
+    p = plan.plan
+    stats = [s for s in p["shots"] if s["kind"] == "stat"]
+    pushed = [s for s in stats if s["move"]["how"].startswith("focus+subject")]
+    assert pushed, [s["move"] for s in stats]
+    cut = _Cut(defaults, plan)
+    run = stat_run(cut.type, cut.lay, stats, stats[0]["honesty"], stats[0]["place"], True)
+    index = MastersIndex.load(defaults.masters_dir / "index.json")
+    for stat in pushed:
+        assert stat["move"]["focus"][2] >= 1.2, stat["move"]
+        mv = index.vantages[stat["vantage"]]
+        geo = Geometry(p["width"], p["height"], mv.width, mv.height)
+        hid = stat["move"]["subjects"][0]
+        spot = next(h for ch in defaults.story.chapters for h in getattr(ch, "hotspots", []) if h.id == hid)
+        u, v = _on_screen(geo, stat["move"]["focus"], spot.x, spot.y)
+        assert 0 <= u <= p["width"] and 0 <= v <= p["height"], (stat["id"], hid, u, v)
+        x0, y0, x1, y1 = run.box
+        assert not (x0 <= u <= x1 and y0 <= v <= y1), (stat["id"], hid, (u, v), run.box)

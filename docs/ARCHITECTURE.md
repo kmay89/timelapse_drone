@@ -795,6 +795,12 @@ small masters leave little to push, they are 77 and 77 beats.
     `focus` and `f1`. A push before a stat's picture eases back to the rest view over its first
     `ease` frames.
     A push of more than 1.25 output px per master px is a "soft push" warning, as for steps.
+    In the demo's own films no stat pushes: the first figure sits on the shoreline montage's last
+    picture, a vantage with no scrub or compare hotspots, and the second (the flights) is printed
+    by no hotspot, so both drift. Its overview hotspots still feed a stat on the overview (the
+    beach prints the wave pool's area, the meadow its parking spaces): on the engine's defaults
+    the full-size 16:9 cut pushes its meadow figure (tests/test_film_full.py, slow), and the
+    small-size cuts push in tests/test_film_story.py.
   - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
     (tabular figures without raqm; other glyphs keep their own advance), shifted so the first
     glyph's ink starts on the text column with the label. The figure and its unit slide up into a
