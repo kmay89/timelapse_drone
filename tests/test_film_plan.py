@@ -70,7 +70,9 @@ def test_plan_is_deterministic(tmp_path):
     assert set(first.plan["inputs"]["masters"]) == {
         f"overview/{d}.jpg" for d in ("2025-06-14", "2025-08-02", "2026-01-20")
     }
-    assert first.facts == {"acres": {"status": "verified", "releasable": True}}
+    assert first.facts == {
+        "acres": {"status": "verified", "releasable": True, "text": "12 acres", "sources": []}
+    }
     assert first.plan["provenance"] == ["photo"] and first.plan["tag"] == []
 
 
@@ -85,7 +87,8 @@ def test_plan_hash_tracks_inputs(tmp_path):
     # Not hashed: a fact's status (a snapshot beside the plan) and the encode settings.
     project = _edit(root, "facts.yaml", lambda d: d["facts"]["acres"].update(status="needs-client"))
     assert not changed(project)
-    assert _plan(project).facts["acres"] == {"status": "needs-client", "releasable": False}
+    snap = _plan(project).facts["acres"]
+    assert (snap["status"], snap["releasable"], snap["text"]) == ("needs-client", False, "12 acres")
     tweaked = _plan(project)
     tweaked.encode.update(crf=30, preset="ultrafast")
     assert tweaked.hash == base.hash

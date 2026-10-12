@@ -191,6 +191,9 @@ def test_chapters_and_transcript(tmp_path):
     assert "Demolition. In ten weeks the slides are gone." in text  # the step's full text, as plain text
     assert "Split screen (The site), Then left and Now right. The line moves to 50%: Half and half." in text
     assert "Figure: 13,100 sq ft of old pool (source: Site plan)." in text
+    # The full facts.yaml sources of every fact it prints close it (a stat prints the short form).
+    sources = text.split("\n\nSources:\n", 1)[1].splitlines()
+    assert "13,100: Site plan, sheet L-101." in sources and len(sources) == len(tracks.track_facts(p))
     assert "End card: Tiny Brand / Made for testing." in text
     assert "**" not in text and "{fact:" not in text
     # A loop film has none of it.

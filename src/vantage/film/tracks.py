@@ -317,8 +317,10 @@ def to_transcript(plan: FilmPlan) -> str:
     """The timed transcript: title and subtitle, '<m:ss> film, no sound. <honesty line>', the
     on-screen tag ('On screen throughout: Simulated imagery · Preview.') and, for a draft or a plan
     that prints unverified facts, 'Preview, not for release.', then one '[m:ss] …' line per shot
-    ('[unverified]' before a line that prints a fact that is not releasable). It reads only the
-    plan, whose text was printed through the facts, and its fact snapshot."""
+    ('[unverified]' before a line that prints a fact that is not releasable), and last a 'Sources'
+    block: each fact the transcript prints, with its facts.yaml sources (a stat prints only the
+    story's short source). It reads only the plan, whose text was printed through the facts, and
+    its fact snapshot."""
     p = plan.plan
     t = p.get("transcript") or {}
     fps = p["fps"]
@@ -337,6 +339,14 @@ def to_transcript(plan: FilmPlan) -> str:
     for line in t.get("lines", []):
         mark = "[unverified] " if unverified.intersection(line.get("facts", [])) else ""
         out.append(f"[{minutes(line['f0'], fps)}] {mark}{line['text']}")
+    printed = [*t.get("facts", []), *(f for line in t.get("lines", []) for f in line.get("facts", []))]
+    sourced = [plan.facts[f] for f in dict.fromkeys(printed) if "sources" in plan.facts.get(f, {})]
+    if sourced:
+        out += ["", "Sources:"]
+        for snap in sourced:
+            where = "; ".join(snap["sources"]) or "no source recorded"
+            by = f" (reported by {snap['attribution']})" if snap.get("attribution") else ""
+            out.append(f"{snap['text']}: {where}{by}".rstrip(".") + ".")
     return "\n".join(out) + "\n"
 
 

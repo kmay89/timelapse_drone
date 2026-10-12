@@ -287,7 +287,7 @@ def test_words_and_facts(tmp_path):
     caps = [s for s in plan.plan["shots"] if s.get("step")]
     assert (caps[0]["step"]["words"], caps[0]["step"]["words_from"]) == ("Before: 12 acres", "film.line")
     assert caps[0]["facts"] == ["acres"] and caps[2]["facts"] == ["trees"]
-    assert plan.facts["trees"] == {"status": "needs-client", "releasable": False}
+    assert plan.facts["trees"] == {"status": "needs-client", "releasable": False, "text": "78", "sources": []}
 
     project = _facts(
         root,

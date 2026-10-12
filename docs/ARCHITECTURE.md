@@ -1152,7 +1152,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
     // story also: "flash": {"limit": 2, "held": {"S07": 1, "C1.0": 1}, "slowed": {}, "softened": {"S12": 0.38}}
     //   (the flash margin, see Safety; held/slowed in beats, softened as the share of its log zoom a
     //   push keeps: z = z_full^share)
-  "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed;
+  "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true, "text": "132",
+            "sources": ["Synthetic site plan"]}},  // snapshot at plan time (+ "attribution"), NOT hashed;
                                                        // every fact the shots and the tracks print
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
   "checks": {"safe": [96, 54, 1824, 1026], "ink": [{"shot": "T1", "layer": "stack", "box": [598, 330, 724, 420]}],
@@ -1324,6 +1325,10 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
     hotspot, "The camera moves in on <hotspot label>."; when the honesty line rides along, "Under the
     figures: <riding text>" from when it comes in;
   - end: "End card: " and the end card's lines joined by " / ".
+  Last, after a blank line, "Sources:" and one "<fact text>: <its facts.yaml sources joined by '; '>."
+  line per fact the transcript prints, in the order first printed (" (reported by <attribution>)"
+  for a reported fact; "no source recorded" when it has none): the full sources of every figure
+  and date the film shows, where a stat prints only the story's short `source`.
   It reads only the plan (`to_transcript(plan)`), so it never prints a fact the gate has not seen.
 - **Formats**: WebVTT `WEBVTT` with `hh:mm:ss.mmm` (cue text escapes `&`, `<`, `>`); SRT numbered
   with `hh:mm:ss,mmm`; times are frames converted to whole milliseconds, rounded half up (frame 36

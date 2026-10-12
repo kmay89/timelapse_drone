@@ -826,8 +826,19 @@ def _classic_tracks(
 
 
 def fact_snapshot(project: Project, ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """Each printed fact's status, releasability, text and facts.yaml sources (and attribution) at
+    plan time: the transcript's [unverified] marks and its Sources block read them."""
     facts = project.facts.facts
-    return {f: {"status": facts[f].status, "releasable": facts[f].releasable} for f in sorted(ids)}
+    return {
+        f: {
+            "status": facts[f].status,
+            "releasable": facts[f].releasable,
+            "text": facts[f].text,
+            "sources": list(facts[f].sources),
+            **({"attribution": facts[f].attribution} if facts[f].attribution else {}),
+        }
+        for f in sorted(ids)
+    }
 
 
 # --------------------------------------------------------------------------- #
