@@ -1,8 +1,9 @@
 """Where a step's subject is on screen, so its words can sit clear of it (film/subject.py).
 
-A step's subject, as a map over its master (`subject_map`, summing to 1): Gaussian spots on the
-step's focus point and on the hotspots that changed since the previous step (POINT_WEIGHT of the
-mass), plus the region that actually changed between the previous capture and this one (the rest):
+A step's subject, as a map over its master (`subject_map`, summing to 1): Gaussian spots of equal
+mass on the step's focus point and on the hotspots that changed since the previous step (POINT_WEIGHT
+of the mass; for a pushed step PUSH_WEIGHT, and its focus spot as wide as what the push frames,
+`focus_sigma`, so its words stay off what the camera closes in on), plus the region that actually changed between the previous capture and this one (the rest):
 the per-pixel CIELAB difference of the two masters at SEEN_WIDTH px wide, blurred by CHANGE_SIGMA of
 the width, less its median (a change everywhere, like a new season's light, frames nothing), clipped
 at zero. Without a previous capture, or when nothing changed more than the median, the spots carry
@@ -27,7 +28,11 @@ import numpy as np
 SEEN_WIDTH = 256  # px: masters are measured at this width
 CHANGE_SIGMA = 0.02  # of the width: the change map's blur
 POINT_SIGMA = 0.03  # of the width: a focus point's or hotspot's spot
+# A push frames its focus: the focus spot's sigma is this share of the pushed crop's shorter side, so
+# words stay clear of what the push closes in on (a round plaza, a pier), not only its centre.
+FOCUS_SHARE = 0.12
 POINT_WEIGHT = 0.5  # share of the subject's mass on its points (the rest on the change), when both exist
+PUSH_WEIGHT = 0.75  # the same for a pushed step: what the push closes in on is most of its subject
 
 Rect = tuple[float, float, float, float]  # x0, y0, x1, y1 as fractions (of the master, or of the frame)
 
@@ -64,28 +69,42 @@ class Seen:
         return d / total if total > 1e-9 else None
 
 
-def _spots(shape: tuple[int, int], points: Sequence[tuple[float, float]]) -> np.ndarray | None:
-    if not points:
-        return None
+Point = tuple[float, float] | tuple[float, float, float]  # x, y (master fractions)[, sigma of the width]
+
+
+def focus_sigma(crop: Rect, aspect: float) -> float:
+    """The focus spot's sigma (of the master's width) for a push that ends on `crop` (master
+    fractions) of a master `aspect` (height / width) high: FOCUS_SHARE of the crop's shorter side,
+    never under POINT_SIGMA."""
+    return max(POINT_SIGMA, FOCUS_SHARE * min(crop[2] - crop[0], (crop[3] - crop[1]) * aspect))
+
+
+def _spots(shape: tuple[int, int], points: Sequence[Point]) -> np.ndarray | None:
+    """Gaussian spots of equal mass on `points` (each its own sigma, else POINT_SIGMA)."""
     h, w = shape
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
-    sigma = POINT_SIGMA * w
     m = np.zeros((h, w))
-    for x, y in points:
-        m += np.exp(-(((xx + 0.5 - x * w) ** 2 + (yy + 0.5 - y * h) ** 2) / (2 * sigma * sigma)))
+    for point in points:
+        x, y = point[0], point[1]
+        sigma = (point[2] if len(point) > 2 else POINT_SIGMA) * w  # type: ignore[misc]
+        spot = np.exp(-(((xx + 0.5 - x * w) ** 2 + (yy + 0.5 - y * h) ** 2) / (2 * sigma * sigma)))
+        mass = float(spot.sum())
+        if mass > 1e-12:
+            m += spot / mass
     total = float(m.sum())
     return m / total if total > 1e-12 else None
 
 
 def subject_map(
-    seen: Seen, file: str, before: str | None, points: Sequence[tuple[float, float]]
+    seen: Seen, file: str, before: str | None, points: Sequence[Point], weight: float = POINT_WEIGHT
 ) -> np.ndarray | None:
-    """The step's subject over its master `file` (see the module docstring), or None without one."""
+    """The step's subject over its master `file` (see the module docstring), or None without one;
+    `weight`: the points' share of it when there is a change too (PUSH_WEIGHT for a pushed step)."""
     shape = seen.image(file).shape[:2]
     spots = _spots((int(shape[0]), int(shape[1])), points)
     change = seen.change(before, file) if before else None
     if spots is not None and change is not None:
-        return POINT_WEIGHT * spots + (1 - POINT_WEIGHT) * change
+        return weight * spots + (1 - weight) * change
     return spots if spots is not None else change
 
 
@@ -157,4 +176,4 @@ def contrast(
     return worst if worst != float("inf") else 21.0
 
 
-__all__ = ["Seen", "contrast", "luminance", "subject_map", "under"]
+__all__ = ["Seen", "contrast", "focus_sigma", "luminance", "subject_map", "under"]

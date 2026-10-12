@@ -57,7 +57,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vantage.config import (
     FACT_TOKEN_RE,
@@ -94,6 +94,9 @@ from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
 from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
+
+if TYPE_CHECKING:
+    from vantage.film.subject import Point
 
 LEAD_RE = re.compile(r"^\s*\*\*(.+?)\*\*", re.S)
 SOFT = 1.25  # output px per master px beyond which a push is "soft"
@@ -1001,12 +1004,12 @@ class _Placer:
         scale: float | None = None,
     ) -> dict[str, Any]:
         """The zone for a step's words and why: `default` (the step before's zone, else the first)
-        while it is clear (`under` at most WORDS_CLEAR) or within WORDS_MARGIN of the least, else
-        the zone over the least of the subject (ties: zone order); a zone whose words keep less
-        than WORDS_CONTRAST over the picture is chosen only when every zone does. `paths`: the
-        crops the camera shows in each zone while the words are up; `files`: the pictures under
-        them. Warns when even that zone sits on the subject (`under` over WORDS_ON) or misses the
-        contrast."""
+        while it is clear (`under` at most WORDS_CLEAR) or within WORDS_MARGIN of the least (but
+        not on the subject, over WORDS_ON, while a legible zone is not), else the zone over the
+        least of the subject (ties: zone order); a zone whose words keep less than WORDS_CONTRAST
+        over the picture is chosen only when every zone does. `paths`: the crops the camera shows
+        in each zone while the words are up; `files`: the pictures under them. Warns when even that
+        zone sits on the subject (`under` over WORDS_ON) or misses the contrast."""
         from vantage.film.cut import WORDS_SCRIM
         from vantage.film.subject import contrast, under
 
@@ -1029,7 +1032,11 @@ class _Placer:
             best = min(legible, key=lambda z: (on[z], order[z]))
             if default in legible and on[default] <= WORDS_CLEAR:
                 zone, reason = default, "clear"
-            elif default in legible and on[default] <= on[best] + WORDS_MARGIN:
+            elif (
+                default in legible
+                and on[default] <= on[best] + WORDS_MARGIN
+                and (on[default] <= WORDS_ON or on[best] > WORDS_ON)  # never stay on it to stay put
+            ):
                 zone, reason = default, "near least subject"
             else:
                 zone, reason = best, "least subject"
@@ -1042,8 +1049,13 @@ class _Placer:
         """Warn when a zone record's words sit on the subject or miss WORDS_CONTRAST."""
         zone, on, ratio = record["words_zone"], record["words_subject"], record["words_contrast"]
         if on[zone] > WORDS_ON:
+            where = (
+                "in every zone"
+                if min(on.values()) > WORDS_ON
+                else f"in {zone}, as the zones clear of it keep under {WORDS_CONTRAST:g}:1"
+            )
             b.warnings.append(
-                f"{label}: the words {words!r} sit on the subject in every zone ({b.film.id}; "
+                f"{label}: the words {words!r} sit on the subject {where} ({b.film.id}; "
                 f"{zone} covers {on[zone]:.1f}× its share of it)"
             )
         if ratio[zone] < WORDS_CONTRAST:
@@ -2002,7 +2014,7 @@ def _capture_step(
     words = cap.step and _push_words(b, s, cap)
     if placer is None or not words or cap.step is None:
         return (*plan(None), None)
-    from vantage.film.subject import subject_map
+    from vantage.film.subject import POINT_WEIGHT, PUSH_WEIGHT, subject_map
 
     f0 = b.f
     label = f"{s.chapter} {cap.date}"
@@ -2011,22 +2023,25 @@ def _capture_step(
     def choose() -> dict[str, Any]:
         keep = b.warnings
         paths: dict[str, list[Any]] = {}
+        pushed_to: Cam | None = None  # where the first zone's push ends: how wide its subject is
         for zone in placer.zones:  # dry runs: their warnings are dropped, the chosen zone's kept below
             b.warnings = []
             try:
                 _, target, beats = plan(placer.aim_box(words, zone, placer.label_base))
             finally:
                 b.warnings = keep
+            pushed_to = pushed_to or target
             scratch = _Camera()
             scratch.windows = [dict(w) for w in b.camera.windows]
             _capture_camera(b, scratch, f0, rest, pushed, target, beats, lead, ease)
             scratch.until(f0 + beats * B)
             paths[zone] = _path(scratch.windows, s.geometry, f0 + lead, f0 + beats * B, b.grid.third)
         requested = step_.film.focus if step_.film and step_.film.focus else step_.focus
-        points = [(h.x, h.y) for h in cap.subjects]
+        points: list[Point] = [(h.x, h.y) for h in cap.subjects]
         if requested:
-            points.insert(0, (requested[0], requested[1]))
-        subject = subject_map(placer.seen, cap.file, cap.before, points)
+            points.insert(0, _focus_point(s.geometry, requested, pushed_to))
+        weight = PUSH_WEIGHT if requested and pushed_to is not None else POINT_WEIGHT
+        subject = subject_map(placer.seen, cap.file, cap.before, points, weight)
         return placer.choose(
             b, label, words, placer.label_base, subject, [cap.file], paths, default or placer.zones[0]
         )
@@ -2034,6 +2049,16 @@ def _capture_step(
     zone = placer.zone(b, label, words, choose)
     step, target, beats = plan(placer.aim_box(words, zone["words_zone"], placer.label_base))
     return step, target, beats, zone
+
+
+def _focus_point(geo: Geometry, focus: Sequence[float], pushed_to: Sequence[float] | None) -> Point:
+    """A step's focus as a subject point: as wide as what the push frames when it pushes to
+    `pushed_to` (film/subject.py `focus_sigma`), else a point."""
+    from vantage.film.subject import focus_sigma
+
+    if pushed_to is None:
+        return focus[0], focus[1]
+    return focus[0], focus[1], focus_sigma(_crop(geo, pushed_to), geo.mh / geo.mw)
 
 
 def _push_words(b: _Builder, s: _Series, cap: _Capture) -> str | None:

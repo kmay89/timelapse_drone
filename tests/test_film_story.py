@@ -1202,6 +1202,64 @@ def test_words_on_the_subject_in_every_zone_is_a_warning(tmp_path):
     ), plan.warnings
 
 
+def test_push_words_stay_off_what_the_push_frames(tmp_path, monkeypatch):
+    """A push closes in on its focus: the words keep clear of what it frames, not only of the focus
+    point. Here what changed is far up at the right and the push frames the low middle of the
+    picture, so the 16:9 words leave the low zone, whose box runs over the rim of the framed area."""
+    import test_film
+    from vantage.film.story import WORDS_CLEAR
+
+    big = (2560, 1600)
+    monkeypatch.setattr(test_film, "SIZE", big)
+    monkeypatch.setitem(globals(), "SIZE", big)
+    root = tmp_path / "p"
+    steps = [STEPS[0], {**QUIET_STEPS[1], "focus": [0.45, 0.7, 1.4]}]
+    project = tiny(root, steps=steps)
+    _changed_at(root, {DATES[2]: [(0.85, 0.15)]})
+    step = _words_step(_plan(project, "16x9"))
+    assert step["push"] and step["target"] == "focus", step
+    assert step["words_zone"] != "low" and step["words_reason"] == "least subject", step
+    assert step["words_subject"]["low"] > WORDS_CLEAR, step
+
+
+def test_words_leave_a_zone_on_the_subject_when_another_is_clear(monkeypatch):
+    """The words keep the step before's zone while it is near the least subject, but never while it
+    sits on the subject (over WORDS_ON) and a legible zone does not. 'In every zone' is said only when
+    every zone is over WORDS_ON; otherwise the warning names the zone and why it was kept."""
+    import types
+
+    import vantage.film.subject as subject
+    from vantage.film.story import _Placer
+
+    def run(on: dict[str, float], ratio: dict[str, float], default: str) -> tuple[dict[str, Any], list[str]]:
+        monkeypatch.setattr(subject, "under", lambda _s, _p, box: on[box])
+        monkeypatch.setattr(subject, "contrast", lambda _seen, _f, _p, box, *_a: ratio[box])
+        placer = types.SimpleNamespace(
+            zones=list(on),
+            seen=None,
+            paper=None,
+            night=None,
+            box=lambda _w, zone, _b, _s=None: zone,
+            warn=_Placer.warn,
+        )
+        b = types.SimpleNamespace(warnings=[], film=types.SimpleNamespace(id="16x9"))
+        paths: dict[str, list[Any]] = {zone: [] for zone in on}
+        out = _Placer.choose(placer, b, "water", "From the water", 0.0, object(), ["m.jpg"], paths, default)
+        return out, b.warnings
+
+    legible = {"low": 7.0, "low-right": 7.0, "high": 7.0}
+    out, warnings = run({"low": 1.035, "low-right": 2.263, "high": 0.959}, legible, "low")
+    assert (out["words_zone"], out["words_reason"]) == ("high", "least subject"), out
+    assert not warnings, warnings
+    out, warnings = run({"low": 1.1, "low-right": 1.4, "high": 1.05}, legible, "low")
+    assert (out["words_zone"], out["words_reason"]) == ("low", "near least subject"), out
+    assert len(warnings) == 1 and "sit on the subject in every zone" in warnings[0], warnings
+    out, warnings = run({"low": 1.2, "low-right": 1.4, "high": 0.3}, {**legible, "high": 2.0}, "low")
+    assert out["words_zone"] == "low", out
+    assert any("in low, as the zones clear of it keep under 3:1" in w for w in warnings), warnings
+    assert not any("every zone" in w for w in warnings), warnings
+
+
 def test_curtain_line_sits_clear_of_its_push(tmp_path):
     """A curtain step's line goes high in 9:16 when its push's subject (the step's focus, low on
     screen) and what changed are under the low zone."""

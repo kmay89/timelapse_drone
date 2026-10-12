@@ -852,8 +852,11 @@ small masters leave little to push, they are 77 and 77 beats.
   rail). 16:9 and the screen: `low`, `low-right` (the lead baseline, the ink ending on the right
   text edge) or `high`. For each zone the push is aimed with that zone's subject box, and the
   camera path from the words' landing to the shot's end (every B/3 frames) is projected onto the
-  step's **subject** (film/subject.py): Gaussian spots (σ = 0.03 of the master's width) on the step's
-  focus point and its subject hotspots (half the weight), plus the region that changed between the
+  step's **subject** (film/subject.py): Gaussian spots of equal mass (σ = 0.03 of the master's
+  width) on the step's focus point and its subject hotspots (half the weight; for a capture step
+  that pushes, three quarters, and its focus spot as wide as what the push frames: σ = 0.12 of the
+  pushed crop's shorter side, so the words keep off what the camera closes in on, not only its
+  centre), plus the region that changed between the
   vantage's previous capture and this one (the other half: the CIELAB difference of the two masters
   at 256 px wide, blurred by σ = 0.02 of the width, less its median, clipped at 0; a change
   everywhere frames nothing). `words_subject[zone]` is how much of the subject on screen the words'
@@ -863,10 +866,12 @@ small masters leave little to push, they are 77 and 77 beats.
   against the 95th-percentile luminance under it, along the path (both pictures of a curtain). A
   zone under 3:1 (WCAG 1.4.3, large text) is taken only when every zone is. The step keeps its
   default zone (a series' or curtain's previous words zone, else the first) while it covers at most
-  0.5 (`words_reason: clear`) or within 0.25 of the least (`near least subject`); else it moves to
-  the zone over the least (`least subject`; ties: zone order). No focus, hotspot or change: the
-  default (`no subject`). When even the chosen zone covers more than 1.0, the plan warns that the
-  words sit on the subject in every zone; under 3:1, that the words miss the contrast.
+  0.5 (`words_reason: clear`) or within 0.25 of the least (`near least subject`), but never while
+  it covers more than 1.0 and a legible zone does not; else it moves to the zone over the least
+  (`least subject`; ties: zone order). No focus, hotspot or change: the default (`no subject`). When
+  the chosen zone covers more than 1.0 the plan warns that the words sit on the subject in every
+  zone (when every zone does) or in that zone, as the zones clear of it keep under 3:1; under 3:1,
+  that the words miss the contrast.
 - **Zoom clamp**: s0 = max(W/mw, H/mh); z_eff = clamp(z, 1, max(1, max_upscale/s0)). Warnings when
   z_eff < z ("push clamped"), s0·z_eff > 1.25 ("soft push") and s0 > max_upscale ("master upscaled
   even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a
