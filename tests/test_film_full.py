@@ -93,11 +93,13 @@ def _on_screen(geo: Geometry, cam: list[float], x: float, y: float) -> tuple[flo
 
 
 def _subject(project: Project, step: dict[str, Any]) -> tuple[str, float, float]:
+    """The hotspot a push frames, else (a step without subjects, a curtain step) its focus point."""
     target = step.get("target") or ""
     if target.startswith("focus+subject:"):
         hid = target.split(":", 1)[1].split(",")[0]
         spot = next(h for ch in project.story.chapters for h in getattr(ch, "hotspots", []) if h.id == hid)
         return hid, spot.x, spot.y
+    assert not step.get("subjects"), step  # a named subject is framed, or the step does not push
     return "focus", step["focus_requested"][0], step["focus_requested"][1]
 
 
@@ -119,6 +121,9 @@ def test_full_size_steps_really_push_onto_their_subject(full, fid):
             k = worded
             worded += bool(step.get("words"))
             if not step.get("focus_requested"):
+                continue
+            if step.get("reason") == "subject off-frame":  # this aspect cannot frame what it names
+                assert not step["push"] and "push_f0" not in step, (fid, shot["id"], step)
                 continue
             pushes.append(shot["id"])
             assert step["push"] and step["focus"][2] >= 1.2, (fid, shot["id"], step)

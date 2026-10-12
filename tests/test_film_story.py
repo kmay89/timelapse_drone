@@ -1006,8 +1006,9 @@ def test_degrade(tmp_path):
 
 def test_push_target_shows_subject(tmp_path):
     """16:9: the push frames the subject (near the master's edge) inside the safe zone. 9:16: the
-    subject is far outside the portrait crop at rest, so the push keeps the step's focus and travels
-    at most MAX_TRAVEL of the rest crop instead of whipping across the master to reach it."""
+    subject is far outside the portrait crop at rest and cannot be framed within MAX_TRAVEL of it,
+    so the step holds its picture: a push to the focus alone would frame what the step does not
+    name. Its transcript names no subject there."""
     from vantage.film.story import MAX_TRAVEL, subject_box
 
     steps = [STEPS[0], {**STEPS[1], "focus": [0.62, 0.54, 1.6]}]
@@ -1028,9 +1029,16 @@ def test_push_target_shows_subject(tmp_path):
             assert u0 - 1e-9 <= u <= u1 + 1e-9 and v0 - 1e-9 <= v <= v1 + 1e-9, (u, v)
         else:
             assert step["target"] == "focus, subject off-frame:tower", step
-            assert any("subject tower cannot be framed" in w for w in plan.warnings)
+            assert not step["push"] and step["reason"] == "subject off-frame", step
+            assert "push_f0" not in step
+            assert any("subject tower cannot be framed" in w and "holds" in w for w in plan.warnings)
+            assert not [w for w in plan.warnings if "soft push" in w or "clamped" in w], plan.warnings
             rx, _ = geo.centre(0.5, 0.5, 1.0)  # the rest view (portrait_focus defaults to the centre)
             assert abs(cx - rx) <= MAX_TRAVEL * 2 * geo.half(1.0)[0] + 1e-9
+            cams = {(w["x"], w["y"], w["zoom"]) for w in p["camera"]}
+            assert cams == {(0.5, 0.5, 1.0)}, cams  # the camera never leaves the rest view
+        lines = " ".join(line["text"] for line in p["transcript"]["lines"])
+        assert ("moves in on The tower" in lines) == (fid == "16x9"), (fid, lines)
 
 
 def test_push_keeps_its_subject_clear_of_the_words(tmp_path, monkeypatch):

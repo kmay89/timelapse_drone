@@ -803,9 +803,11 @@ small masters leave little to push, they are 85 and 73 beats.
   "previous" is the chapter's `from`. If they do not fit, the zoom is lowered toward 1 in 32 steps.
   **Reach**: the crop centre never moves more than `MAX_TRAVEL` (0.5) of the rest crop's width
   (height) from the rest view. When the subjects cannot be framed within that reach (in 9:16 a
-  subject far outside the portrait crop at rest), the push aims at the step's focus, capped to the
-  reach (`focus, subject off-frame:<ids>`, with a plan warning) rather than whipping across the
-  master to a subject the viewer never saw.
+  subject far outside the portrait crop at rest), the step does not push at all (`target: focus,
+  subject off-frame:<ids>`, `push: false`, `reason: subject off-frame`, with a plan warning): it
+  neither whips across the master to a subject the viewer never saw nor pushes to the focus alone,
+  which would frame something the step does not name. Its transcript line names only subjects a
+  push frames (`focus+subject`).
   The subject box follows the step's words zone: in the `high` zone it runs from the high words'
   ink bottom + 54 units (their rise and a gap) to the rail − 40 units, so a push frames its subjects
   below the words instead.

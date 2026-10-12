@@ -816,21 +816,24 @@ def _aim_step(
         b.decisions[f"aim:{label}"] = [list(cam), target]
     if amount < 1.0 and cam[2] < MIN_ZOOM:
         cam = (rest[0] + amount * (cam[0] - rest[0]), rest[1] + amount * (cam[1] - rest[1]), cam[2])
-    if target.startswith("focus, subject off-frame"):
+    off = target.startswith("focus, subject off-frame")
+    if off:  # pushing to the focus alone would frame what the step does not name: hold instead
         b.warnings.append(
             f"{label}: subject {target.split(':', 1)[1]} cannot be framed above the words within reach "
-            f"of the rest view ({b.film.id}); the push aims at the step's focus"
+            f"of the rest view ({b.film.id}); the step holds its picture instead of pushing"
         )
     z = max(asked[2], 1.0)
-    if zmax < z - 1e-9:
+    if zmax < z - 1e-9 and not off:
         b.warnings.append(
             f"{label}: push clamped from {z:g} to {zmax:.3g} ({b.film.id}; max_upscale {b.film.max_upscale:g})"
         )
     upscale = geo.s0 * cam[2]
-    if upscale / b.px > SOFT + 1e-9:  # judged at the full size, so a VANTAGE_FAST plan warns alike
+    if (
+        upscale / b.px > SOFT + 1e-9 and not off
+    ):  # judged at the full size, so a VANTAGE_FAST plan warns alike
         b.warnings.append(f"{label}: soft push, {upscale / b.px:.2f} output px per master px ({b.film.id})")
     a, c = geo.centre(rest[0], rest[1], 1.0), geo.centre(cam[0], cam[1], cam[2])
-    push = not (cam[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
+    push = not off and not (cam[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
     return cam, {
         "focus": [cam[0], cam[1], cam[2]],
         **({"gentled": amount} if amount < 1.0 else {}),
@@ -839,7 +842,7 @@ def _aim_step(
         "z_eff": cam[2],
         "upscale": upscale,
         "push": push,
-        "reason": None if push else "clamped",
+        "reason": None if push else "subject off-frame" if off else "clamped",
     }
 
 
@@ -2022,8 +2025,9 @@ def _capture_tracks(
     lead = f"Aerial view ({vname}), {cap.label}" if first else f"Same view, {cap.label}"
     facts = [*cap.label_facts, *body_facts, *(vname_facts if first else ())]
     line = f"{lead}: {body}" if body else f"{lead}."
-    if step and step["push"]:  # the push carries information: say what it frames
-        named = [b.said(h.label, f"hotspot {h.id} label") for h in cap.subjects if h.id in step["subjects"]]
+    if step and step["push"]:  # the push carries information: say what it frames (and only that)
+        framed = step["subjects"] if (step.get("target") or "").startswith("focus+subject") else []
+        named = [b.said(h.label, f"hotspot {h.id} label") for h in cap.subjects if h.id in framed]
         labels = [plain_markdown(text) for text, _ in named if text]
         facts += [f for text, ids in named if text for f in ids]
         on = f" on {' and '.join(labels)}" if labels else ""
