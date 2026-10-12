@@ -76,6 +76,8 @@ jobs:
           import json, pathlib, sys
           bad = []
           for path in sorted(pathlib.Path(".").glob("*.plan.json")):
+              if not path.with_name(path.name.replace(".plan.json", ".mp4")).is_file():
+                  continue  # a plan-only film (the screen loop): nothing rendered to measure
               doc = json.loads(path.read_text())
               flash = (doc.get("render") or {}).get("flash")
               limit = (doc["plan"].get("flash") or {}).get("limit", 2)
