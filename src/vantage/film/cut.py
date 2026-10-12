@@ -291,6 +291,8 @@ def stat_run(
             )
         )
     ride_bases = tuple(ride_top + ride_cap + k * ride_step for k in range(len(ride_lines)))
+    if lay.height > lay.width:  # a portrait run's panel mirrors its left gutter on the right
+        right = max(right, float(lay.width - lay.margin))
     blocks = (x0, min(s.box[1] for s in sets), right, max(s.box[3] for s in sets))
     box = blocks
     if ride_lines:

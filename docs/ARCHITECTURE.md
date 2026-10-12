@@ -729,7 +729,8 @@ small masters leave little to push, they are 77 and 77 beats.
     changes, in sequence (the previous stat's text out over its last B/3 frames, then the new
     figure slides in on the beat, then its label and source fade in). After a card the first stat
     dips in from night.
-  - Panel: one feathered box (padding 44 units, sigma 16) behind all of the run's ink, in the run's
+  - Panel: one feathered box (padding 44 units, sigma 16) behind all of the run's ink (in 9:16 out
+    to the left margin's mirror on the right, so its gutters match), in the run's
     **tint**, the stats chapter's `surface` (default paper, as on the web), with ink text on paper
     and paper text on night. Its opacity is measured (`cut._measure_panel`): the least of 0.30…0.95
     at which the text colour keeps what WCAG 1.4.3 asks of the smallest text on it

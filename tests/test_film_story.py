@@ -907,6 +907,9 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
     cut = _Cut(project, plan)
     (scrim,) = cut.panels
     assert scrim["shots"] == ["N1", "N2"] and scrim["tint"] == (surface or "paper")
+    if fid == "9x16":  # the portrait panel spans the text column: as much gutter left as right
+        bx, _, bw, _ = scrim["box"]
+        assert abs(bx - (cut.width - bx - bw)) <= 1, (scrim["box"], cut.width)
     # Its labels and sources are small text: 4.5:1 (WCAG 1.4.3), as measured along the camera path,
     # at the least opacity that keeps it (not AAA's 7:1, which washes out the picture).
     assert scrim["target"] == SMALL_CONTRAST and scrim["contrast"] >= SMALL_CONTRAST, scrim
