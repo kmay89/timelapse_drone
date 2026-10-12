@@ -1397,6 +1397,7 @@ def test_montage_frames(tmp_path):
     f0, stat = run[0]["f0"], p["shots"][p["shots"].index(run[0]) - 1]
     held = tuple(run[0]["dissolve"]["cam"])
     assert held[2] > 1.0 and held == cut.camera(f0 - 1)  # the stat drifted in
+    assert cut.scrims  # the tag's and labels' scrims are measured first, over frames of their own
     warps: list[tuple[str, tuple[float, ...]]] = []
     warp = cut._warp
     cut._warp = lambda file, cam: warps.append((file, tuple(cam))) or warp(file, cam)  # type: ignore[method-assign]
