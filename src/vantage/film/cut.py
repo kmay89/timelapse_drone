@@ -94,6 +94,7 @@ PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 si
 # Units between a stat run's ink and the tag's: the panel's padding and feather (3 sigma) end 8 units
 # clear of the tag, so a paper panel never lightens the picture under the tag's paper type.
 TAG_CLEAR = PANEL_PAD + 3 * PANEL_SIGMA + 8
+TAG_RAIL = 30  # units from the rail up to the 9:16 tag's baseline: a tag's cap height of air over the knob
 END_STYLES = {
     "brand": BRAND, "credit": CREDIT, "role": ROLE, "partner": PARTNER, "link": LINK, "url": URL,
     "honesty": HONESTY, "disclaimer": DISCLAIMER, "fine": FINE, "kicker": KICKER, "title": CARD_TITLE,
@@ -218,7 +219,7 @@ def stat_run(
     top_y, bottom_y = float(lay.top), float(lay.bottom)
     tag_cap = _cap_of(t, TAG)
     if tagged and lay.tag == "rail-right":  # the 9:16 tag sits right above the rail: stay above it
-        bottom_y = min(bottom_y, lay.rail_y - 18 * u - tag_cap - TAG_CLEAR * u)
+        bottom_y = min(bottom_y, lay.rail_y - TAG_RAIL * u - tag_cap - TAG_CLEAR * u)
     if tagged and lay.tag == "top-right":  # under the tag, the panel clear of it
         top_y = max(top_y, lay.top + tag_cap + TAG_CLEAR * u)
     elif place == "high":
@@ -646,7 +647,7 @@ class _Cut:
         if (w := self.type.width(text, tag)) > lay.text_width:  # shrink to fit between the margins
             style = dataclasses.replace(tag, size=tag.size * lay.text_width / w * 0.98)
         top = lay.tag == "top-right"
-        base = lay.top + self._cap(style) if top else lay.rail_y - 18 * self.u
+        base = lay.top + self._cap(style) if top else lay.rail_y - TAG_RAIL * self.u
         if not scrim:  # the paper variant: same place and box as the tag, recorded once
             return self._ink([(lay.right, base, text, style, "r")], shadow=0.0)[0]
         layer, box = self._ink([(lay.right, base, text, style, "r")], shadow=0.6, blur=3, note=(None, "tag"))

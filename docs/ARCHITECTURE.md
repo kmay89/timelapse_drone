@@ -917,7 +917,7 @@ renderer no longer has constants of its own.
 | layout | safe t, r, b, l | label cap-top | lead baseline | rail | tag |
 |---|---|---|---|---|---|
 | story-16x9 | .06H .05W .06H .05W | safe top | .78H | .88H | top-right in safe |
-| story-9x16 | .14H .12W .28H .06W | .16H | .60H | .70H | right, baseline rail − 18u |
+| story-9x16 | .14H .12W .28H .06W | .16H | .60H | .70H | right, baseline rail − 30u (`cut.TAG_RAIL`: a cap height of air over the knob) |
 | screen | .05 on every side (TV overscan) | safe top | .76H | .88H | top-right in safe |
 | classic-16x9 | .05 all round (ink check only) | margin round(.055W) | | H − round(.075H) | `corner`: .8·margin from the top-left |
 | classic-9x16 | as story-9x16 | lower third above the rail | | .70H | `top-left`: ascent top at the safe top |

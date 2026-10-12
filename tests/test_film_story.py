@@ -1737,6 +1737,17 @@ def test_demo_story_cut(tmp_path):
         assert beach["words_zone"] == "high" or fid == "16x9", beach
 
 
+def test_portrait_tag_stands_clear_of_the_rail(tmp_path):
+    """In 9:16 the 'Simulated imagery' tag sits over the rail's right end with at least its own
+    height of air between its ink and the rail's knob, so it reads as a tag, not as the rail's caption."""
+    project = tiny(tmp_path / "p", simulated=True, film={"vertical": True, "width": 640, "height": 360})
+    cut = _Cut(project, _plan(project, "9x16"))
+    tag = next(i["box"] for i in cut.ink if i["layer"] == "tag")
+    rail = next(i["box"] for i in cut.ink if i["layer"] == "rail")
+    gap = rail[1] - (tag[1] + tag[3])
+    assert gap >= tag[3], (tag, rail, gap)
+
+
 @pytest.mark.parametrize("fid", ["16x9", "9x16"])
 def test_tag_and_date_labels_keep_small_text_contrast(tmp_path, monkeypatch, fid):
     """The 'Simulated imagery' tag and the date labels are small type: their scrims are measured

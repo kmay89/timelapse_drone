@@ -3,7 +3,7 @@
     story-16x9    safe .06H .05W .06H .05W · date label cap-top at the safe top · lead baseline .78H
                   · rail .88H · tag top-right inside the safe zone
     story-9x16    safe .14H .12W .28H .06W · label cap-top .16H · lead baseline .60H · rail .70H
-                  · tag right-aligned, baseline 18 units above the rail
+                  · tag right-aligned, baseline 30 units above the rail (cut.TAG_RAIL)
     screen        the event-screen loop (16:9, type_scale 1.6): .05 on every side (overscan-safe on
                   TVs) · label cap-top at the safe top · lead baseline .76H · rail .88H · tag
                   top-right inside the safe zone
