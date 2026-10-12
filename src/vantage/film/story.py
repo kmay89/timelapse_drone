@@ -51,6 +51,7 @@ what it did as plan `flash`.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import math
 import re
 from collections import Counter
@@ -535,17 +536,30 @@ def _stat_items(
     project: Project,
     cid: str,
     ch: StatsChapter,
-    limit: int,
+    limit: int | tuple[str, ...],
     warnings: list[str],
     *,
     releasable_only: bool = False,
+    film: str = "",
 ) -> list[dict[str, Any]]:
-    """Up to `limit` stats whose value is a {fact:} token, printed through the facts. Any other item,
-    and any item that uses a do-not-print fact, is left out with a warning, as is (with
+    """Up to `limit` stats whose value is a {fact:} token (or, when `limit` names fact ids, the items
+    whose value prints those facts, in that order), printed through the facts. Any other item, and
+    any item that uses a do-not-print fact, is left out with a warning, as is (with
     `releasable_only`, loop films of a project that is not a draft) any item that prints a fact
     that is not releasable. Values never count."""
     out: list[dict[str, Any]] = []
-    for k, item in enumerate(ch.items):
+    order = list(enumerate(ch.items))
+    if isinstance(limit, tuple):  # by fact id, in the film's order
+        named = {fid: k for k, item in order for fid in FACT_TOKEN_RE.findall(item.value)}
+        missing = [fid for fid in limit if fid not in named]
+        if missing:
+            warnings.append(
+                f"films.{film}.stats: no item of chapter {cid!r} prints {', '.join(missing)} in its value; "
+                "left out"
+            )
+        order = [(named[fid], ch.items[named[fid]]) for fid in limit if fid in named]
+        limit = len(order)
+    for k, item in order:
         if len(out) >= limit:
             break
         where = f"chapter {cid!r} stat {k}"
@@ -1161,6 +1175,11 @@ def _stat_type(project: Project, fonts: dict[str, Any], lay: Layout) -> Any:
     return _Type(files, {"paper": c.paper, "accent": c.accent, "ink": c.ink}, lay.unit)  # type: ignore[arg-type]
 
 
+def _shows(shot: dict[str, Any] | None, file: str) -> bool:
+    """Whether `shot` is a capture of the picture `file` (a stat run then starts on it as it is)."""
+    return shot is not None and shot["kind"] == "capture" and shot.get("file") == file
+
+
 def _place_stats(
     b: _Builder,
     items: list[dict[str, Any]],
@@ -1244,14 +1263,16 @@ def _stats(
         f0 = b.f
         dissolve: dict[str, Any] | None = None
         dip = 0
+        # On the picture already on screen (a montage's last): no dissolve, a beat's lead.
+        same = k == 0 and not plain and _shows(b.prev, on.capture.file)
         if k == 0 and plain:
             dip = b.dip(tint)
             if is_image(b.prev):
                 cam.until(f0 + dip)
-        elif k == 0:
+        elif k == 0 and not same:
             dissolve = b.entry()
             b.cross(on.vantage, dissolve, rest)  # from another vantage: the camera cuts to rest
-        entry = dissolve["f1"] - dissolve["f0"] if dissolve else dip
+        entry = dissolve["f1"] - dissolve["f0"] if dissolve else B if same else dip
         # The first figure lands on the first beat after its entry; the next ones on their first
         # frame, once the text before them has faded out (over that stat's last B/3). Each figure
         # slides in whole over half a beat; label and source fade in after it (`text_in`) and stay
@@ -1274,7 +1295,7 @@ def _stats(
         if not plain:
             start = land
             current = cam.windows[-1]
-            if k == 0 and (current["x"], current["y"], current["zoom"]) != rest:
+            if k == 0 and not same and (current["x"], current["y"], current["zoom"]) != rest:
                 cam.until(f0)  # a push before eases back to the rest view first
                 cam.hold(f0 + b.easing_back, rest)
                 start = max(start, f0 + b.easing_back)
@@ -1592,7 +1613,7 @@ def _derive_cut(
                 parts.append(("montage", m))
         elif isinstance(ch, StatsChapter) and not any(k == "stats" for k, _ in parts):
             items = (
-                _stat_items(project, ids[i], ch, film.stats, warnings, releasable_only=strict)
+                _stat_items(project, ids[i], ch, film.stats, warnings, releasable_only=strict, film=film.id)
                 if film.stats
                 else []
             )
@@ -1617,7 +1638,10 @@ def _derive_cut(
         raise FileNotFoundError(f"no masters to film in {project.masters_dir}; run `vantage process` first")
     assert main is not None
     stats = [p for p in parts if p[0] in ("stats", "montage")]  # kept, in story order, when degrading
-    still: set[int] = set()  # id() of captures that must not push (the two-capture cut's before)
+    # id() of captures that must not push, and why: the two-capture cut's before, and a step whose
+    # picture the next curtain shows as `after` and pushes to the same place (it pushes there itself:
+    # pushing twice, with an ease back between, frames one subject in, out and in again).
+    still: dict[int, str] = {}
     if len(every) <= 2:
         series = next((s for k, s in parts if k == "series" and s.vantage == main), None)
         series = series or _fallback_series(project, caps, main, size)
@@ -1632,13 +1656,16 @@ def _derive_cut(
                 ),
                 (None, None),
             )  # fmt: skip
-            still.add(id(series.captures[0]))
+            still[id(series.captures[0])] = "two captures"
             c = _curtain(project, compare[0], compare[1], caps, main, size, pair=(every[0], every[1]))
             if c is not None:
                 parts.append(("curtain", c))
         parts += stats
     elif not any(k in ("series", "curtain") for k, _ in parts):
         parts.insert(0, ("series", _fallback_series(project, caps, main, size)))
+    for (k1, p1), (k2, p2) in itertools.pairwise(parts):
+        if k1 == "series" and k2 == "curtain" and p1.vantage == p2.vantage and _curtain_pushes_it(p1, p2):
+            still.setdefault(id(p1.captures[-1]), "the curtain pushes it")
     images = [p for k, p in parts if k in ("series", "curtain")]
     montages: list[_Montage] = [p for k, p in parts if k == "montage"]
     total_images = sum(len(p.captures) if isinstance(p, _Series) else 1 for p in images)
@@ -1665,9 +1692,19 @@ def _derive_cut(
     first_cap = first.captures[0] if isinstance(first, _Series) else first.before
     provenance = ["simulated" if cfg.simulated else "photo"]
     honesty = honesty_line(provenance)
+    # A run of stats over a picture closes on the last montage's last picture when the film has a
+    # montage (after it, so the middle of the film is not one photograph and the figures land on
+    # the finished site seen anew); else it sits on the main vantage's latest picture, in story order.
+    on_vid, on_cap = main, every[-1]
+    stat_part = next((p for p in parts if p[0] == "stats"), None)
+    if montages and stat_part is not None and not stat_part[1][5]:
+        parts.remove(stat_part)
+        last = max(k for k, p in enumerate(parts) if p[0] == "montage")
+        parts.insert(last + 1, stat_part)
+        on_vid, on_cap = montages[-1].vantage, montages[-1].captures[-1]
     end = _end_text(b, honesty, any(k == "stats" for k, _ in parts), parts[-1])
-    stats_on = _StatsOn(main, every[-1], _geometry(project, index, main, width, height),
-                        _vantage_info(project, caps, main)[1], _stat_hotspots(project, caps, main, every[-1]))  # fmt: skip
+    stats_on = _StatsOn(on_vid, on_cap, _geometry(project, index, on_vid, width, height),
+                        _vantage_info(project, caps, on_vid)[1], _stat_hotspots(project, caps, on_vid, on_cap))  # fmt: skip
     if film.loop:  # from pure night onto the title's image
         rise = b.add(
             {"id": "R1", "kind": "rise", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["rise"]
@@ -1889,7 +1926,7 @@ def _capture_step(
     rest: Cam,
     zmax: float,
     pushed: Cam | None,
-    still: set[int],
+    still: dict[int, str],
     total_images: int,
     default: str | None = None,
     sid: str = "",
@@ -1906,7 +1943,7 @@ def _capture_step(
         step, target = _push(b, s, cap, rest, zmax, box, sid)
         if id(cap) in still and target is not None:
             assert step is not None
-            step.update(push=False, reason="two captures")
+            step.update(push=False, reason=still[id(cap)])
             target = None
         quiet, stepped, pushing = film.beats
         beats = quiet if step is None else (pushing if target else stepped)
@@ -1969,8 +2006,26 @@ def _push_words(b: _Builder, s: _Series, cap: _Capture) -> str | None:
         b.warnings = keep
 
 
+def _curtain_pushes_it(series: _Series, curtain: _Curtain) -> bool:
+    """Whether a series' last step is on the curtain's `after` picture and the curtain pushes within
+    MIN_SHIFT of where that step asks to push."""
+    cap = series.captures[-1]
+    step = cap.step
+    if step is None or cap.date != curtain.after.date:
+        return False
+    mine = step.film.focus if step.film and step.film.focus else step.focus
+    if not mine:
+        return False
+    for _, st, _ in curtain.steps:
+        theirs = (st.film.focus if st.film and st.film.focus else st.focus) if st else None
+        if theirs and math.hypot(theirs[0] - mine[0], theirs[1] - mine[1]) < MIN_SHIFT:
+            return True
+    return False
+
+
 def _poster(b: _Builder, images: Sequence[_Series | _Curtain]) -> int:
-    """The poster frame: the latest capture shown at rest and without its words (the frame before
+    """The poster frame: the latest capture of a series (never a montage's: the thumbnail shows the
+    main story whatever drift a master's size allows) shown at rest and without its words (the frame before
     a step's words land, else its last frame), once its dissolve is over and the camera is back at
     the rest view; else the title's key frame. A push is the most enlarged picture in a film, and
     words over it hide the subject, so neither makes the thumbnail."""
@@ -1981,7 +2036,7 @@ def _poster(b: _Builder, images: Sequence[_Series | _Curtain]) -> int:
     rests = {p.vantage: b.rest(p) for p in images}
     B = b.grid.fpb
     for shot in reversed(b.shots):
-        if shot["kind"] != "capture":
+        if shot["kind"] != "capture" or shot.get("montage"):  # the main story's pictures only
             continue
         f = shot["f0"] + B - 1 if shot.get("step") else shot["f1"] - 1
         d = shot["dissolve"]
@@ -2036,6 +2091,7 @@ def _capture_tracks(
 
 
 MONTAGE_BEATS = 2  # a montage picture's beats (at least the film's quiet capture beats)
+MONTAGE_LAST_BEATS = 4  # its last picture's: the closing look holds, drifting, before what follows
 
 
 def _montage_shots(
@@ -2056,7 +2112,7 @@ def _montage_shots(
     first = quiet
     if words:  # the words land on beat 1 and stay until they read at 17 characters a second
         first = max(quiet, -(-(B + third + cue_frames(words, b.grid.fps)) // B))
-    beats = [first] + [quiet] * (len(m.captures) - 1)
+    beats = [first] + [quiet] * (len(m.captures) - 2) + [max(quiet, MONTAGE_LAST_BEATS)]
     holds = [b.holds.get(f"S{n + 1 + k:02d}", 0) for k in range(len(m.captures))]  # the flash margin's
     beats = [length + h for length, h in zip(beats, holds, strict=True)]
     end = f0 + sum(beats) * B

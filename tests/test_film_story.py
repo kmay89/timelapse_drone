@@ -1332,10 +1332,12 @@ def _montage(project: Project, fid: str = "16x9") -> tuple[dict[str, Any], list[
 
 
 def test_montage_shows_the_other_vantage(tmp_path):
-    """A gallery chapter on another drone vantage plays as a montage, in story order and in both
-    cuts: five captures spread evenly from its first to its last, dissolving on the beat with no
-    card, the date label per capture, the chapter's kicker over the first picture for as long as it
-    takes to read, no push, and the outgoing vantage keeping its own framing through the dissolve."""
+    """A gallery chapter on another drone vantage plays as a montage in both cuts: five captures
+    spread evenly from its first to its last, dissolving on the beat with no card, the date label per
+    capture, the chapter's kicker over the first picture for as long as it takes to read, the last
+    picture held 4 beats, no push, and the outgoing vantage keeping its own framing through the
+    dissolve. The stat run follows it on its last picture (no dissolve: only the panel and text come
+    in), so the film's middle is not one photograph and it closes on the figures."""
     project = tiny(
         tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)}, film={"vertical": True},
         simulated=True,
@@ -1345,21 +1347,24 @@ def test_montage_shows_the_other_vantage(tmp_path):
         p, run = _montage(project, fid)
         kinds = [s["kind"] for s in p["shots"]]
         assert "card" not in kinds and kinds[-1] == "end", kinds
-        assert kinds.index("stat") < p["shots"].index(run[0]), kinds  # story order: after the stats
+        stat = p["shots"][kinds.index("stat")]
+        assert kinds.index("stat") == p["shots"].index(run[-1]) + 1, kinds  # the stats close the film
+        assert stat["file"] == run[-1]["file"] and stat["vantage"] == "water" and stat["dissolve"] is None
         assert [s["capture"] for s in run] == [WATER[k] for k in (0, 2, 3, 5, 6)], fid
         assert {s["vantage"] for s in run} == {"water"} and all(s["kind"] == "capture" for s in run)
         assert [s["label"] for s in run] == [s["text"][0]["text"] for s in run]
         assert [s["rail"] for s in run] == [0, 1, 2, 3, 4] and len({s["series"] for s in run}) == 1
         beats = [(s["f1"] - s["f0"]) // B for s in run]
-        assert beats[1:] == [2, 2, 2, 2], beats
+        assert beats[1:] == [2, 2, 2, 4], beats
         for s in run:
             assert s["f0"] % B == 0 and s["dissolve"]["f0"] == s["f0"]
             assert s["dissolve"]["f1"] - s["dissolve"]["f0"] == D
         assert [s["dissolve"]["from"] for s in run[1:]] == [s["capture"] for s in run[:-1]]
         first = run[0]
         prev = p["shots"][p["shots"].index(first) - 1]
-        assert first["dissolve"]["from"] == prev["id"] and prev["kind"] == "stat"
-        # The stat's picture keeps its own camera through the dissolve; the camera cuts to the
+        assert first["dissolve"]["from"] == prev["capture"] and prev["kind"] == "capture"
+        assert prev["vantage"] == "site"
+        # The scrub's picture keeps its own camera through the dissolve; the camera cuts to the
         # montage's rest view on its first frame and then drifts in by at most 4 %.
         cut = _Cut(project, FilmPlan(id=fid, plan=p))
         assert first["dissolve"]["cam"] == list(cut.camera(first["f0"] - 1))
@@ -1388,7 +1393,7 @@ def test_montage_shows_the_other_vantage(tmp_path):
 
 
 def test_montage_frames(tmp_path):
-    """Rendered: no jump into the dissolve (the stat's picture keeps its framing), each montage
+    """Rendered: no jump into the dissolve (the scrub's picture keeps its framing), each montage
     picture is the capture it names, and the kicker is on the first one."""
     project = tiny(tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)})
     project = _facts(project.root, area=AREA)
@@ -1396,7 +1401,7 @@ def test_montage_frames(tmp_path):
     cut = _Cut(project, FilmPlan(id="16x9", plan=p))
     f0, stat = run[0]["f0"], p["shots"][p["shots"].index(run[0]) - 1]
     held = tuple(run[0]["dissolve"]["cam"])
-    assert held[2] > 1.0 and held == cut.camera(f0 - 1)  # the stat drifted in
+    assert held == cut.camera(f0 - 1) and stat["vantage"] == "site"
     assert cut.scrims  # the tag's and labels' scrims are measured first, over frames of their own
     warps: list[tuple[str, tuple[float, ...]]] = []
     warp = cut._warp
@@ -1452,8 +1457,10 @@ def test_montage_needs_two_captures(tmp_path):
 
 def test_cross_vantage_dissolve_may_cut_the_camera(tmp_path):
     """check_plan lets the camera cut only on the first frame of a dissolve between two vantages
-    whose outgoing picture keeps its own framing (`dissolve.cam`)."""
-    project = tiny(tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)})
+    whose outgoing picture keeps its own framing (`dissolve.cam`): here the scrub's last step
+    pushes, and the montage of the water vantage dissolves in from that framing."""
+    steps = [STEPS[0], STEPS[1], {**STEPS[2], "focus": [0.6, 0.5, 1.4]}]
+    project = tiny(tmp_path / "p", steps=steps, chapters=[FIGURE, GALLERY], extra={"water": list(WATER)})
     p, run = _montage(_facts(project.root, area=AREA))
     check_plan(p)
     bad = json.loads(json.dumps(p))
@@ -1591,3 +1598,51 @@ def test_tag_and_date_labels_keep_small_text_contrast(tmp_path, monkeypatch, fid
         panel = cut.panels[0]["box"]
         tag = next(i["box"] for i in cut.ink if i["layer"] == "tag")
         assert panel[1] + panel[3] + (PANEL_PAD + 3 * PANEL_SIGMA) * cut.u <= tag[1], (panel, tag)
+
+
+def test_a_film_names_its_stats_by_fact(tmp_path):
+    """films.<id>.stats may name the items to show by the facts their values print, in that order;
+    an id no item prints is a warning. A count, or a list of more than six or with repeats, is
+    validated like before."""
+    from vantage.config import FilmSpec
+
+    films = {"16x9": {"stats": ["area", "trees", "nowhere"]}}
+    project = tiny(tmp_path / "p", chapters=[COMPARE, RUN], films=films, simulated=True)
+    project = _facts(project.root, area=AREA, trees=TREES)
+    plan = _plan(project)
+    stats = [s for s in plan.plan["shots"] if s["kind"] == "stat"]
+    assert [s["value"] for s in stats] == ["13,100", "78"]
+    assert any("films.16x9.stats" in w and "nowhere" in w for w in plan.warnings), plan.warnings
+    for bad in (7, ["a", "a"], [str(k) for k in range(7)]):
+        with pytest.raises(ValidationError):
+            FilmSpec(stats=bad)
+
+
+def test_a_step_leaves_its_push_to_the_curtain_that_pushes_there(tmp_path):
+    """A scrub's last step on the curtain's `after` picture does not push when the curtain right
+    after it pushes to the same place: one push in, not in, out and in again."""
+    steps = [STEPS[0], STEPS[1], {**STEPS[2], "focus": [0.5, 0.5, 1.4]}]
+    compare = {**COMPARE, "steps": [{"text": "Half and half.", "split": 0.5, "focus": [0.51, 0.5, 1.4]}]}
+    project = tiny(tmp_path / "p", steps=steps, chapters=[compare])
+    p = _plan(project).plan
+    last = next(s for s in p["shots"] if s["kind"] == "capture" and s["capture"] == DATES[4])
+    assert not last["step"]["push"] and last["step"]["reason"] == "the curtain pushes it", last["step"]
+    curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
+    assert curtain["steps"][0]["push"]
+    far = {**COMPARE, "steps": [{"text": "Half and half.", "split": 0.5, "focus": [0.3, 0.5, 1.4]}]}
+    project = tiny(tmp_path / "q", steps=steps, chapters=[far])
+    last = next(
+        s for s in _plan(project).plan["shots"] if s.get("capture") == DATES[4] and s["kind"] == "capture"
+    )
+    assert last["step"]["push"], last["step"]  # elsewhere: both push
+
+
+def test_poster_comes_from_the_main_story_not_a_montage(tmp_path):
+    """The poster is the main vantage's latest capture at rest, never a montage picture, even in the
+    tiny 9:16 film whose montage cannot drift (its masters are at max_upscale at rest)."""
+    project = tiny(
+        tmp_path / "p", chapters=[FIGURE, GALLERY], extra={"water": list(WATER)}, film={"vertical": True}
+    )
+    p = _plan(_facts(project.root, area=AREA), "9x16").plan
+    shot = next(s for s in p["shots"] if s["f0"] <= p["poster"] < s["f1"])
+    assert shot["kind"] == "capture" and shot["vantage"] == "site" and not shot.get("montage"), shot

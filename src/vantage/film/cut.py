@@ -1286,6 +1286,8 @@ class _Cut:
             if prev is not None and prev["kind"] in ("capture", "curtain", "stat"):
                 self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
             intro = ramp(f, d["f0"] + half, d["f1"] - d["f0"] - half)
+        elif d is None and prev is not None and prev["kind"] == "capture":  # on the picture as it was
+            self._ghost(frame, i - 1, 1 - ramp(f, f0, max(1, self.fpb // 2)))  # its overlays leave
         # The panel comes in with the text: over the B/3 before the figure lands, whole as it
         # lands (a held entry, "N1.0", shows the bare picture until then).
         land = shot.get("land", f0)

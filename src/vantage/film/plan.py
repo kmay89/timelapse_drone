@@ -298,7 +298,7 @@ class FilmDef:
     preset: str | None = None
     bpm: float = 100.0
     chapters: str | tuple[str, ...] = "all"  # all | main | chapter ids
-    stats: int = 3
+    stats: int | tuple[str, ...] = 3  # how many, or the fact ids of the items, in that order
     montage: int = 5  # captures in a gallery chapter's montage (0: none)
     stats_surface: Literal["night", "paper"] | None = None  # None: over a picture (the chapter tints)
     title_beats: int = 4
@@ -354,6 +354,8 @@ def resolve_films(project: Project) -> dict[str, FilmDef]:
         merged = {**builtin, **output, **preset, **explicit}
         if isinstance(merged.get("chapters"), list):
             merged["chapters"] = tuple(merged["chapters"])
+        if isinstance(merged.get("stats"), list):
+            merged["stats"] = tuple(merged["stats"])
         if merged.get("safe") is not None:
             merged["safe"] = tuple(merged["safe"])
         film = FilmDef(id=fid, **merged)

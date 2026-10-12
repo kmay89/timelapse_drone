@@ -143,8 +143,12 @@ def check_plan(plan: dict[str, Any]) -> None:
             same = prev is not None and prev["kind"] == "title" and prev.get("capture") == shot.get("capture")
             if kind == "curtain":
                 same = shot.get("from_after", False)
-            if kind == "stat":  # the next stat of a run: the same picture, only the text crossfades
-                same = prev is not None and prev["kind"] == "stat" and prev.get("file") == shot["file"]
+            if kind == "stat":  # the next stat of a run, or a run on the picture before: the same picture
+                same = (
+                    prev is not None
+                    and prev["kind"] in ("stat", "capture")
+                    and prev.get("file") == shot["file"]
+                )
             if prev is not None and is_image(prev) and d is None and not same:
                 problems.append(f"{sid}: a hard cut from {prev['id']} (every image change dissolves)")
             if prev is not None and not is_image(prev) and d is None:

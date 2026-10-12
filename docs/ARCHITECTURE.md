@@ -541,7 +541,7 @@ films:                       # optional; id → FilmSpec; merged over the derive
   9x16: {chapters: main}     # derived when output.film.vertical (aspect from the id)
   screen: {preset: screen}   # the event loop (auto: false) → render it with --film screen
 # FilmSpec fields (all optional): preset (screen) · cut · aspect (16x9|9x16) · bpm · chapters (all | main | [chapter ids])
-#   · stats (0–6, default 3) · stats_surface (night | paper: a plain stat card; default: over a picture)
+#   · stats (0–6, default 3; or [fact ids]: the items whose values print them, in that order) · stats_surface (night | paper: a plain stat card; default: over a picture)
 #   · montage (captures per gallery montage: 0 = none, else 2–8; default 5) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
 #   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
 #   · enabled (true) · hours (loop films)
@@ -598,8 +598,10 @@ chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's wor
 
 Shots come from the chapters in scope, in story order: the first hero → title; each scrub chapter →
 a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots;
-each gallery chapter on a drone vantage other than the main one → a montage; then the end card. Explore,
-text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
+each gallery chapter on a drone vantage other than the main one → a montage; then the end card. One
+exception: when the film has a montage, its stat run (over a picture) moves after the last montage
+and sits on its last picture, so the middle of the film is not one photograph and the film closes
+on its figures over the site seen anew. Explore, text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
 plays the main vantage's captures as one quiet series. For the demo at full size the 16:9 cut is
 87 beats (52.2 s) and the 9:16 78 (46.8 s: two figures and three montage pictures, story.yaml
 `films.9x16`), each with 5.4 s on night (the end card) after the shoreline montage, and with the
@@ -648,7 +650,8 @@ small masters leave little to push, they are 85 and 73 beats.
   a stat, the panel and text leave over the first half, as into a capture), the next ones on their
   first beat, D frames each, the date label swapping at each dissolve's midpoint and the knob easing
   along the montage's own rail (ticks at its dates; another series' rail crossfades out over the
-  first dissolve). 2 beats a picture (`MONTAGE_BEATS`, at least the film's quiet capture beats), so
+  first dissolve). 2 beats a picture (`MONTAGE_BEATS`, at least the film's quiet capture beats), and
+  4 for the last (`MONTAGE_LAST_BEATS`: the closing look holds, drifting, before what follows), so
   no region sees two dissolves within a second: a snow flight between two summer ones stays within
   the flash margin. Words (`film.line`, else the kicker, else the title; `step.words_from`
   film.line | kicker | title, `reason: montage`) land on the first picture's beat 1 in the zone
@@ -694,9 +697,11 @@ small masters leave little to push, they are 85 and 73 beats.
   scope, in order, whose value contains a `{fact:}` token. Any other item, and any item whose value,
   unit, label or source uses a do-not-print fact, is left out with a plan warning. The stats of a
   chapter form a **run**.
-  - Picture (`backdrop: picture`, the default): the main vantage's latest capture (`vantage`,
-    `capture`, `file`), the picture the curtain ends on, so the cut flows on without a dip. The
-    run's first stat opens with a D-frame `dissolve` from the image before it (from the curtain: only
+  - Picture (`backdrop: picture`, the default): the last montage's last picture when the film has a
+    montage (the run follows it with no dissolve: the montage's label and rail leave over half a
+    beat, and the first figure lands a beat in), else the main vantage's latest capture (`vantage`,
+    `capture`, `file`), the picture the curtain ends on, so the cut flows on without a dip. Over the
+    main vantage's picture the run's first stat opens with a D-frame `dissolve` from the image before it (from the curtain: only
     the strip still showing `before` changes) whose overlays leave over its first half; the next
     stats have no dissolve and no dip: the picture and the camera carry on and only the text
     changes, in sequence (the previous stat's text out over its last B/3 frames, then the new
@@ -836,7 +841,10 @@ small masters leave little to push, they are 85 and 73 beats.
 - **Zoom clamp**: s0 = max(W/mw, H/mh); z_eff = clamp(z, 1, max(1, max_upscale/s0)). Warnings when
   z_eff < z ("push clamped"), s0·z_eff > 1.25 ("soft push") and s0 > max_upscale ("master upscaled
   even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a
-  3-beat step without a push (`push: false, reason: clamped`).
+  3-beat step without a push (`push: false, reason: clamped`). So does a series' last step on the
+  picture the next curtain shows as `after` when one of that curtain's steps pushes within 0.03 of
+  its focus (`reason: the curtain pushes it`): the curtain makes that push, so the film never pushes
+  in, eases out and pushes in again on one subject.
 - **Rest camera**: the image centre at zoom 1 in 16:9; the vantage's `portrait_focus` in 9:16.
 - **Degrade** (counted on the main vantage's captures after exclusions): 0 captures is an error;
   1 capture plays title → capture (at least 3 beats, words if it is a step) → stats → end; 2 captures
@@ -1029,7 +1037,7 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
                    "lines": [{"f0": 0, "text": "Title over the April 2025 view: …", "facts": []}]} | null,
     "shots": [ /* see below */ ],
     "hold_s": 1.0, "fade_s": 0.8, "seconds_total": 47.0, "poster_seconds": 23.65 },   // classic timing
-    // story instead: "poster": <frame>: the latest capture at rest without its words (the frame
+    // story instead: "poster": <frame>: the latest capture of a series (never a montage's) at rest without its words (the frame
     // before a step's words land, else its last frame; its dissolve over and the camera back at
     // the rest view), else the title's key frame; never a push, never words over the picture
     // story also: "flash": {"limit": 2, "held": {"S07": 1, "C1.0": 1}, "slowed": {}, "softened": {"S12": 0.38}}

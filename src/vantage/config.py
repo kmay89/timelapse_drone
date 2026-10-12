@@ -623,7 +623,11 @@ class FilmSpec(Model):
         description="all | main (the first scrub's vantage, plus stats and other vantages' gallery montages) "
         "| [chapter ids].",
     )
-    stats: int | None = Field(None, ge=0, le=6, description="Stats shown (default 3).")
+    stats: int | list[str] | None = Field(
+        None,
+        description="Stats shown: how many, in story order (default 3; 0–6), or the fact ids of the items "
+        "to show, in that order (an item is named by the {fact:} in its value).",
+    )
     montage: int | None = Field(
         None,
         ge=0,
@@ -649,6 +653,15 @@ class FilmSpec(Model):
     auto: bool | None = Field(None, description="Rendered by `vantage film` without --film (default true).")
     enabled: bool | None = None
     hours: float | None = Field(None, gt=0, le=12, description="Loop films: --hours default.")
+
+    @field_validator("stats")
+    @classmethod
+    def _stats(cls, v: int | list[str] | None) -> int | list[str] | None:
+        if isinstance(v, int) and not 0 <= v <= 6:
+            raise ValueError("stats must be 0–6, or a list of fact ids")
+        if isinstance(v, list) and (len(v) > 6 or len(set(v)) != len(v)):
+            raise ValueError("stats lists at most 6 different fact ids")
+        return v
 
     @field_validator("montage")
     @classmethod
