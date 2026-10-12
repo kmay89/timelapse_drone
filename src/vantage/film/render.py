@@ -804,7 +804,14 @@ def _render_parts(
                 web=(part(web_mp4), web) if web else None, gop=plan.encode.get("gop"),
                 threads=plan.encode.get("threads", ENCODER_THREADS),
             )  # fmt: skip
-            meter.check(f"film {plan.id}")
+            meter.check(f"film {plan.id}")  # refuses more than 3 transitions a second
+            limit = (plan.plan.get("flash") or {}).get("limit", project.config.output.film.flash_limit)
+            if meter.worst > limit:
+                plan.warnings.append(
+                    f"measured {meter.worst} flash transitions in one region within a second around frame "
+                    f"{meter.worst_frame}, over the margin of {limit} (output.film.flash_limit; WCAG 2.3.1 "
+                    "allows 3)"
+                )
             if plan.encode.get("tracks"):  # captions and chapters, by stream copy (video unchanged)
                 embed(parts[mp4], plan)
                 if web:
@@ -817,7 +824,7 @@ def _render_parts(
             plan.render = {
                 "mp4": record(mp4),
                 "web": record(web_mp4) if web else None,
-                "flash": meter.result(),
+                "flash": {**meter.result(), "limit": limit},
                 "ffmpeg": ffmpeg_version(),
             }
         for suffix, text in track_texts(plan).items():

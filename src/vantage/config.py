@@ -245,6 +245,13 @@ class FilmSettings(Model):
         "story", description="The cut of the derived films: story (on a beat grid) or classic (hold/fade)."
     )
     bpm: float = Field(100.0, ge=60, le=160, description="The beat grid of story cuts.")
+    flash_limit: int = Field(
+        2,
+        ge=1,
+        le=3,
+        description="Story cuts: flash transitions allowed in one region within a second (WCAG 2.3.1 allows 3; "
+        "the planner lengthens holds and pushes to keep this margin).",
+    )
     max_upscale: float = Field(
         1.6, ge=1.0, le=3.0, description="Output px per master px never exceeds this in a push."
     )

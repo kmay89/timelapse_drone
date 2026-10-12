@@ -251,4 +251,5 @@ chapters:
 # loop (75 bpm, large type, overscan-safe), rendered only on request:
 #   uv run vantage film demo-lakeside --film screen [--hours 1]
 films:
+  9x16: { stats: 2, montage: 3 }  # the phone cut: two figures, three looks from the water
   screen: { preset: screen }

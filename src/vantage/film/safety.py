@@ -45,6 +45,7 @@ RED_SATURATION = 0.8  # R / (R + G + B) of a saturated red
 
 _c = np.arange(256, dtype=np.float64) / 255
 _SRGB_TO_LINEAR = np.where(_c <= 0.04045, _c / 12.92, ((_c + 0.055) / 1.055) ** 2.4).astype(np.float32)
+_SRGB_TO_LINEAR64 = _SRGB_TO_LINEAR.astype(np.float64)
 _BGR_WEIGHTS = np.array([0.0722, 0.7152, 0.2126], np.float32)  # Rec.709, BGR order
 
 
@@ -198,42 +199,35 @@ def check_plan(plan: dict[str, Any]) -> None:
         raise PlanError("film plan is not safe to render:\n  " + "\n  ".join(problems))
 
 
-def _sub_means(frame: np.ndarray, grid: int) -> np.ndarray:
-    """Mean linear B, G, R of each sub-cell of a (2·grid) × (2·grid) split of a BGR uint8 frame."""
+def _sub_means(frame: np.ndarray, grid: int, size: tuple[int, int] | None = None) -> np.ndarray:
+    """Mean linear B, G, R of each sub-cell of a (2·grid) × (2·grid) split of a BGR uint8 frame,
+    measured on the frame downscaled (INTER_AREA) to `size` (default 1/8 of it, at least 2·grid)."""
     n = 2 * grid
     h, w = frame.shape[:2]
-    small = cv2.resize(frame, (max(n, w // 8), max(n, h // 8)), interpolation=cv2.INTER_AREA)
-    lin = _SRGB_TO_LINEAR[small]
+    size = size or (max(n, w // 8), max(n, h // 8))
+    small = frame if (w, h) == size else cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+    lin = _SRGB_TO_LINEAR64[small]
     sh, sw = lin.shape[:2]
     ys = np.linspace(0, sh, n + 1).round().astype(int)
     xs = np.linspace(0, sw, n + 1).round().astype(int)
-    return np.array(
-        [
-            [lin[ys[r] : ys[r + 1], xs[c] : xs[c + 1]].reshape(-1, 3).mean(axis=0) for c in range(n)]
-            for r in range(n)
-        ],
-        np.float64,
-    )
+    sums = np.add.reduceat(np.add.reduceat(lin, ys[:-1], axis=0), xs[:-1], axis=1)
+    return sums / np.outer(np.diff(ys), np.diff(xs))[..., None]
 
 
-def regions(frame: np.ndarray, grid: int = CELLS) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def regions(
+    frame: np.ndarray, grid: int = CELLS, size: tuple[int, int] | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(relative luminance, red value, saturated red) of each measured region of a BGR uint8 frame:
     the grid × grid cells plus the (grid − 1)² cells offset by half a cell, so a flash that straddles
     a cell edge is still seen whole. Red value is max(0, (R − G − B)·320) and saturated red is
-    R / (R + G + B) ≥ 0.8, in linear light (WCAG 2.3.1's red flash)."""
-    sub = _sub_means(frame, grid)
+    R / (R + G + B) ≥ 0.8, in linear light (WCAG 2.3.1's red flash). `size`: the downscaled size it
+    is measured at (`_sub_means`; a small proxy of a film passes the size the film itself is measured
+    at, film/margin.py)."""
+    sub = _sub_means(frame, grid, size)
     n = 2 * grid
-    blocks = [
-        sub[r : r + 2, c : c + 2].reshape(-1, 3).mean(axis=0)
-        for r in range(0, n - 1, 2)
-        for c in range(0, n - 1, 2)
-    ]
-    blocks += [
-        sub[r : r + 2, c : c + 2].reshape(-1, 3).mean(axis=0)
-        for r in range(1, n - 2, 2)
-        for c in range(1, n - 2, 2)
-    ]
-    bgr = np.array(blocks)
+    aligned = sub.reshape(grid, 2, grid, 2, 3).mean(axis=(1, 3)).reshape(-1, 3)
+    offset = sub[1 : n - 1, 1 : n - 1].reshape(grid - 1, 2, grid - 1, 2, 3).mean(axis=(1, 3)).reshape(-1, 3)
+    bgr = np.concatenate([aligned, offset])
     lum = bgr @ _BGR_WEIGHTS.astype(np.float64)
     b, g, r = bgr[:, 0], bgr[:, 1], bgr[:, 2]
     red = np.maximum(0.0, (r - g - b) * 320)
@@ -315,9 +309,13 @@ class LumaMeter:
     that changes it by at least THRESHOLD while its darker end is below BRIGHT, or a run of its red
     value of more than RED_THRESHOLD with saturated red at one end. Two opposing transitions are one
     flash (WCAG 2.3.1); a film fails when any region holds more than LIMIT transitions (of either
-    kind) within `fps` frames, which is stricter than 3 flashes a second."""
+    kind) within `fps` frames, which is stricter than 3 flashes a second. `size`: the downscaled size
+    frames are measured at (default 1/8 of each frame, see `regions`); `log`: when a list, every
+    transition is appended to it as (frame, kind, region), for film/margin.py."""
 
     fps: int
+    size: tuple[int, int] | None = None
+    log: list[tuple[int, str, int]] | None = None
     frames: int = 0
     worst: int = 0  # most transitions of one region in any window of fps frames
     worst_frame: int = 0  # last frame of that window
@@ -329,7 +327,7 @@ class LumaMeter:
     _windows: dict[tuple[str, int], deque[int]] = field(default_factory=dict)
 
     def add(self, frame: np.ndarray) -> None:
-        self.push(*regions(frame))
+        self.push(*regions(frame, size=self.size))
 
     def push(
         self, lum: np.ndarray, red: np.ndarray | None = None, saturated: np.ndarray | None = None
@@ -358,6 +356,8 @@ class LumaMeter:
             run.counted |= new
             for r in np.flatnonzero(new):
                 self._windows.setdefault((kind, int(r)), deque()).append(k)
+                if self.log is not None:
+                    self.log.append((k, kind, int(r)))
         for window in self._windows.values():
             while window and window[0] <= k - self.fps:
                 window.popleft()
