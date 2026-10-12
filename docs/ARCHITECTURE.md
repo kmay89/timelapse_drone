@@ -544,7 +544,7 @@ films:                       # optional; id → FilmSpec; merged over the derive
 #   · stats (0–6, default 3; or [fact ids]: the items whose values print them, in that order) · stats_surface (night | paper: a plain stat card; default: over a picture)
 #   · montage (captures per gallery montage: 0 = none, else 2–8; default 5) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
 #   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
-#   · enabled (true) · hours (loop films)
+#   · enabled (true) · hours (loop films) · max_s (story cuts' length budget, s: default 48; loops none; 10–600)
 steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare steps
 chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's words, or no montage
 ```
@@ -570,6 +570,12 @@ chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's wor
 - A gallery chapter's `film.line` sets its montage's words (default: its kicker, else its title);
   `film.skip` leaves the montage out of films. `montage` caps a film's montages at that many
   captures each; 0 turns them off.
+- `max_s` holds a story cut (not a loop) to a length budget (`plan._fit_length`, default 48 s). A cut
+  planned over it shows one picture fewer in its longest montage at a time (down to 2), then one
+  stat fewer (the last; down to 1), each trial planned without the flash margin, until it fits; the
+  film is then planned in full with those settings and a warning names what was left out (and the
+  length when it still runs over). A project on the defaults (stats 3, montage 5) gets films of at
+  most 48 s; one that sets `montage` and `stats` itself to fit is planned once.
 - `film.line` sets a step's words on screen; `film.focus` its push target (used as given, only
   clamped); `film.skip` leaves the step out of films (its capture still plays as a quiet beat).
 - `vantage validate` warns about words over 40 characters, unknown chapter ids in

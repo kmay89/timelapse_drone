@@ -27,6 +27,7 @@ import pytest
 from test_film_story import _cores, _NoText
 from vantage.config import Project, load_project
 from vantage.film.cut import SMALL_CONTRAST, _Cut
+from vantage.film.plan import plan_films
 from vantage.film.render import render_film
 from vantage.film.story import Geometry
 from vantage.models import FilmPlan, MastersIndex
@@ -197,3 +198,25 @@ def test_full_size_scrims_keep_their_contrast(full, fid):
     for record in scrims:
         target = record.get("target", SMALL_CONTRAST)
         assert record["contrast"] >= target, (fid, record)
+
+
+def test_full_size_default_films_keep_the_length_budget(full, tmp_path):
+    """The demo on the engine's defaults (no per-film stats or montage) still makes cuts of at most
+    48 s: the length budget (`max_s`) trims montage pictures, then stats, and says what it left out."""
+    import yaml
+
+    project, _ = full
+    root = tmp_path / "defaults"
+    root.mkdir()
+    for name in ("project.yaml", "facts.yaml"):
+        shutil.copy(project.root / name, root / name)
+    shutil.copytree(project.root / "brand", root / "brand")
+    (root / "masters").symlink_to(project.masters_dir, target_is_directory=True)
+    story = yaml.safe_load((project.root / "story.yaml").read_text(encoding="utf-8"))
+    story.pop("films", None)
+    (root / "story.yaml").write_text(yaml.safe_dump(story, sort_keys=False), encoding="utf-8")
+    plans = plan_films(load_project(root), only=["9x16", "16x9"], fast=False)
+    for fid, plan in plans.items():
+        seconds = plan.plan["frames"] / plan.plan["fps"]
+        assert seconds <= 48.0, (fid, seconds)
+        assert [w for w in plan.warnings if "max_s" in w], (fid, plan.warnings)

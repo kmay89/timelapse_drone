@@ -637,7 +637,16 @@ class FilmSpec(Model):
     stats_surface: Literal["night", "paper"] | None = Field(
         None,
         description="Set it to put the film's stats on a plain card of this surface. By default they sit "
-        "over the main vantage's latest picture, under a panel tinted by the stats chapter's `surface`.",
+        "over a picture: the last montage's last picture when the film has one (then the main vantage's "
+        "latest for the stats after the first), else the main vantage's latest capture, under a panel "
+        "tinted by the stats chapter's `surface`.",
+    )
+    max_s: float | None = Field(
+        None,
+        ge=10,
+        le=600,
+        description="Story cuts: the longest the film may run, in seconds (default 48; loops: none). A cut "
+        "over it shows fewer montage pictures (down to 2), then fewer stats (down to 1), with a warning.",
     )
     title_beats: int | None = Field(
         None, ge=3, le=16, description="At least 3: the title's words rise on beat 1."

@@ -1617,6 +1617,43 @@ def _montage(project: Project, fid: str = "16x9") -> tuple[dict[str, Any], list[
     return p, [s for s in p["shots"] if s.get("montage")]
 
 
+def test_a_story_cut_is_held_to_its_length_budget(tmp_path):
+    """A story cut is held to `max_s` (48 s by default; a loop has none): over it, the longest montage
+    loses pictures (down to 2), then the last stat goes (down to 1), with a warning naming what was
+    left out; a film that cannot fit even so says by how much."""
+    from vantage.film.plan import MAX_S
+
+    root = tmp_path / "p"
+    films = {"screen": {"preset": "screen"}}
+    tiny(root, chapters=[RUN, GALLERY], hotspots=[POOL], extra={"water": list(WATER)}, films=films)
+    project = _facts(root, area=AREA, trees=TREES)
+    defs = resolve_films(project)
+    assert defs["16x9"].max_s == MAX_S == 48.0 and defs["screen"].max_s is None
+
+    def planned(max_s: float) -> tuple[float, int, int, list[str]]:
+        tiny(root, chapters=[RUN, GALLERY], hotspots=[POOL], extra={"water": list(WATER)},
+             films={"16x9": {"max_s": max_s}})  # fmt: skip
+        plan = _plan(_facts(root, area=AREA, trees=TREES))
+        shots = plan.plan["shots"]
+        held = [w for w in plan.warnings if "max_s" in w]
+        n_stats = sum(s["kind"] == "stat" for s in shots)
+        return (
+            plan.plan["frames"] / plan.plan["fps"],
+            sum(1 for s in shots if s.get("montage")),
+            n_stats,
+            held,
+        )
+
+    full, pictures, stats, held = planned(600)
+    assert (pictures, stats, held) == (5, 2, [])
+    length, pictures, stats, held = planned(full - 0.1)
+    assert length <= full - 0.1 and pictures == 4 and stats == 2, (length, pictures, stats)
+    assert held and "montages cut to 4 pictures" in held[0], held
+    length, pictures, stats, held = planned(10)
+    assert (pictures, stats) == (2, 1) and length > 10
+    assert "1 stat shown" in held[0] and "still runs" in held[0], held
+
+
 def test_montage_shows_the_other_vantage(tmp_path):
     """A gallery chapter on another drone vantage plays as a montage in both cuts: five captures
     spread evenly from its first to its last, dissolving on the beat with no card, the date label per
