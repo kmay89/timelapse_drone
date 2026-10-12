@@ -313,9 +313,12 @@ def words_lines(t: _Type, lay: Layout, words: str, scale: float) -> list[str]:
     return t.wrap(words, LEAD, lay.text_width, scale, balanced=True)
 
 
-def words_scale(t: _Type, lay: Layout, texts: Sequence[str], lines: int = 2) -> float:
+def words_scale(t: _Type, lay: Layout, texts: Sequence[str], lines: int | None = None) -> float:
     """The largest scale (at most 1) of LEAD at which each of `texts` breaks into at most `lines`
-    balanced lines whose ink fits between the margins: one size for every line of a curtain."""
+    balanced lines whose ink fits between the margins: one size for every line of a curtain. By
+    default two lines in a portrait frame and one in a landscape one, whose wide lines would
+    otherwise reach down over the middle of the picture, where a curtain's push puts its subject."""
+    lines = lines or (2 if lay.height > lay.width else 1)
     scale = 1.0
     for _ in range(40):
         ok = True

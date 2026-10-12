@@ -686,7 +686,9 @@ small masters leave little to push, they are 77 and 77 beats.
     sentence when that prints at most 40 characters (`story.curtain_words`), so the centrepiece is
     not silent; the full step text is for the tracks. Every line of a curtain is set at one size
     (`words_scale` on the curtain shot: the largest share of the 120-unit lead size at which each
-    line breaks into at most two balanced lines, `cut.words_scale`; two lines sit 1.06 apart, the
+    line breaks into at most two balanced lines in a portrait film and fits one line in a landscape
+    one, whose wide lines would otherwise reach down over the subject the curtain pushes to,
+    `cut.words_scale`; two lines sit 1.06 apart, the
     last on the low baseline, the first under the label line when high), so lines never grow and
     shrink in turn. A line stays until the next one lands, fading out over the B/3 frames before it
     (or from the next sweep's downbeat when that step has no line, or to the curtain's end), so two

@@ -1691,9 +1691,10 @@ def test_the_disclaimer_is_read_and_rides_the_stats_when_the_card_is_full(tmp_pa
 
 
 def test_a_curtains_lines_share_one_size_and_land_with_their_picture(tmp_path):
-    """Every line of a curtain is set at one size (`words_scale`, on at most two balanced lines), and
-    lands on the beat nearest its sweep's midpoint, so it arrives with the picture it names; it
-    stays until the next line lands (or the curtain ends), at least as long as it takes to read."""
+    """Every line of a curtain is set at one size (`words_scale`, on at most two balanced lines in
+    9:16 and one in 16:9), and lands on the beat nearest its sweep's midpoint, so it arrives with
+    the picture it names; it stays until the next line lands (or the curtain ends), at least as
+    long as it takes to read."""
     from vantage.film.tracks import cue_frames
 
     lines = ["The old lot, as it was left in the spring.", "Half.", "The new park in its first summer."]
@@ -1733,6 +1734,7 @@ def test_a_curtains_lines_share_one_size_and_land_with_their_picture(tmp_path):
             # the margins (before: each line shrunk on its own to fit one line).
             ws = words_set(cut.type, cut.lay, step["words"], step["words_zone"], cap_top, scale)
             assert ws.style.size == pytest.approx(120 * scale) and 1 <= len(ws.lines) <= 2, ws
+            assert fid == "9x16" or len(ws.lines) == 1, ws  # landscape: one line, clear of the middle
             assert box == pytest.approx([*ws.box[:3], ws.box[3] + rise], abs=2), (box, ws.box)
             assert cut.lay.margin - 2 <= box[0] and box[2] <= cut.lay.right + 2, box
         # The short line is not set larger than the long ones: its ink is no taller than one row.
