@@ -53,7 +53,20 @@ THUMB_WIDTH = 480
 CONTACT_COLUMNS = 4
 CHECKER_TILES = 12
 
-_SRGB_ICC = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+
+ICC_DATE = (2000).to_bytes(2, "big") + b"\x00\x01\x00\x01" + bytes(6)  # year, month, day, h, m, s
+
+
+def _srgb_icc() -> bytes:
+    """The sRGB profile embedded in every master, its creation date (header bytes 24-35, which
+    LittleCMS stamps with the wall clock) fixed at 2000-01-01 00:00:00, so the same frames give the
+    same master bytes on any day (the profile ID, bytes 84-99, is left unset, all zeros)."""
+    icc = bytearray(ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+    icc[24:36] = ICC_DATE
+    return bytes(icc)
+
+
+_SRGB_ICC = _srgb_icc()
 
 
 @dataclass

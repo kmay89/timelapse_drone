@@ -19,7 +19,7 @@ from test_film import FILM, make_project
 from test_film_story import COMPARE, DATES, STEPS, _facts, tiny
 from vantage.config import Project
 from vantage.film import tracks
-from vantage.film.plan import HONESTY, check_films, plan_films
+from vantage.film.plan import HONESTY, HONESTY_RIDE, check_films, plan_films
 from vantage.film.render import encode_frames, render_film, renderer
 from vantage.media.ffmpeg import ffmpeg_bin, ffprobe_bin
 from vantage.models import FilmPlan
@@ -105,7 +105,7 @@ def test_vtt_srt_format(tmp_path):
     blocks = srt.strip().split("\n\n")
     assert [b.splitlines()[0] for b in blocks] == [str(k) for k in range(1, len(blocks) + 1)]
     assert [tuple(map(_ms, SRT_STAMP.match(b.splitlines()[1]).groups())) for b in blocks] == spans  # type: ignore[union-attr]
-    assert [b.splitlines()[2] for b in blocks] == [c["text"] for c in p["captions"]]
+    assert ["\n".join(b.splitlines()[2:]) for b in blocks] == [c["text"] for c in p["captions"]]
     assert "{fact:" not in srt
 
     stem = tmp_path / "out" / "tiny-site-16x9"
@@ -171,7 +171,19 @@ def test_chapters_and_transcript(tmp_path):
     assert lines[1] == f"{seconds // 60}:{seconds % 60:02d} film, no sound. {HONESTY['simulated']}"
     assert lines[2:4] == ["On screen throughout: Simulated imagery.", ""]  # the tag; not a draft
     timed = [line for line in lines if re.match(r"^\[\d+:\d{2}\] ", line)]
-    assert len(timed) == len(p["shots"])  # one line per shot
+    # One line per shot, and one for the honesty line that rides along under the figures.
+    assert end["ride"] and stat["honesty"] == HONESTY_RIDE["simulated"]  # the short form rides
+    ride = [line for line in timed if "] Under the figures: " in line]
+    assert ride and ride[0].endswith(f"Under the figures: {HONESTY_RIDE['simulated']}")
+    assert len(timed) == len(p["shots"]) + 1
+    # The riding line is captioned too: its sentences shared out in order as the second line of the
+    # stats' cues, each once (never the whole line under every figure), each cue read in its time.
+    under = [c for c in p["captions"] if c.get("lasting")]
+    assert under and all(c["text"].endswith(f"\n{c['lasting']}") for c in under)
+    assert " ".join(c["lasting"] for c in under) == HONESTY_RIDE["simulated"]
+    stats = [s for s in p["shots"] if s["kind"] == "stat"]
+    assert all(stats[0]["f0"] <= c["f0"] < stats[-1]["f1"] for c in under)
+    assert all(c["f1"] - c["f0"] >= tracks.cue_frames(c["text"], FPS) for c in under)
     assert "The site" in text  # the vantage name
     for shot in p["shots"]:
         if shot["kind"] == "capture":
@@ -179,6 +191,9 @@ def test_chapters_and_transcript(tmp_path):
     assert "Demolition. In ten weeks the slides are gone." in text  # the step's full text, as plain text
     assert "Split screen (The site), Then left and Now right. The line moves to 50%: Half and half." in text
     assert "Figure: 13,100 sq ft of old pool (source: Site plan)." in text
+    # The full facts.yaml sources of every fact it prints close it (a stat prints the short form).
+    sources = text.split("\n\nSources:\n", 1)[1].splitlines()
+    assert "13,100: Site plan, sheet L-101." in sources and len(sources) == len(tracks.track_facts(p))
     assert "End card: Tiny Brand / Made for testing." in text
     assert "**" not in text and "{fact:" not in text
     # A loop film has none of it.
@@ -278,7 +293,7 @@ def test_package_lists_tracks(tmp_path, monkeypatch):
     # 0.8 s holds: too short for one date each, so the quiet labels read as spans.
     assert [c["text"] for c in plan.plan["captions"]][:3] == [
         "A Tiny Site",
-        "June 2025 – August 2025",
+        "June 2025, August 2025",  # each date shown, never a range
         "January 2026",
     ]
 
@@ -318,14 +333,20 @@ def test_transcript_says_preview_unverified_and_pushes(tmp_path):
 
 
 def test_every_cue_is_readable(tmp_path):
-    """No caption cue lasts under a second or asks for more than 17 characters a second: runs of
-    quiet date labels become one span cue, and any other short cue is held into the next one."""
-    project = tiny(tmp_path / "p", steps=[STEPS[0]], chapters=[COMPARE], simulated=True)
-    p = _plan(project).plan
+    """No caption cue lasts under a second or asks for more than 17 characters a second, counting all
+    of its words (a stat's cue with its part of the riding line too): runs of quiet date labels
+    become one span cue, and any other short cue is held into the next one."""
+    flights = {"value": "{fact:flights}", "label": "drone flights over the build", "source": "Flight logs"}
+    stats = {**STATS, "items": [*STATS["items"], flights]}
+    tiny(tmp_path / "p", steps=[STEPS[0]], chapters=[COMPARE, stats], simulated=True)
+    flown = {"text": "12", "status": "verified", "sources": ["Flight log"]}
+    p = _plan(_facts(tmp_path / "p", area=AREA, flights=flown)).plan
+    assert [c for c in p["captions"] if c.get("lasting")]  # the riding line is captioned
     quiet = [s["label"] for s in p["shots"] if s["kind"] == "capture" and not s["step"]]
     assert len(quiet) >= 2
-    assert any(" – " in c["text"] for c in p["captions"])  # the quiet captures as one span
-    for c in p["captions"][:-1]:
+    spans = [c["text"].split(", ") for c in p["captions"] if ", " in c["text"]]
+    assert any(len(d) > 1 and set(d) <= set(quiet) for d in spans)  # quiet dates as one cue, each named
+    for c in p["captions"][:-1]:  # every word a cue carries, its part of a riding line included
         assert c["f1"] - c["f0"] >= tracks.cue_frames(c["text"], FPS), c
     starts = [c["f0"] for c in p["captions"]]
     assert starts == sorted(set(starts)) and all(c["f0"] < c["f1"] for c in p["captions"])
@@ -337,5 +358,69 @@ def test_every_cue_is_readable(tmp_path):
     t.cue(12, "A longer cue that ends the film here.", [])
     caps = t.record(60, title="T", subtitle=None, honesty="H")["captions"]
     assert [(c["f0"], c["f1"], c["text"]) for c in caps] == [
-        (0, 10, "May – June"), (10, 20, "Hi."), (20, 60, "A longer cue that ends the film here."),
+        (0, 10, "May, June"), (10, 20, "Hi."), (20, 60, "A longer cue that ends the film here."),
     ]  # fmt: skip
+    t = tracks.Tracks(10)
+    for k, month in enumerate(("May", "June", "July")):  # a middle date is never left out
+        t.cue(3 * k, month, span=month)
+    t.cue(9, "A longer cue that ends the film here.", [])
+    assert t.record(60, title="T", subtitle=None, honesty="H")["captions"][0]["text"] == "May, June, July"
+
+
+def test_tracks_say_the_curtain_lines_on_screen(tmp_path):
+    """A curtain's captions give the line it prints at each step (with the labels on the first), from
+    when it lands; its transcript line quotes each printed line before the step's longer text."""
+    steps = [
+        {"text": "Half and half: the old lot meets the new beach.", "split": 0.5, "film": {"line": "Old meets new."}},
+        {"text": "Mostly new.", "split": 0.2, "film": {"line": "The new park."}},
+    ]  # fmt: skip
+    project = tiny(tmp_path / "p", steps=[STEPS[0]], chapters=[{**COMPARE, "steps": steps}], simulated=True)
+    p = _plan(project).plan
+    curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
+    inside = [c for c in p["captions"] if curtain["f0"] <= c["f0"] < curtain["f1"]]
+    # The labels first, then each line from when it lands (never before it is printed).
+    assert [c["text"] for c in inside] == ["Then / Now", "Old meets new.", "Then / Now: The new park."]
+    assert inside[1]["f0"] >= curtain["steps"][0]["land"] and inside[2]["f0"] == curtain["steps"][1]["land"]
+    line = next(ln["text"] for ln in p["transcript"]["lines"] if ln["text"].startswith("Split screen"))
+    assert line.endswith(
+        "The line moves to 50%, with the words “Old meets new”: Half and half: the old lot meets the new"
+        " beach. Then to 20%, with the words “The new park”: Mostly new."
+    ), line
+
+
+def test_a_riding_line_is_captioned_once_across_the_stat_cues():
+    """A cue's `under` line (its part of the honesty line or disclaimer riding under the figures) is
+    its second line, named by `lasting`, with its facts; the stat run shares the riding line's
+    sentences out in order over its cues, each once, so no cue repeats it whole."""
+    from vantage.film.story import _ride_parts
+
+    t = tracks.Tracks(30)
+    t.cue(0, "Before the figures.", [])
+    t.cue(60, "12 drone flights over the build", ["flights"], under=("Simulated flights.", ["d"]))
+    t.cue(180, "13,100 square feet of old pool, now beach", ["area"], under=("", ["d"]))
+    t.cue(300, "Credits", [])
+    caps = t.record(360, title="T", subtitle=None, honesty="H")["captions"]
+    assert [c.get("lasting") for c in caps] == [None, "Simulated flights.", None, None]
+    assert caps[1]["text"] == "12 drone flights over the build\nSimulated flights."
+    assert caps[1]["facts"] == ["flights", "d"] and caps[2]["facts"] == ["area"]
+    # A stat's source joins its cue only when the whole, riding part included, reads in time.
+    for under, text in (
+        ("", "12 flights. Source: Flight logs"),
+        ("A riding line of fifty characters, give or take.", "12 flights"),
+    ):
+        t = tracks.Tracks(30)
+        t.cue(0, "12 flights", ["f"], ("12 flights. Source: Flight logs", ["f"]), under=(under, []))
+        t.cue(60, "Credits", [])
+        assert (
+            t.record(120, title="T", subtitle=None, honesty="H")["captions"][0]["text"].split("\n")[0] == text
+        )
+
+    ride = "Real aerial photographs only; no in-between images. A demonstration: it is all fictional."
+    cues = ["12 drone flights over the build", "13,100 sq ft of old pool, now beach"]
+    reads = ["drone flights over the build Flight logs", "of old pool, now beach Site plan"]
+    assert _ride_parts(ride, cues, reads) == [
+        "Real aerial photographs only; no in-between images.",
+        "A demonstration: it is all fictional.",
+    ]  # fmt: skip
+    assert "" in _ride_parts("One sentence only.", cues, reads)
+    assert _ride_parts("One.", cues[:1], reads[:1]) == ["One."] and _ride_parts("One.", [], []) == []

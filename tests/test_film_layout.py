@@ -324,3 +324,25 @@ def test_balanced_wrapping():
     out = lines(honesty, 2, 50)
     assert not out[0].endswith(" No") and len(out[-1].split()) > 1, out
     assert balance(["a", "b"], 3, lambda a, b: 1.0, 10) is None  # more lines than words
+
+
+@pytest.mark.parametrize(
+    "name,size", [("screen", (960, 540)), ("screen", (1920, 1080)), ("story-9x16", (540, 960))]
+)
+def test_a_shrunk_title_fits_as_measured(name, size):
+    """A title shrunk to fit (one line, or its widest group) fits at the size it is set: font sizes
+    round to whole px and advances do not scale linearly, so the first guess can spill (it did by
+    2 px in the CI-sized screen loop)."""
+    from vantage.film.cut import TITLE, title_groups, title_rows
+    from vantage.film.render import _Type
+    from vantage.paths import RUNTIME_DIR
+
+    lay = layout(name, *size)
+    face = RUNTIME_DIR / "fonts" / "fraunces" / "fraunces-latin-opsz-normal.woff2"
+    t = _Type({"display": face, "text": face, "numeric": face}, {}, lay.unit)  # type: ignore[dict-item]
+    for title in ("Where the Wave Pool Was", "The Longest Boardwalk on the Whole Lake", "Overlooked"):
+        groups = title_groups(title)
+        for one_line in (True, False):
+            scale, lines = title_rows(t, lay, groups, one_line)
+            widest = max(t.width(" ".join(groups[g] for g in line), TITLE, scale) for line in lines)
+            assert widest <= lay.text_width, (title, one_line, scale, widest, lay.text_width)

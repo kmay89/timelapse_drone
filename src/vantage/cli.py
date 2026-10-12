@@ -490,8 +490,9 @@ def bare_numbers(text: str | None, years: tuple[str, ...] | set[str] = ()) -> li
 def _film_numbers(project: Project, warnings: list[str]) -> None:
     """Warn about numbers outside {fact:} tokens in the text films print (on screen, in captions or
     in the transcript): project.yaml title, subtitle and kicker, step text and film.line, capture
-    notes, stat labels and units, and the hero, scrub, compare and stats titles and kickers. Invariant 4: such figures belong in facts.yaml."""
-    from vantage.config import CompareChapter, HeroChapter, ScrubChapter, StatsChapter
+    notes, stat labels and units, the hero, scrub, compare, stats and gallery titles and kickers, and a
+    gallery's film.line. Invariant 4: such figures belong in facts.yaml."""
+    from vantage.config import CompareChapter, GalleryChapter, HeroChapter, ScrubChapter, StatsChapter
     from vantage.models import MastersIndex
 
     years = {n.date.isoformat()[:4] for n in project.story.captures}
@@ -509,8 +510,10 @@ def _film_numbers(project: Project, warnings: list[str]) -> None:
         texts.append((f"story.yaml captures {n.date.isoformat()} note", n.note))
     for i, ch in enumerate(project.story.chapters):
         cid = ch.id or f"{ch.type}-{i + 1}"
-        if isinstance(ch, HeroChapter | ScrubChapter | CompareChapter | StatsChapter):
+        if isinstance(ch, HeroChapter | ScrubChapter | CompareChapter | StatsChapter | GalleryChapter):
             texts += [(f"story.yaml {cid} kicker", ch.kicker), (f"story.yaml {cid} title", ch.title)]
+        if isinstance(ch, GalleryChapter) and ch.film is not None:
+            texts.append((f"story.yaml {cid} film.line", ch.film.line))
         if isinstance(ch, ScrubChapter | CompareChapter):
             for j, step in enumerate(ch.steps):
                 texts.append((f"story.yaml {cid} step {j}", step.text))
@@ -587,7 +590,7 @@ def _check_films(project: Project, warnings: list[str]) -> None:
     if not story or not (project.masters_dir / "index.json").is_file():
         return
     try:
-        plans = plan_films(project, only=story)
+        plans = plan_films(project, only=story, margin=False)  # warnings only: no flash proxies
     except (OSError, ValueError) as exc:
         warnings.append(f"films: cannot plan them ({exc})")
         return

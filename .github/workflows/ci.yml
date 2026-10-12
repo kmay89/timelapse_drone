@@ -69,6 +69,23 @@ jobs:
             test -s "$f" || { echo "::error::missing dist/demo-lakeside/$f"; exit 1; }
           done
           sha256sum --check --strict SHA256SUMS
+      - name: Every film keeps its flash margin as measured (2 a second; WCAG 2.3.1 allows 3)
+        working-directory: dist/demo-lakeside/film
+        run: |
+          uv run python - <<'PY'
+          import json, pathlib, sys
+          bad = []
+          for path in sorted(pathlib.Path(".").glob("*.plan.json")):
+              if not path.with_name(path.name.replace(".plan.json", ".mp4")).is_file():
+                  continue  # a plan-only film (the screen loop): nothing rendered to measure
+              doc = json.loads(path.read_text())
+              flash = (doc.get("render") or {}).get("flash")
+              limit = (doc["plan"].get("flash") or {}).get("limit", 2)
+              if flash is None or flash["max_transitions_per_s"] > limit:
+                  bad.append(f"{path}: measured {flash}, over the margin of {limit}")
+          print("\n".join(bad) or "every film keeps its flash margin")
+          sys.exit(1 if bad else 0)
+          PY
       - name: Size budgets
         run: uv run python scripts/budgets.py dist/demo-lakeside
       - name: Plan the event-screen loop (plan and storyboard only, no encode)

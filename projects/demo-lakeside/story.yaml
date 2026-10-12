@@ -14,7 +14,7 @@ vantages:
   - id: shoreline
     name: From over the water, looking back at the beach
     kind: drone
-    portrait_focus: [0.44, 0.40]
+    portrait_focus: [0.54, 0.40]
     reference: { source: "2026-09-20/DJI_20260920172744_0002.JPG" }
     hint: { lat: 40.950086, lon: -82.044208, alt_m: 74, heading_deg: -164, gimbal_pitch_deg: -45 }
 
@@ -111,7 +111,7 @@ chapters:
         x: 0.441
         y: 0.417
         label: The wave pool, then the beach
-        body: The same fan-shaped footprint, backfilled and topped with sand.
+        body: "The same fan-shaped footprint, {fact:wave-pool-area} square feet of it, backfilled and topped with sand."
       - id: gatehouse-east
         x: 0.550
         y: 0.851
@@ -143,12 +143,14 @@ chapters:
     steps:
       - text: "The old park, as it was left in {fact:last-season}."
         split: 0.85
+        film: { line: "The old park, left in {fact:last-season}." }
       - text: The fan of the wave pool survives as the outline of the beach.
         split: 0.5
         film: { line: The pool became the beach. }
         focus: [0.44, 0.46, 1.7]
       - text: The new park, in its first late summer.
         split: 0.12
+        film: { line: "The new park, its first summer." }
     hotspots:
       - { id: beach, x: 0.441, y: 0.417, label: Pool to beach }
       - { id: gatehouse-west, x: 0.316, y: 0.849, label: "Gatehouse, kept" }
@@ -251,4 +253,10 @@ chapters:
 # loop (75 bpm, large type, overscan-safe), rendered only on request:
 #   uv run vantage film demo-lakeside --film screen [--hours 1]
 films:
-  screen: { preset: screen }
+  # Two figures (by their facts: the pool that became the beach the shoreline shows, then the
+  # flights) and two or three looks from the water. The first figure lands over the montage's last
+  # picture, the beach and splash pad it names; the second over the whole site, the overview's latest.
+  # The loop shows the same two: a meadow the shoreline picture does not show is not its figure.
+  16x9: { stats: [wave-pool-area, flights], montage: 2 }
+  9x16: { stats: [wave-pool-area, flights], montage: 3 }
+  screen: { preset: screen, stats: [wave-pool-area, flights] }

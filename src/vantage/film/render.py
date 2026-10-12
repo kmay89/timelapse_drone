@@ -26,7 +26,8 @@ VANTAGE_FILM_JOBS=1 renders them one after another, with the same bytes) and ren
 the original numbers, classic-9x16 the story safe zone) and inputs all come from the plan, so a plan
 read back from plan.json renders the same bytes. Both renderers record the ink box of every typeset
 layer (`ink`); `check_ink` writes them to plan.json `checks` and turns any box outside the safe zone
-into a plan warning (an error with --release). Frames are composed with numpy/OpenCV and
+into a plan warning (an error with --release), as is a story cut's stat run whose words had to be
+set under the type floor to fit (film/cut.py `stat_type_problem`). Frames are composed with numpy/OpenCV and
 piped to ffmpeg (media.ffmpeg.FrameWriter). Text is typeset once per card and capture with Pillow in
 the brand fonts and alpha-composited, so a frame costs one warp, the occasional blend and a few small
 composites. VANTAGE_FAST=1 caps the long edge at 960 px and encodes with a fast preset.
@@ -741,7 +742,9 @@ def check_ink(plan: FilmPlan, film: Renderable) -> list[str]:
     leaves the safe zone (more than INK_TOLERANCE px). Each is also a plan warning."""
     rect = list(film.lay.rect)
     bad = [k for k, item in enumerate(film.ink) if outside(item["box"], rect, INK_TOLERANCE)]
-    plan.checks = {"safe": rect, "ink": film.ink, "outside": bad}
+    plan.checks = {**plan.checks, "safe": rect, "ink": film.ink, "outside": bad}
+    if scrims := getattr(film, "scrims", None):  # story cuts: the measured panels behind stat runs
+        plan.checks["scrims"] = scrims
     problems = []
     for k in bad:
         item = film.ink[k]
@@ -753,6 +756,25 @@ def check_ink(plan: FilmPlan, film: Renderable) -> list[str]:
         if problem not in plan.warnings:
             plan.warnings.append(problem)
     return problems
+
+
+def _flash_limit(project: Project, plan: FilmPlan) -> int:
+    return (plan.plan.get("flash") or {}).get("limit", project.config.output.film.flash_limit)
+
+
+def _flash_over(project: Project, plan: FilmPlan, measured: dict[str, Any]) -> str | None:
+    """A warning (added to the plan once) when the film's measured flash transitions exceed the
+    plan's margin (output.film.flash_limit), else None."""
+    limit, worst = _flash_limit(project, plan), measured.get("max_transitions_per_s", 0)
+    if worst <= limit:
+        return None
+    text = (
+        f"measured {worst} flash transitions in one region within a second around frame "
+        f"{measured.get('frame')}, over the margin of {limit} (output.film.flash_limit; WCAG 2.3.1 allows 3)"
+    )
+    if text not in plan.warnings:
+        plan.warnings.append(text)
+    return text
 
 
 def _sha256(path: Path) -> str:
@@ -785,6 +807,10 @@ def _render_parts(
         raise ReleaseError(
             f"release film {plan.id} blocked: text outside the safe zone:\n  " + "\n  ".join(ink)
         )
+    small = list(getattr(film, "small", []))  # story cuts: stat words set under the type floor
+    plan.warnings.extend(w for w in small if w not in plan.warnings)
+    if release and small:
+        raise ReleaseError(f"release film {plan.id} blocked: " + "; ".join(small))
     try:
         if plan_only:
             plan.render = None
@@ -794,6 +820,8 @@ def _render_parts(
                     plan.render = old.render if old.hash == plan.hash else None
                 except (OSError, ValueError):
                     pass
+            if plan.render is not None:  # the film it keeps: its measured flash still warns
+                _flash_over(project, plan, plan.render.get("flash") or {})
         else:
             meter = LumaMeter(plan.plan["fps"])
             web = plan.encode.get("web")
@@ -802,7 +830,11 @@ def _render_parts(
                 web=(part(web_mp4), web) if web else None, gop=plan.encode.get("gop"),
                 threads=plan.encode.get("threads", ENCODER_THREADS),
             )  # fmt: skip
-            meter.check(f"film {plan.id}")
+            meter.check(f"film {plan.id}")  # refuses more than 3 transitions a second
+            limit = _flash_limit(project, plan)
+            over = _flash_over(project, plan, {**meter.result(), "frame": meter.worst_frame})
+            if release and over:
+                raise ReleaseError(f"release film {plan.id} blocked: {over}")
             if plan.encode.get("tracks"):  # captions and chapters, by stream copy (video unchanged)
                 embed(parts[mp4], plan)
                 if web:
@@ -815,7 +847,7 @@ def _render_parts(
             plan.render = {
                 "mp4": record(mp4),
                 "web": record(web_mp4) if web else None,
-                "flash": meter.result(),
+                "flash": {**meter.result(), "limit": limit},
                 "ffmpeg": ffmpeg_version(),
             }
         for suffix, text in track_texts(plan).items():

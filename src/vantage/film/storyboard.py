@@ -64,7 +64,8 @@ def tiles(plan: FilmPlan) -> list[Tile]:
                 Tile(c["key"], shot["id"], "section", c["date"], tuple(c["facts"])) for c in shot["shots"]
             ]
         else:
-            kind = f"card {shot['role']}" if shot["kind"] == "card" else shot["kind"]
+            kind = f"card {shot['role']}" if shot["kind"] == "card" and "role" in shot else shot["kind"]
+            kind = "montage" if shot.get("montage") else kind
             date = shot.get("capture") if isinstance(shot.get("capture"), str) else None
             if shot["kind"] == "curtain":
                 date = f"{shot['before']}|{shot['after']}"

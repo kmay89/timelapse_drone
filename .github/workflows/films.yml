@@ -1,0 +1,61 @@
+# The demo's films at full size: what the default CI cannot show. CI's demo is built from small
+# footage whose masters clamp every push to about 1.03x, so only full-size masters exercise real
+# pushes, the flash margin on the films a client gets, stat type and the 40-48 s length. Runs the
+# slow film tests (tests/test_film_*.py -m slow) on pull requests that touch the film engine, the
+# demo or its project, or what every film depends on (film settings, plan hashing, the encoder, the
+# masters, the facts, the bundled fonts, the locked dependencies), and on demand. The synthesized
+# full-size footage is cached by the generator's source, so a run that does not change
+# src/vantage/demo/ only aligns and renders (about 15 min).
+name: Films
+
+on:
+  pull_request:
+    paths:
+      - "src/vantage/film/**"
+      - "src/vantage/demo/**"
+      - "src/vantage/config.py" # FilmSettings / FilmSpec defaults (flash_limit, bpm, max_upscale, fps)
+      - "src/vantage/models.py" # FilmPlan, plan hashing, canonical JSON
+      - "src/vantage/media/**" # the bitexact encode
+      - "src/vantage/process/**" # the masters every film is cut from
+      - "src/vantage/site/facts.py" # the {fact:} values films print
+      - "src/vantage/runtime/fonts/**" # the bundled faces film type is set in
+      - "uv.lock" # OpenCV, Pillow and numpy rasterize every frame and proxy
+      - "pyproject.toml"
+      - "tests/test_film_*.py"
+      - "tests/test_film.py"
+      - "projects/demo-lakeside/**"
+      - ".github/workflows/films.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: films-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full:
+    name: Full-size demo films (slow tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VANTAGE_TEST_FOOTAGE: ${{ github.workspace }}/.footage-full
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install ffmpeg (not on the runner image)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+      - run: uv sync --frozen
+      - name: Restore the full-size demo footage (keyed by the generator's source)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .footage-full
+          key: demo-footage-full-${{ runner.os }}-${{ hashFiles('src/vantage/demo/**') }}
+      - name: Full-size films and the demo's story cut (flash margin, real pushes, stat ink, tail, length)
+        run: uv run pytest -m slow tests/test_film_full.py tests/test_film_story.py -v

@@ -21,7 +21,7 @@ import math
 import os
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal
@@ -38,7 +38,8 @@ from vantage.paths import RUNTIME_DIR
 from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
 
-FILM_RENDERER = {"classic": 1, "story": 5}  # bumped when frame(i) changes for an equal plan
+MAX_S = 48.0  # seconds: a story cut's default length budget (films.<id>.max_s)
+FILM_RENDERER = {"classic": 1, "story": 6}  # bumped when frame(i) changes for an equal plan
 FAST_LONG_EDGE = 960
 WEB_LIMIT = 25 * 1024 * 1024  # bytes: the largest file static hosts serve (Cloudflare Pages)
 WEB_MAXRATE_CAP = 6_000_000  # bit/s
@@ -48,6 +49,12 @@ SIMULATED_NOTE = "Simulated imagery for demonstration; not actual aerial footage
 HONESTY = {
     "photo": "Every frame is made from real aerial photographs. No in-between images are invented.",
     "simulated": "Every frame is made from the simulated flights. No in-between images are invented.",
+}
+# The same promise in a line short enough to ride under a stat run, read alongside the figures; the
+# full line stays in the transcript's header (and on an end card that has room for it).
+HONESTY_RIDE = {
+    "photo": "Real aerial photographs only; no in-between images.",
+    "simulated": "Simulated flights only; no in-between images.",
 }
 Role = Literal["display", "text", "numeric"]
 ROLES: tuple[Role, ...] = ("display", "text", "numeric")
@@ -79,18 +86,20 @@ def _plain(project: Project, text: str | None) -> str | None:
     return FactNotes(project.facts.facts).plain(text)
 
 
-def honesty_line(provenance: Sequence[str]) -> str:
-    """The end card's (and the transcript's) honesty line, derived from the plan's provenance. Only
-    'photo' (drone vantages) and 'simulated' have one; any other provenance is an error, never
-    described as photographs."""
+def honesty_line(provenance: Sequence[str], *, ride: bool = False) -> str:
+    """The end card's (and the transcript's) honesty line, derived from the plan's provenance, or
+    with `ride` its short form that rides under a stat run (HONESTY_RIDE). Only 'photo' (drone
+    vantages) and 'simulated' have one; any other provenance is an error, never described as
+    photographs."""
+    lines = HONESTY_RIDE if ride else HONESTY
     if "simulated" in provenance:
-        return HONESTY["simulated"]
+        return lines["simulated"]
     unknown = sorted(set(provenance) - {"photo"})
     if unknown or not provenance:
         raise ValueError(
             f"no honesty line for provenance {unknown or list(provenance)}: films show only drone vantages"
         )
-    return HONESTY["photo"]
+    return lines["photo"]
 
 
 FILM_KINDS = ("drone",)  # vantage kinds films show; ortho, ground, archival, plan need their own line and tag
@@ -298,8 +307,9 @@ class FilmDef:
     preset: str | None = None
     bpm: float = 100.0
     chapters: str | tuple[str, ...] = "all"  # all | main | chapter ids
-    stats: int = 3
-    stats_surface: Literal["night", "paper"] = "night"
+    stats: int | tuple[str, ...] = 3  # how many, or the fact ids of the items, in that order
+    montage: int = 5  # captures in a gallery chapter's montage (0: none)
+    stats_surface: Literal["night", "paper"] | None = None  # None: over a picture (the chapter tints)
     title_beats: int = 4
     end_beats: int = 6
     safe: tuple[float, float, float, float] | None = None  # None: the layout preset's
@@ -311,6 +321,7 @@ class FilmDef:
     enabled: bool = True
     hours: float | None = None
     beats: tuple[int, int, int] = (1, 3, 4)  # capture beats: no step, a step, a step that pushes
+    max_s: float | None = MAX_S  # a story cut's length budget (`_fit_length`); None: no budget
 
 
 # The `screen` preset: the silent event-screen loop (rendered only on request). Its captures linger
@@ -325,11 +336,12 @@ PRESETS: dict[str, dict[str, Any]] = {
         "safe": (0.05, 0.05, 0.05, 0.05),
         "auto": False,
         "title_beats": 4,
-        "end_beats": 4,
+        "end_beats": 3,
         "beats": (2, 4, 5),
+        "max_s": None,  # a loop plays for hours: its length is its seam's, not a viewer's patience
     }
 }
-LOOP_BEATS = {"rise": 2, "dip": 2}  # a loop rises from night and dips back to it
+LOOP_BEATS = {"rise": 1, "dip": 1}  # a loop rises from night and dips back to it, a beat each
 GOP_BEATS = 2  # a loop film's GOP (and its length's multiple), in beats
 
 
@@ -353,6 +365,8 @@ def resolve_films(project: Project) -> dict[str, FilmDef]:
         merged = {**builtin, **output, **preset, **explicit}
         if isinstance(merged.get("chapters"), list):
             merged["chapters"] = tuple(merged["chapters"])
+        if isinstance(merged.get("stats"), list):
+            merged["stats"] = tuple(merged["stats"])
         if merged.get("safe") is not None:
             merged["safe"] = tuple(merged["safe"])
         film = FilmDef(id=fid, **merged)
@@ -433,10 +447,12 @@ def _check_timing(project: Project) -> None:
 
 
 def plan_films(
-    project: Project, *, only: Sequence[str] | None = None, fast: bool | None = None
+    project: Project, *, only: Sequence[str] | None = None, fast: bool | None = None, margin: bool = True
 ) -> dict[str, FilmPlan]:
-    """One FilmPlan per film (the `auto` films, or the ids in `only`, in that order). Pure: reads
-    the YAML already loaded, masters/index.json and the master and font files; renders nothing."""
+    """One FilmPlan per film (the `auto` films, or the ids in `only`, in that order). Reads the YAML
+    already loaded, masters/index.json and the master and font files; renders nothing but the story
+    cuts' flash proxies (film/margin.py, cached in work/film/flash/). `margin=False` skips those: the
+    plans then carry no flash fixes (for `vantage validate`, which reads only their warnings)."""
     films = resolve_films(project)
     ids = [f for f, film in films.items() if film.auto] if only is None else list(dict.fromkeys(only))
     unknown = [fid for fid in ids if fid not in films]
@@ -463,13 +479,74 @@ def plan_films(
     for fid in ids:
         warnings: list[str] = list(left_out)
         if films[fid].cut == "story":
-            from vantage.film.story import derive_cut
-
-            plans[fid] = derive_cut(project, films[fid], index, fonts, hashes, warnings, fast=fast)
+            plans[fid] = _fit_length(
+                project, films[fid], index, fonts, hashes, warnings, fast=fast, margin=margin
+            )
             continue
         sections = _sections(project, index, warnings)
         plans[fid] = _classic(project, films[fid], sections, index, fonts, hashes, warnings, fast=fast)
     return plans
+
+
+def _fit_length(
+    project: Project,
+    film: FilmDef,
+    index: MastersIndex,
+    fonts: dict[str, Any],
+    hashes: dict[str, str],
+    warnings: list[str],
+    *,
+    fast: bool,
+    margin: bool,
+) -> FilmPlan:
+    """A story cut held to its length budget (`max_s`, not for loops): over it, the longest gallery
+    montage loses a picture at a time (down to 2), then the last stat is dropped (down to 1), each
+    trial planned without the flash margin until one fits; that one is planned in full, and when the
+    margin's holds take it over again, trimming goes on. A warning says what was left out (and, when
+    even the shortest runs over, by how much)."""
+    from vantage.film.story import derive_cut
+
+    budget = film.max_s
+
+    def plan_of(f: FilmDef, *, full: bool) -> FilmPlan:
+        if full:
+            return derive_cut(project, f, index, fonts, hashes, list(warnings), fast=fast, margin_on=margin)
+        return derive_cut(project, f, index, fonts, {}, [], fast=fast, margin_on=False)
+
+    def over(p: FilmPlan) -> bool:
+        return budget is not None and p.plan["frames"] / p.plan["fps"] > budget + 1e-9
+
+    def shorter(f: FilmDef, p: FilmPlan) -> FilmDef | None:
+        shots = p.plan["shots"]
+        montages = Counter(s["series"] for s in shots if s.get("montage"))
+        stats = sum(s["kind"] == "stat" for s in shots)
+        if montages and max(montages.values()) > 2:
+            return replace(f, montage=max(montages.values()) - 1)
+        if stats > 1:
+            return replace(f, stats=stats - 1 if isinstance(f.stats, int) else f.stats[: stats - 1])
+        return None
+
+    plan, fitted = plan_of(film, full=True), film
+    while not film.loop and over(plan) and (trimmed := shorter(fitted, plan)) is not None:
+        fitted, trial = trimmed, plan_of(trimmed, full=False)
+        while over(trial) and (trimmed := shorter(fitted, trial)) is not None:
+            fitted, trial = trimmed, plan_of(trimmed, full=False)
+        plan = plan_of(fitted, full=True)
+    if fitted is not film or over(plan):
+        dropped = []
+        if fitted.montage != film.montage:
+            dropped.append(f"montages cut to {fitted.montage} pictures")
+        if fitted.stats != film.stats:
+            n = fitted.stats if isinstance(fitted.stats, int) else len(fitted.stats)
+            dropped.append(f"{n} stat{'s' * (n != 1)} shown")
+        length = plan.plan["frames"] / plan.plan["fps"]
+        plan.warnings.append(
+            f"film {film.id}: held to max_s {budget:g} s: {', '.join(dropped) or 'nothing left to drop'}"
+            + (f"; it still runs {length:.1f} s" if over(plan) else "")
+            + f" (set films.{film.id} montage, stats or max_s to choose)"
+        )
+    warnings[:] = plan.warnings
+    return plan
 
 
 def _classic(
@@ -749,8 +826,19 @@ def _classic_tracks(
 
 
 def fact_snapshot(project: Project, ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """Each printed fact's status, releasability, text and facts.yaml sources (and attribution) at
+    plan time: the transcript's [unverified] marks and its Sources block read them."""
     facts = project.facts.facts
-    return {f: {"status": facts[f].status, "releasable": facts[f].releasable} for f in sorted(ids)}
+    return {
+        f: {
+            "status": facts[f].status,
+            "releasable": facts[f].releasable,
+            "text": facts[f].text,
+            "sources": list(facts[f].sources),
+            **({"attribution": facts[f].attribution} if facts[f].attribution else {}),
+        }
+        for f in sorted(ids)
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -884,8 +972,14 @@ def film_records(project: Project, film_dir: Path) -> tuple[dict[str, dict[str, 
                     )
                 elif key == "web":
                     web_ok = True
-            if not (plan.render.get("flash") or {}).get("pass", False):
+            flash = plan.render.get("flash") or {}
+            if not flash.get("pass", False):
                 own.append(f"film/{name}.mp4 failed the flash check")
+            elif flash.get("max_transitions_per_s", 0) > flash.get("limit", 3):
+                own.append(
+                    f"film/{name}.mp4 measured {flash['max_transitions_per_s']} flash transitions in a "
+                    f"second, over its margin of {flash['limit']} (output.film.flash_limit)"
+                )
         if web_mp4.is_file() and not (
             web_ok and plan.encode.get("web") and (fresh or plan).encode.get("web")
         ):
@@ -962,6 +1056,7 @@ __all__ = [
     "FILM_RENDERER",
     "GOP_BEATS",
     "HONESTY",
+    "HONESTY_RIDE",
     "LOOP_BEATS",
     "PRESETS",
     "FilmDef",

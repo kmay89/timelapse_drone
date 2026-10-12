@@ -64,7 +64,11 @@ src/vantage/
                          end; degrade for 1–2 captures; subject-aware push targets and zoom clamps
     cut.py               renders story plans: pure frame(f) (pyramid warps, dissolves, words, rail, tag,
                          curtain splits, tabular stat figures, surface dips)
+    subject.py           where a step's subject is on a master (its focus, changed hotspots and what changed
+                         since the previous capture) and how much of it, and what contrast, a box keeps on screen
     safety.py            photosensitivity: static plan check and the per-frame luminance (flash) meter
+    margin.py            the flash margin: meters a small proxy of each story plan and holds, softens or
+                         slows what lies between too many flash transitions (output.film.flash_limit)
     render.py            renders plans to MP4 + web copy + poster (classic `_Film`, shared drawing code, the
                          encode, ink checks, films side by side in worker processes)
     storyboard.py        one contact-sheet tile per key frame of a plan, with fact status chips
@@ -83,7 +87,7 @@ projects/
 tests/                   pytest (unit + synthetic end-to-end)
 web-tests/               Playwright (iPhone WebKit + Chromium) screenshots & interaction tests
 .claude/skills/          Claude Code skills that drive a new client project end to end
-.github/workflows/       CI, Pages deploy, releases
+.github/workflows/       CI, full-size films (films.yml), Pages deploy, releases
 docs/                    blueprint, research, capture guide, this file
 ```
 
@@ -170,6 +174,8 @@ Vantage ids name folders and pick dates name files that `vantage process` writes
 `config.py` accepts only ids matching `[a-z0-9][a-z0-9_-]*` and `picks` keys that are real
 `YYYY-MM-DD` dates (quoted or not); `make_masters` re-checks both against `selection.json`.
 A capture's `file` must be a relative path inside `masters/` (no `..`, no absolute path).
+Masters are progressive JPEGs with an sRGB profile whose creation date is fixed (2000-01-01), so the
+same frames make the same master bytes on any day (and the films' plan hashes stay put).
 
 ## StoryJSON (the runtime contract)
 
@@ -520,6 +526,8 @@ project.yaml `output.film` (FilmSettings). Existing fields are unchanged; `hold_
 cut: story            # story | classic: the cut of the derived films
 bpm: 100              # 60–160; the beat grid of story cuts
 max_upscale: 1.6      # 1.0–3.0; output px per master px never exceeds this in a push
+flash_limit: 2        # 1–3; story cuts: flash transitions allowed per region in any second (the
+                      # planner's margin, see "Flash margin"; WCAG 2.3.1 allows 3, the meter refuses more)
 web: true             # write <name>-web.mp4
 tracks: true          # captions, chapters and transcript (sidecars, and embedded in the MP4s)
 require_approval: false
@@ -533,10 +541,12 @@ films:                       # optional; id → FilmSpec; merged over the derive
   9x16: {chapters: main}     # derived when output.film.vertical (aspect from the id)
   screen: {preset: screen}   # the event loop (auto: false) → render it with --film screen
 # FilmSpec fields (all optional): preset (screen) · cut · aspect (16x9|9x16) · bpm · chapters (all | main | [chapter ids])
-#   · stats (0–6, default 3) · stats_surface (night | paper; default night) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
+#   · stats (0–6, default 3; or [fact ids]: the items whose values print them, in that order) · stats_surface (night | paper: a plain stat card; default: over a picture)
+#   · montage (captures per gallery montage: 0 = none, else 2–8; default 5) · title_beats (4; at least 3) · end_beats (6; at least 2) · safe [top, right, bottom, left] (fractions)
 #   · type_scale · max_upscale · loop · sound (none; anything else: "not supported yet") · auto (true)
-#   · enabled (true) · hours (loop films)
+#   · enabled (true) · hours (loop films) · max_s (story cuts' length budget, s: default 48; loops none; 10–600)
 steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare steps
+chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's words, or no montage
 ```
 
 - Film ids match `[a-z0-9][a-z0-9-]{0,31}`, do not end in `-web` and are unique as typed (`1080` and
@@ -544,9 +554,9 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
 - Precedence: explicit FilmSpec field > preset > output.film (`cut`, `bpm`, `max_upscale`) > built-in
   default. A new id's aspect is 16x9 unless the id is `9x16`.
 - The `screen` preset sets cut story, aspect 16x9, loop true, bpm 75, type_scale 1.6, safe 0.05 on
-  every side (the `screen` layout), auto false, title_beats 4, end_beats 4, and capture beats 2 (no
+  every side (the `screen` layout), auto false, title_beats 4, end_beats 3, and capture beats 2 (no
   step), 4 (a step) and 5 (a push) where other films have 1, 3 and 4 (`FilmDef.beats`, preset only).
-  Its pushes go in and ease back over 2 beats (B + B/3 in other films).
+  Its pushes go in and ease back over 2 beats (as in the 16:9 cut; B + B/3 in the 9:16).
   Loop films have no web encode and no embedded tracks. A loop film needs the story cut.
 - `vantage film` (no `--film`) plans and renders the `auto` films; `--film ID` names any enabled film.
 - The 16:9 size is `output.film.width × height`; the 9:16 size is `short × short·16/9`. `VANTAGE_FAST=1`
@@ -555,14 +565,25 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
   the same pushes and has the same beats, captions, chapters and poster frame as the full-size film;
   only its pixel sizes differ.
 - `chapters: main` keeps the chapters whose vantage is the main vantage (the first scrub's with
-  masters, else the first compare's), plus stats. Unknown ids in a list are ignored with a warning.
+  masters, else the first compare's), plus stats and the gallery chapters with a vantage, whose
+  montages show the other drone vantages. Unknown ids in a list are ignored with a warning.
+- A gallery chapter's `film.line` sets its montage's words (default: its kicker, else its title);
+  `film.skip` leaves the montage out of films. `montage` caps a film's montages at that many
+  captures each; 0 turns them off.
+- `max_s` holds a story cut (not a loop) to a length budget (`plan._fit_length`, default 48 s). A cut
+  planned over it shows one picture fewer in its longest montage at a time (down to 2), then one
+  stat fewer (the last; down to 1), each trial planned without the flash margin, until it fits; the
+  film is then planned in full with those settings and a warning names what was left out (and the
+  length when it still runs over). A project on the defaults (stats 3, montage 5) gets films of at
+  most 48 s; one that sets `montage` and `stats` itself to fit is planned once.
 - `film.line` sets a step's words on screen; `film.focus` its push target (used as given, only
   clamped); `film.skip` leaves the step out of films (its capture still plays as a quiet beat).
 - `vantage validate` warns about words over 40 characters, unknown chapter ids in
   `films.<id>.chapters`, "bpm too fast for fps", (with masters) clamped or soft pushes, and numbers
   outside `{fact:}` tokens in the text films print (`cli.bare_numbers`: digits and number words
   other than "one", in project.yaml title, subtitle and kicker, step text and `film.line`, capture
-  notes, stat labels and units, and hero, scrub, compare and stats titles and kickers; the flights'
+  notes, stat labels and units, hero, scrub, compare, stats and gallery titles and kickers, and a
+  gallery's `film.line`; the flights'
   own years are not counted). It is a warning, not a release error: the facts gate decides what is
   releasable, and a reworded sentence is often the better fix.
 
@@ -582,40 +603,90 @@ steps[].film: {line: str, focus: [x, y, zoom], skip: bool}   # scrub and compare
 ### Derived story cut (film/story.py derive_cut)
 
 Shots come from the chapters in scope, in story order: the first hero → title; each scrub chapter →
-a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots; then
-the end card. Gallery, explore, text, timeline and video chapters are not used. A film with no scrub
-or compare chapter in scope plays the main vantage's captures as one quiet series. For the demo
-the 16:9 cut is 90 beats (54 s at 100 bpm) and the 9:16 cut 88 beats (its narrower crop clamps
-two pushes), with or without VANTAGE_FAST.
+a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots;
+each gallery chapter on a drone vantage other than the main one → a montage; then the end card. One
+exception: when the film has a montage, its stat run (over a picture) moves after the last montage:
+its first figure sits on the montage's last picture and the next on the main vantage's latest, so
+neither the middle of the film nor its close is one photograph, and the film closes on its figures
+over the site seen anew. Explore, text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
+plays the main vantage's captures as one quiet series. For the demo at full size the 16:9 cut is
+80 beats (48.0 s: two figures and two montage pictures, story.yaml `films.16x9`) and the 9:16 80
+(48.0 s: two figures and three montage pictures, `films.9x16`), each with 5.4 s on night (the end
+card) after the stats (the first over the shoreline montage's last picture, the second over the
+overview's latest), and with the
+holds and softened pushes of its flash margin (see Safety); from the CI-sized demo footage, whose
+small masters leave little to push, they are 78 and 78 beats.
 
 - **title** (at least `title_beats`, 4): the first image (the first series capture, else the first
   curtain's before image) at rest under a 30 % night
-  scrim. The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
+  wash and a night scrim behind the text (0.45, raised until the kicker keeps 4.5:1, see the
+  scrims below; it comes in over beat 0). The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
   across beat 0; the title's word groups (up to three, split by word count) rise on frames B, B + B/3
   and B + 2B/3 (`groups`), all in by 2B. Text and scrim fade out over the last beat (B frames, so
-  the scrim's removal never pops). The shot is lengthened until "<kicker>. <title>" is fully on
-  screen for as long as it takes to read at 17 characters a second (the demo: 8 beats). Frame 0
-  is the image.
+  the scrim's removal never pops). The shot is lengthened until the kicker (on from B/3) and then
+  the title (all in at 2B, or once the kicker is read) are on screen for as long as they take to
+  read at 17 characters a second, plus the beat they leave over (the demo: 6 beats). Frame 0 is the
+  image. The groups flow onto balanced lines (shrunk only when a group alone is too wide); the title
+  goes on one line instead (`title_lines: 1`, shrunk to fit, never under 0.75 of its wrapped size,
+  `cut.TITLE_ONE_LINE`) when its wrapped lines sit on what the film shows changing on its picture
+  (film/subject.py: the title picture against the vantage's last; `title_subject` {wrap, one line}:
+  how much of it each covers, the box padded like the title's scrim, at the rest view) by more than
+  0.5 and 0.25 more than one line does; a title that covers more than 1.0 either way is a plan
+  warning. The demo's screen loop (type_scale 1.6) sets "Where the Wave Pool Was" on one line above
+  the pool; the cuts keep their lines.
 - **capture** (one per capture of each series: `from`..`to` minus `exclude`d captures): 1 beat with
   no step, 3 with a step, 4 with a push (at least 3 when the film has a single image).
   - Every capture except the film's first image starts with a dissolve on its first frame: `_mix` in
-    linear light from the previous image (a capture, or a curtain as it ended) over D frames, or a
-    display-gamma dip from a surface (`from: night` after a card, `from: <surface>` after a stat).
+    linear light from the previous image (a capture, a curtain as it ended, or a stat over a
+    picture with its panel and text leaving over the first half) over D frames, or a display-gamma
+    dip from a surface (`from: night` after a card, `from: <surface>` after a plain stat card).
   - The date label swaps at the dissolve's midpoint; the rail knob eases (smoothstep) to the new
     tick over the dissolve. Ticks sit at the real dates of the series.
   - Words: `film.line`, else the step's leading `**bold**` run, resolved through the facts (a
     do-not-print fact drops the words with a warning). They land at beat 1 (`step.land`; on the
     film's first image too, so the picture plays clean for a beat after the title), rise 14 units while fading in over B/3 frames, and fade out with the next
-    dissolve.
-  - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`) and holds
-    to the end of the shot. It eases back as slowly as it went in: over B + B/3 frames from the next
-    shot's first frame (through its dissolve), or, when the next shot pushes too, the camera glides
-    from one target to the next. Before a curtain it eases back over B + B/3 from the curtain's first
+    dissolve. Where they sit is chosen per step (see **Words zones**).
+  - A push starts at beat 1 (`push_f0`) and reaches its target at beat 2 + B/3 (`push_f1`; beat 3
+    in a landscape or loop film, below) and holds to the end of the shot. It eases back as slowly as
+    it went in (`ease`): from the next shot's first frame (through its dissolve), or, when the next
+    shot pushes too, the camera glides from one target to the next. Before a curtain it eases back
+    over `ease` from the curtain's first
     frame; before a card, stat or the end card it holds while the image dips out. `check_plan`
-    refuses any camera move shorter than B + B/3 frames. In a loop film both ways take 2 beats
-    (`push_f1` = beat 3): the unattended screen moves calmly, and at full size a 1.8× pull back over
-    B + B/3 swept a bright path through one meter region 4 times in a second.
+    refuses any camera move shorter than B + B/3 frames. In a landscape film and a loop film both
+    ways take 2 beats (`push_f1` = beat 3, `story._Builder.ease`): a 1.6× push in 0.8 s, held and
+    pulled back, lurched on a desktop or a TV, and in the unattended loop at full size a 1.8× pull
+    back over B + B/3 swept a bright path through one meter region 4 times in a second. The 9:16
+    cut, read on a phone in the hand, keeps B + B/3.
+  - The flash margin (see Safety) may hold a capture: its picture plays `held` beats longer before
+    its words land and its push starts (`land` and `push_f0` move on by as many beats); soften its
+    push (`step.gentled`: the share of the log zoom it keeps, z_eff = z^gentled); or slow it by a beat per level (it then eases
+    back as slowly, and the capture lasts until the push lands B/3 before its end).
   - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
+- **montage** (capture shots with `montage: true`, numbered on from the series; one run per gallery
+  chapter with a `vantage` that is a drone vantage other than the main one, unless its `film.skip`
+  or the film's `montage` is 0; with fewer than two captures it is left out with a warning): up to
+  `montage` (5) of the chapter's captures (its `captures`, else all of the vantage's, after
+  exclusions), spread evenly from the first to the last (index round(k·(N − 1)/(n − 1)), halves
+  up). No card: the first picture dissolves in from the image before it on its first frame (from
+  a stat, the panel and text leave over the first half, as into a capture), the next ones on their
+  first beat, D frames each, the date label swapping at each dissolve's midpoint and the knob easing
+  along the montage's own rail (ticks at its dates; another series' rail crossfades out over the
+  first dissolve). 2 beats a picture (`MONTAGE_BEATS`, at least the film's quiet capture beats), and
+  3 for the last (`MONTAGE_LAST_BEATS`: the closing look holds, drifting, before what follows; a
+  stat run that follows on it adds the beat before its first figure lands), so
+  no region sees two dissolves within a second: a snow flight between two summer ones stays within
+  the flash margin. Words (`film.line`, else the kicker, else the title; `step.words_from`
+  film.line | kicker | title, `reason: montage`) land on the first picture's beat 1 in the zone
+  clear of what changes from the montage's first picture to its last (see **Words zones**; the
+  contrast is measured over the first two pictures), and the first picture lasts until they read
+  at 17 characters a second (3 beats for "From the water"); they fade out with the next dissolve. No
+  push: the camera cuts to the vantage's rest view on the run's first frame and drifts in by 4 %
+  (`DRIFT`, within `max_upscale`) to its last frame, held through the dip into what follows; a stat
+  that drifts on its last picture carries that drift on as the same move (see **stat**).
+- **Vantage change without a card** (a montage, or a stat run over the main vantage's picture after
+  another vantage's image): the outgoing picture keeps the framing of its last frame through the
+  dissolve (`dissolve.cam` [x, y, zoom]) and the camera cuts to the new shot's rest view on the
+  dissolve's first frame, so one vantage's push never frames the other.
 - **card** (4 beats): inserted when consecutive image shots (captures, curtains) change vantage. The
   chapter kicker and title (else the vantage name) on night. A dip (`dip`) from the image in display
   gamma; the next image dips in from night.
@@ -626,82 +697,203 @@ two pushes), with or without VANTAGE_FAST.
     returns to rest over the entry beat, and the previous shot's label, words and rail leave over the
     first half of the entry while the curtain's own overlays arrive over the second.
   - Then per step that has a split (steps with `film.skip` are left out; no split at all: one step at
-    0.5): 2 beats of smoothstep sweep to the split, then 2 beats of hold. `keys` holds the hold
+    0.5): 2 beats of smoothstep sweep to the split, then 2 beats of hold, or as many more as its
+    words need to read (below). `keys` holds the hold
     windows in frames, eased by `keyed` exactly like the camera. A step's focus is clamped like a push
     (no subject recentring) and eases in over the sweep.
-  - Words (landing on the sweep's downbeat, out at the next sweep): `film.line`, else the step's
-    `**bold**` lead, else its first sentence when that prints at most 40 characters
-    (`story.curtain_words`), so the centrepiece is not silent; the full step text is for the tracks.
+  - Words (`land`: the beat nearest the sweep's midpoint, a beat after its downbeat, so a line
+    arrives with the picture it names): `film.line`, else the step's `**bold**` lead, else its first
+    sentence when that prints at most 40 characters (`story.curtain_words`), so the centrepiece is
+    not silent; the full step text is for the tracks. Every line of a curtain is set at one size
+    (`words_scale` on the curtain shot: the largest share of the 120-unit lead size at which each
+    line breaks into at most two balanced lines in a portrait film and fits one line in a landscape
+    one, whose wide lines would otherwise reach down over the subject the curtain pushes to,
+    `cut.words_scale`; two lines sit 1.06 apart, the
+    last on the low baseline, the first under the label line when high), so lines never grow and
+    shrink in turn. A line stays until the next one lands, fading out over the B/3 frames before it
+    (or from the next sweep's downbeat when that step has no line, or to the curtain's end), so two
+    lines are never on screen over each other (`cut._line`); the step holds as many beats past 2 as
+    the line needs to be fully on screen for as long as it takes to read at 17 characters a second. Each line's zone is chosen like a
+    capture step's (see **Words zones**): its subject is the step's focus and what changed from
+    before to after, along the camera from its landing to the next sweep; it keeps the previous
+    line's zone while that is clear.
   - Labels: `before_label` / `after_label` (else the capture labels) at the top-left and top-right,
     44 units, shrunk (`label_scale`) so each fits between its text edge and a rule at the centre, and
-    set under the tag when the tag is top-right (`label_top`). `label_ink` holds the inner ink edges
+    set a label line (44 units) under the tag when the tag is top-right (`label_top`), so the tag
+    and the after-label read as two blocks. `label_ink` holds the inner ink edges
     and `reveal` the frame intervals in which each label shows: only while the rule (3 units wide)
     is at least 8 px clear of its ink. A label fades in over B/3, out over the last B/3 frames of its
     interval, and is clipped to its own side of the rule.
   - The rule is 3 units wide in the accent colour; the grip is a 44-unit disc with chevrons at 0.56H.
+    Where the rule crosses a step's line it breaks behind the line's ink box and 12 units round it
+    (fading as the line does), so it never slices through the words. Across the tag's columns it
+    stops the tag scrim's padding (18 units) short of the tag, on the frame's edge side, so the
+    honesty marker is never struck through.
 - **stat** (`N1…`, at least 4 beats each, at most `stats`, default 3): items of the first stats chapter in
   scope, in order, whose value contains a `{fact:}` token. Any other item, and any item whose value,
-  unit, label or source uses a do-not-print fact, is left out with a plan warning.
-  - Background: the FilmSpec's `stats_surface` (default night; the chapter's web `surface` is not
-    used: a paper card between dark aerials and a night end card reads as a glare block), entered
-    by a dip (`dip`).
+  unit, label or source uses a do-not-print fact, is left out with a plan warning. The stats of a
+  chapter form a **run**.
+  - Picture (`backdrop: picture`, the default; `vantage`, `capture`, `file`): when the film has a
+    montage, the run's first stat sits on the last montage's last picture (no dissolve: the
+    montage's label and rail leave over half a beat, and the first figure lands a beat in) and the
+    next ones on the main vantage's latest capture (`story._backdrops`), so the close is never one
+    photograph held under every figure (the order is the film's `stats` order); else every stat sits
+    on the main vantage's latest capture, the picture the curtain ends on, so the cut flows on
+    without a dip. Over the main vantage's picture the run's first stat opens with a D-frame
+    `dissolve` from the image before it (from the curtain: only the strip still showing `before`
+    changes) whose overlays leave over its first half. A stat on another picture than the stat
+    before it dissolves to it (D frames, `from: <stat id>`; from another vantage the outgoing
+    picture keeps its framing) under the panel, which stays with the riding line; its figure lands
+    on the first beat after the dissolve (the flash margin may hold it, `N<n>.0`). The next stats on
+    one picture have no dissolve and no dip: the picture and the camera carry on and only the text
+    changes, in sequence (the previous stat's text out over its last B/3 frames, then the new
+    figure slides in on the beat, then its label and source fade in). After a card the first stat
+    dips in from night.
+  - Panel: one feathered box (padding 44 units, sigma 16) behind all of the run's ink (in 9:16 out
+    to the left margin's mirror on the right, so its gutters match), in the run's
+    **tint**, the stats chapter's `surface` (default paper, as on the web), with ink text on paper
+    and paper text on night. Its opacity is measured (`cut._measure_panel`): the least of 0.30…0.95
+    at which the text colour keeps what WCAG 1.4.3 asks of the smallest text on it
+    (`cut.panel_contrast`: 3:1 when every figure, unit, label, source and riding line is large, at
+    least 18 pt seen on a phone, `LARGE_TEXT` = 66 px at a 1080 px short edge; else 4.5:1) over
+    the 99.5th-worst percentile of the picture under the run's ink box, sampled on every beat of each
+    stat over its own picture along the camera path, to that target × 1.2 (`PANEL_MARGIN`; the
+    plan's `aim`), so it keeps a margin. Under the panel the picture is also calmed, not only tinted:
+    blurred by 8 units and taken half way to grey (`CALM_SIGMA`, `CALM_GREY`) under the panel's own
+    feathered mask and opacity, so a saturated boat or a pier's boards never punch through the text;
+    the measurement samples the calmed picture. It rises with the riding line over the beat
+    before the first figure lands (`cut.panel_from`: from the shot's first frame, or half way
+    through its dissolve, and at least B/3; a held entry, `N1.0`, shows the bare picture until
+    then), so it never pops in, and stays through the run. Recorded in plan.json `checks.scrims`.
+  - Placement (`place`): `low` (the stats' bottoms on one line above the riding honesty line, which
+    rests on the safe bottom, or above the tag in 9:16) or `high` (the figures' cap tops on the
+    label line, or under a top-right tag; the honesty line under the tallest stat), whichever lets
+    more of the run's pushes frame their hotspot clear of the panel; between places that frame as
+    many, the one whose panel (its ink box padded by 44 units) covers the smaller share of its
+    pictures' subjects, averaged over the run's stats in the view each ends on (its push target,
+    else the rest view) (`place_subject`; film/subject.py: what changed since the vantage's first
+    picture, and the stats' hotspots; ties: low); a place whose words keep their full size beats
+    one where they shrink. Labels and sources wrap (balanced) to the text width. A run taller than
+    the safe zone shrinks its figures first, down to 0.6 of their size (`FIGURE_MIN`), and only
+    then every size together until it fits (`cut.stat_run`, shared by story.py and the renderer):
+    words set under their size (the type floor below) are a plan warning (`cut.stat_type_problem`)
+    and block a `--release` render. Before that, the honesty line and disclaimer only ride under a
+    run that keeps its words at full size in one of its places; else the end card keeps them.
+  - Camera (`move`: `{how, subjects, focus, upscale, f0, f1}`, plus `gentled`, the share of its log
+    zoom kept, when the flash margin softened its push): a stat whose facts are printed in
+    the label or body of a hotspot of a scrub or compare chapter on that vantage, shown at that
+    capture, pushes toward it from its landing to B/3 before its end (at least `ease` frames):
+    `aim` asks for zoom 1.6 (`STAT_ZOOM`), clamped by `max_upscale` and lowered until the hotspot
+    sits in the safe zone clear of the panel, within `MAX_TRAVEL` of the rest view (`how:
+    focus+subject:<id>`). Any other stat drifts in by 4 % (`drift`) to B/3 before its end, or holds
+    (`hold`) when there is no zoom to spare; a hotspot that cannot be framed adds `, subject
+    off-frame:<id>`. A drift closes in about the middle 80 % of what changed on its picture
+    (`DRIFT_EXTENT`, `story._subject_extent`: the subject map's mass inside the rest view), moved as
+    little as it takes to keep all of it in frame (`_drift_to`). A drift that follows a drift on the
+    same picture (the montage's, a stat's) carries it on as one move from where it began
+    (`_Camera.drift`), so the picture never stops on a stat's beat; the stats it carries share its
+    `focus` and `f1`. A push before a stat's picture eases back to the rest view over its first
+    `ease` frames.
+    A push of more than 1.25 output px per master px is a "soft push" warning, as for steps.
+    In the demo's own films no stat pushes: the first figure sits on the shoreline montage's last
+    picture, a vantage with no scrub or compare hotspots, and the second (the flights) is printed
+    by no hotspot, so both drift. Its overview hotspots still feed a stat on the overview (the
+    beach prints the wave pool's area, the meadow its parking spaces): on the engine's defaults
+    the full-size 16:9 cut pushes its meadow figure (tests/test_film_full.py, slow), and the
+    small-size cuts push in tests/test_film_story.py.
   - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
     (tabular figures without raqm; other glyphs keep their own advance), shifted so the first
-    glyph's ink starts on the text column with the label. Each glyph slides up into a mask over B/2
-    frames, staggered by 2 frames, from `land` (the end of the shot's dip: the figure lands on a clean
-    surface). The mask ends at the figure's own ink bottom (its baseline, or a comma's tail), so a
-    rising glyph never shows above the label. The value is the plan's printed fact text: it never
-    counts.
-  - Unit at 0.35× the value size after it; label at 44 units and "Source: <source>" at 26 units
-    below. They fade in at `text_in`, the first beat at or after the figure has landed (land + B/2).
-    Ink on paper, paper on night; no scrims (a loop film adds its tag).
-  - Length: max(4, ceil((text_in − f0 + 2·B/3 + cue_frames(label + source)) / B)) beats, so label
-    and source are fully on screen for as long as they take to read at 17 characters a second (the
-    figure itself is read at a glance).
-  - Its text fades out over its last B/3 frames before any next shot, so a stat followed by a stat
-    shows one figure at a time.
-  - Followed by an image, the text fades out over the last B/3 frames and the image dips in from the
-    bare surface.
+    glyph's ink starts on the text column with the label. The figure and its unit slide up into a
+    mask as one block over B/2 frames from `land` (the first beat after the entry for the first stat
+    of a run, the shot's first frame for the next), so no frame shows part of a figure beside its
+    unit and label. The mask ends at the ink bottom of the figure and its unit (the baseline, a
+    comma's tail or the unit's descender), so a rising glyph never shows above the label. The value
+    is the plan's printed fact text: it never counts.
+  - Unit at 0.35× the value size after it; label and "Source: <source>" below, fully opaque, at 52
+    and 34 units in 16:9 and 86 and 58 in 9:16 (read on a phone: x-heights of 44 and 30 px at 1080
+    wide). A 16:9 film is read on a phone held sideways too: its label, source and riding line are
+    at least 72, 48 and 36 px at a 1080 px short edge whatever its type_scale (`STAT_LANDSCAPE_PX`:
+    x-heights of 37 and 25 px; the screen loop's type_scale 1.6 sets them larger still). Label and
+    source fade in over B/3 at `text_in` (= `land` + B/2: once the figure and its unit are whole).
+  - Length: max(4, ceil((text_in − f0 + B/3 + cue_frames(label + source) + out) / B)) beats (`out`:
+    B/3 before another stat of the run), so label and source are fully on screen for as long as
+    they take to read at 17 characters a second (the figure itself is read at a glance). A run
+    carrying a riding line is read as one screen, not text by text: its sentences are shared out in
+    order over the stats' caption cues (`story._ride_parts`: the split asking the fewest characters
+    of reading, then the most even), each stat lasting until its cue, from the middle of its entry,
+    reads with its part at 17 characters a second; and the last stat lasts until every label, source
+    and the riding line, fully on from the first stat's `land` (it comes in with the panel over the
+    beat before), read one after another at that rate.
+  - The last stat's text holds to the shot's last frame: what follows dissolves (an image) or dips
+    (a card, the end card) from the stat as it is, panel and text included.
+  - Plain card (`backdrop: plain`; a FilmSpec `stats_surface` night | paper asks for it): the old
+    card on that surface, no panel, entered by a dip (`dip`); consecutive stats change their
+    text the same way with no dip; before an image its text fades out over its last B/3 frames and
+    the image dips in from the bare surface.
 - **Dips**: every dip and dissolve is D frames, except one that crosses between paper and another
   surface or an image: it lasts `surface_dip` frames (film/safety.py, 17 for the demo colours at
   30 fps), the shortest display-gamma dip from night to paper in which no frame pair changes
   luminance by 0.10 or more.
-- **end** (two cards, both kind `end`):
-  - `E1`, the credits (at least `end_beats`, 6): a dip to night, then the brand name, credit line,
-    partners and the short `base_url`. Lengthened until the credit line and link are fully on screen
-    for as long as they take to read at 17 characters a second, plus a beat to scan the partners;
-    its text fades out over its last B/3 frames.
-  - `E2`, the honesty card (at least 4 beats): a D-frame dip, then the honesty line with copyright
-    and disclaimer below it as fine print, held until the honesty line reads at 17 characters a
-    second, then its text fades to night over the film's last beat (the film ends on night). The
-    honesty line says "simulated" when it is, so no SIMULATED_NOTE is added (classic cuts keep it).
+- **end** (`E1`, one card on night): a dip (D frames from an image), then the brand name, credit
+  line, partners, the short `base_url`, the honesty line, the disclaimer (30 units, read: it says
+  what is fictional) and the copyright as fine print (27 units, read at a glance as legal text is).
+  In a portrait film the whole card is set 1.35× larger (`END_PORTRAIT`; read on a phone in the
+  hand), shrinking to fit as before. Its text fades in over B/3 after the dip and
+  fades to night over the film's last beat (the film ends on night). Length: as long as the credit
+  line, link, honesty line and disclaimer take to read at 17 characters a second, plus a beat to scan the
+  partners and the last beat, and at least `end_beats` (6). When that would run over 6 s with its
+  dip (`END_MAX_S`) and the film has stats, the honesty line **rides along** under the stat run
+  instead, in a short form read alongside the figures (`HONESTY_RIDE`, below; the whole line stays
+  in the transcript's header) (`ride: true` here; the stats' `honesty`: 30 units in 16:9 (at least 36 px at a 1080 px short
+  edge), 38 in 9:16, in with the
+  panel over the beat before the first figure lands and held to the run's end, which lasts until it
+  reads), then the disclaimer too (after the honesty line, one riding text). In a simulated film
+  whose brand has a disclaimer, the disclaimer rides alone in the honesty line's place: the tag
+  says "simulated" on every frame and the disclaimer says the rest, so what the figures carry
+  stays short. A card still over 6 s
+  leaves the partners out (a warning), and one over 6 s even so is a warning too: with no stats the
+  card carries the honesty line and disclaimer however long they take. The
+  honesty line says "simulated" when it is, so no SIMULATED_NOTE is added (classic cuts keep it).
+  For the demo the card is 9 beats (5.4 s) and its disclaimer rides along the stats for 10.2 s in
+  both cuts.
   The honesty line comes from `provenance`:
   - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
   - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
+  Its short, riding form (`HONESTY_RIDE`): "Real aerial photographs only; no in-between images." and
+  "Simulated flights only; no in-between images."
 - **Loop films** (`loop: true`; the `screen` preset):
-  - A `rise` (`R1`, 2 beats) opens the film: frame 0 is a pure night fill, easing in display gamma
+  - A `rise` (`R1`, 1 beat, `LOOP_BEATS`) opens the film: frame 0 is a pure night fill, easing in display gamma
     (`ramp(f, f0 + 1, n)`, 0 on its first frame) onto the title's image at rest under the title's
     30 % scrim, with the tag. When a series follows the title, its rail is shown with the knob
     sweeping back from the last tick to tick 0; the rail then stays (knob at 0) through the title into
     the first capture instead of fading in.
-  - The title starts at 2B (its `groups` and `key` are relative to its own `f0`).
+  - The title starts at B (its `groups` and `key` are relative to its own `f0`).
   - Every text needs releasable facts unless the project is a draft: a stat item, step words,
     capture label or note, card or title text that prints any other fact is left out with a plan
     warning ("left out of the loop"), since the loop plays unattended (a label falls back to its
     date). `--hours` refuses a loop plan of a project that is not a draft if it still prints a fact
     that is not releasable.
-  - The end card (`end_beats`, 4) prints only the brand name and, when `output.base_url` is set, the
-    short URL in large type (text role `url`, 64 units × type_scale); no credits, partners, fine
-    print or honesty line (the `honesty` field is still recorded). No QR code in v1.
+  - The end card (`end_beats`, 3, or as long as its words take to read at 17 characters a second
+    after its dip) prints only the brand name and, when `output.base_url` is set, the short URL in
+    large type (text role `url`, 64 units × type_scale); no credits, partners, fine print or honesty
+    line (the `honesty` field is still recorded). No QR code in v1. So the seam between the last
+    picture and the first is short: for the demo 4 beats of card (3.2 s, its dip included), a beat
+    of dip and the first half of a beat's rise, about 4.4 s.
   - With no disclaimer on its end card and no tracks, a loop keeps its `tag` ("Simulated imagery",
-    "Preview") on every shot: on cards, stats and the end card too, in ink without a scrim on paper.
+    "Preview") on every shot: on cards, plain stat cards and the end card too, in ink without a
+    scrim on paper (stats over a picture carry it as every image does). An unattended screen prints
+    figures with no end card to qualify them, so a loop with stats has the honesty line's short form
+    and the brand's disclaimer (a simulated loop's disclaimer alone, as in a cut) ride under them
+    (`ride: true`), as a cut whose card is full does, at the screen's type size, its stats lasting
+    until they read with the figures' words.
   - The end card is lengthened by a beat when needed so the film's length is a whole number of GOPs
     (2B frames): N % 2B == 0.
-  - A `dip` (`D1`, 2 beats) closes the film: the end card eases in display gamma to the night fill,
+  - A `dip` (`D1`, 1 beat) closes the film: the end card eases in display gamma to the night fill,
     reaching it on frame N (`ramp(f, f0, n + 1)`), one past the last frame. So frame(N) == frame(0),
     byte for byte, and a player looping the file shows no seam. The renderer checks it before
     encoding (`render.check_seam`).
-  - For the demo the screen cycle is 76 beats at 75 bpm (1824 frames, 60.8 s at 30 fps).
+  - For the demo the screen cycle is 86 beats at 75 bpm (2064 frames, 68.8 s at 30 fps), with the
+    same two stats as the cuts (`films.screen.stats`).
 - **Push target**: `film.focus` when given (`target: film.focus`, used as given); otherwise the
   step's `focus`, recentred to the crop nearest it that puts the step's **subject hotspots** inside
   the layout's subject box (`focus+subject:<ids>`; `story.subject_box`: the safe zone 1 % in from
@@ -712,15 +904,48 @@ two pushes), with or without VANTAGE_FAST.
   "previous" is the chapter's `from`. If they do not fit, the zoom is lowered toward 1 in 32 steps.
   **Reach**: the crop centre never moves more than `MAX_TRAVEL` (0.5) of the rest crop's width
   (height) from the rest view. When the subjects cannot be framed within that reach (in 9:16 a
-  subject far outside the portrait crop at rest), the push aims at the step's focus, capped to the
-  reach (`focus, subject off-frame:<ids>`, with a plan warning) rather than whipping across the
-  master to a subject the viewer never saw.
-  A step whose subject still sits under its lead words on screen (between the subject box and
-  30 units below the lead baseline: no zoom to spare to lift it) gets a plan warning.
+  subject far outside the portrait crop at rest), the step does not push at all (`target: focus,
+  subject off-frame:<ids>`, `push: false`, `reason: subject off-frame`, with a plan warning): it
+  neither whips across the master to a subject the viewer never saw nor pushes to the focus alone,
+  which would frame something the step does not name. Its transcript line names only subjects a
+  push frames (`focus+subject`).
+  The subject box follows the step's words zone: in the `high` zone it runs from the high words'
+  ink bottom + 54 units (their rise and a gap) to the rail − 40 units, so a push frames its subjects
+  below the words instead.
+- **Words zones** (`cut.words_set`, `cut.WORDS_ZONES`; chosen by `story._Placer`): a step's words
+  sit in one of the layout's zones. 9:16: `low` (the lead baseline .60H, the default) or `high` (from
+  the left margin, the ink top of "Hdl" 44 units under the label line: the date label's baseline,
+  or the curtain labels'; .20–.26H at 1080 × 1920, inside the safe zone and clear of the label and
+  rail). 16:9 and the screen: `low`, `low-right` (the lead baseline, the ink ending on the right
+  text edge) or `high`. For each zone the push is aimed with that zone's subject box, and the
+  camera path from the words' landing to the shot's end (every B/3 frames) is projected onto the
+  step's **subject** (film/subject.py): Gaussian spots of equal mass (σ = 0.03 of the master's
+  width) on the step's focus point and its subject hotspots (half the weight; for a capture step
+  that pushes, three quarters, and its focus spot as wide as what the push frames: σ = 0.12 of the
+  pushed crop's shorter side, so the words keep off what the camera closes in on, not only its
+  centre), plus the region that changed between the
+  vantage's previous capture and this one (the other half: the CIELAB difference of the two masters
+  at 256 px wide, blurred by σ = 0.02 of the width, less its median, clipped at 0; a change
+  everywhere frames nothing). `words_subject[zone]` is how much of the subject on screen the words'
+  box (their ink plus the scrim's padding and the rise) covers for its size (1: as much as anywhere
+  on screen, 0: none), averaged over the path; `words_contrast[zone]` the least contrast ratio of the
+  words' colour over the picture under that box behind its 0.5 night scrim (mixed in display gamma)
+  against the 95th-percentile luminance under it, along the path (both pictures of a curtain). A
+  zone under 3:1 (WCAG 1.4.3, large text) is taken only when every zone is. The step keeps its
+  default zone (a series' or curtain's previous words zone, else the first) while it covers at most
+  0.5 (`words_reason: clear`) or within 0.25 of the least (`near least subject`), but never while
+  it covers more than 1.0 and a legible zone does not; else it moves to the zone over the least
+  (`least subject`; ties: zone order). No focus, hotspot or change: the default (`no subject`). When
+  the chosen zone covers more than 1.0 the plan warns that the words sit on the subject in every
+  zone (when every zone does) or in that zone, as the zones clear of it keep under 3:1; under 3:1,
+  that the words miss the contrast.
 - **Zoom clamp**: s0 = max(W/mw, H/mh); z_eff = clamp(z, 1, max(1, max_upscale/s0)). Warnings when
   z_eff < z ("push clamped"), s0·z_eff > 1.25 ("soft push") and s0 > max_upscale ("master upscaled
   even at rest"). A push with z_eff < 1.08 whose crop centre moves < 0.03 (normalized) becomes a
-  3-beat step without a push (`push: false, reason: clamped`).
+  3-beat step without a push (`push: false, reason: clamped`). So does a series' last step on the
+  picture the next curtain shows as `after` when one of that curtain's steps pushes within 0.03 of
+  its focus (`reason: the curtain pushes it`): the curtain makes that push, so the film never pushes
+  in, eases out and pushes in again on one subject.
 - **Rest camera**: the image centre at zoom 1 in 16:9; the vantage's `portrait_focus` in 9:16.
 - **Degrade** (counted on the main vantage's captures after exclusions): 0 captures is an error;
   1 capture plays title → capture (at least 3 beats, words if it is a step) → stats → end; 2 captures
@@ -741,7 +966,7 @@ renderer no longer has constants of its own.
 | layout | safe t, r, b, l | label cap-top | lead baseline | rail | tag |
 |---|---|---|---|---|---|
 | story-16x9 | .06H .05W .06H .05W | safe top | .78H | .88H | top-right in safe |
-| story-9x16 | .14H .12W .28H .06W | .16H | .60H | .70H | right, baseline rail − 18u |
+| story-9x16 | .14H .12W .28H .06W | .16H | .60H | .70H | right, baseline rail − 30u (`cut.TAG_RAIL`: a cap height of air over the knob) |
 | screen | .05 on every side (TV overscan) | safe top | .76H | .88H | top-right in safe |
 | classic-16x9 | .05 all round (ink check only) | margin round(.055W) | | H − round(.075H) | `corner`: .8·margin from the top-left |
 | classic-9x16 | as story-9x16 | lower third above the rail | | .70H | `top-left`: ascent top at the safe top |
@@ -765,18 +990,33 @@ renderer no longer has constants of its own.
 - **Ink checks** (`render.check_ink`): both renderers record the ink box of every typeset layer
   ([x, y, w, h]; rising text includes its rise travel; the rail includes its knob) and write plan.json
   `checks` (not hashed): `{"safe": [x0, y0, x1, y1], "ink": [{"shot": id | null, "layer": name,
-  "box": [x, y, w, h]}], "outside": [indices]}`. A box more than 1 px (antialiasing) outside the safe
+  "box": [x, y, w, h]}], "outside": [indices]}`, and for a story cut with stats over a picture
+  `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "target", "aim", "box": [x, y, w, h]}, {"text":
+  "tag" | "<shot id> kicker" | "<shot id> label", "alpha", "contrast"}]` (each run's measured panel,
+  the contrast it gives, the WCAG target and the margin it was measured to, `aim`;
+  then the tag's, each title kicker's and each date label's measured scrim, see below). A box more than 1 px (antialiasing) outside the safe
   rectangle is a plan warning; `vantage film --release` refuses it.
 
 Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
-fit between the margins), curtain labels 44, stat value 220 / unit 77 / label 44 / source 26, card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
+fit between the margins), curtain labels 44, stat value 220 / unit 77 / label 52 (9:16: 86) / source 34 (58) / riding honesty 30 (38), the 16:9 ones at least 72 / 48 / 36 px at a 1080 px short edge whatever the type_scale, card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
 are composited at sub-pixel offsets by bilinear warping of the pre-rendered layer patch. Story cuts
 break lines balanced (`render.balance`): the greedy line count, then the break set with no one-word
 last line and no line ending on a word that starts a sentence when another exists, then the
 narrowest widest line, then the most even lines; title word groups are balanced across lines the
 same way ("Where the / Wave Pool Was", not "Where the Wave Pool / Was"). Classic cuts keep greedy
 filling. Scrims are
-feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands.
+feathered night boxes behind each text block's ink (and the rail and tag), never full-width bands;
+a stat run's panel is one such box in the run's tint, its opacity measured (see "stat"). The tag (22
+units, caps, fully opaque), a title's kicker (38 units, accent) and a capture's date label (52 units)
+are small text: their scrims are measured too (`_Cut._least_scrim`), the least opacity from 0.30
+(tag), 0.45 (the title's scrim, for its kicker) or 0.42 (label) up to 0.95 at
+which the text, composited over the scrimmed picture, keeps 4.5:1 between its glyph cores' median
+luminance and the 95th-percentile brightest pixel 1 to 4 px around its glyphs. The tag's is measured
+once over every half beat of the film (frames rendered without it: pictures, dissolves and panels),
+a kicker's over its title's picture (under the title's wash) while its text is up, a date label's
+over its own shot's picture along the camera. A stat run's panel stays
+`TAG_CLEAR` (44 + 3·16 + 8) units clear of the tag (above it in 9:16, below a top-right tag), so a
+paper panel's feather never lightens the picture under the tag.
 In 9:16 (story and classic) every word, the end card and the rail stay between 0.14H and 0.72H, clear
 of the right edge.
 
@@ -785,10 +1025,13 @@ of the right edge.
 - **Static** (`check_plan`, at plan time and again before rendering a story plan; `PlanError`):
   every change between two images is a dissolve of at least ceil(0.34·fps) frames that starts with
   its shot, there are no hard cuts between images (a curtain may open without a dissolve only on the
-  image already on screen, `from_after`), an image after a surface always dips in, every card, stat
-  or end dip is as long, any dip to or from paper lasts at least `surface_dip` frames, and every
-  curtain sweep lasts at least 2 beats. The title's last word group is fully in before its fade
-  starts, and a card, stat or end card's dip leaves at least one beat of the shot for its text (a
+  image already on screen, `from_after`; a stat over a picture is an image, and the next stat of
+  its run shows the same picture with no dissolve), an image after a surface always dips in, every
+  card, plain stat or end dip is as long, any dip to or from paper lasts at least `surface_dip` frames, and every
+  curtain sweep lasts at least 2 beats. No camera move is faster than a push (B + B/3 frames), except
+  a cut on the first frame of a dissolve that carries `cam` (between two vantages), with no frame
+  between the two windows. The title's last word group is fully in before its fade
+  starts, and a card, plain stat or end card's dip leaves at least one beat of the shot for its text (a
   long dip from paper can need more `end_beats` than the minimum). A loop plan opens with a `rise` and closes with a `dip`, each
   at least ceil(0.34·fps) frames, and its frame count is a multiple of 2B. Classic plans keep their
   own timing and are not checked.
@@ -807,8 +1050,61 @@ of the right edge.
   outputs and raises `FlashError`. The meter only reads frames, so it never changes bytes; its
   result is `render.flash` (`{pass, max_transitions_per_s, max_delta, frame}`; `max_delta` is the
   largest one-frame change of any region). For a loop film it also reads frame N (= frame 0), so the
-  seam is measured like any other transition. The fast demo films measure at most 3 transitions a
-  second.
+  seam is measured like any other transition. Above 3 the film is refused; above the plan's
+  `flash.limit` (story cuts; `output.film.flash_limit` for classic ones) the render adds a plan warning
+  ("measured N flash transitions … over the margin of L"; `--plan-only`, keeping a film rendered from
+  the same plan, adds it again), and `vantage film --release` refuses the film. `render.flash` also
+  records that `limit`, and `check_films` reports a film measured over it.
+- **Flash margin** (film/margin.py, at plan time, story cuts): the meter only reads what is
+  rendered, so the planner estimates it first and keeps every film at most `output.film.flash_limit`
+  (default 2) transitions per region in any second. `derive_cut` plans the film again at a proxy
+  size (`margin.proxy_size`: 480 px on the long edge, a quarter of the full-size film; at 240 px its
+  type, set at whole pixel sizes, moved a line's ink into the next region), renders the proxy with
+  `_Cut` (masters decoded at a JPEG reduction and shared between passes; the camera, dissolves, text
+  and scrims are the renderer's own) and meters every frame (`LumaMeter(size=…, log=…)`) twice: at the 1/8
+  size the meter measures a full-size frame at, and at 1/8 of the VANTAGE_FAST film (`measures`; its
+  transitions are kept apart as kind `luma@1`, `red@1`), counting a luminance run from 0.09
+  (`PROXY_THRESHOLD`; the meter: 0.10) since the proxy's smaller frames and type misjudge a near run
+  by a few per cent, so the margin holds for both and a
+  VANTAGE_FAST plan gets the same margin, beats and hash inputs as the film it previews. What depends
+  on where text sets is decided once per pass by planning at the full size (`_Builder.decide`: each
+  step's words zone `zone:<label>`, each push target `aim:<label>`, the stat run's place and aims
+  `stats:<chapter>`) and passed to the proxy and to a VANTAGE_FAST plan as fixed inputs: a word box
+  set at 480 px is wider than at 1920 and flipped zones near the margin. `derive_cut` warns when the
+  proxy's beats, zones, stat places or camera windows still differ from the film's. For each run of
+  more than the limit in one region within `fps` frames, earliest first (`margin.fixes`):
+  - when they all come from one push (a capture's push in and its ease back, a curtain step's move,
+    a stat's push to its hotspot), that push is **softened**: its log zoom scaled by limit / count ×
+    0.9, never below 1.25 (`flash.softened`: push key → the share of its log zoom the push keeps, so
+    its zoom is z_full^share; the step, and a stat's `move`, record that share as `gentled`);
+  - else a slot between them is **held** a beat (`flash.held`: slot → beats, at most 2): a capture
+    (`S07`: a quiet capture plays a beat longer, a step's picture a beat before its words land and
+    its push starts), a montage picture, a curtain after its entry (`C1.0`) or after step k's sweep
+    (`C1.k`), the first stat before its figure lands (`N1.0`), or a stat before the next (`N2`);
+    quiet captures first, then steps and montage pictures, then curtains and stats, splitting the
+    transitions most evenly;
+  - else a move holding two or more of them is softened or, at 1.25, **slowed** a beat
+    (`flash.slowed`: key → beats, at most 4; a capture's push then eases back as slowly and the
+    capture lasts long enough for it to land B/3 before its end; a curtain step's move delays its
+    sweep; a stat's push is slowed by holding the stat).
+  Each fix shifts the measured transitions as it would (a hold moves what follows a beat later, a
+  slow stretches its move), so one render finds most fixes; the film is then planned and metered
+  again (at most 6 passes; a pass re-renders only from the shot before the first change). Every
+  shot, sweep and landing stays on the beat grid. The plan records what decides frames as `flash`
+  (hashed: `{limit, held, slowed, softened}`) and the measurement as `checks.flash` (not hashed:
+  `{estimate, frame, proxy, measures, passes}`); when the estimate stays above the limit a warning
+  says so ("flash margin: the planner estimates …"), and the render meter remains the final check.
+  A proxy's transitions are memoised by its plan hash within a process and cached on disk in
+  `work/film/flash/<key>.json` (keyed by the proxy plan's hash, its sizes and a digest of the
+  renderer's sources), so re-planning an unchanged film (`--plan-only`, the package stale check)
+  renders no proxy. `vantage validate` plans without the margin (`plan_films(margin=False)`): it
+  reads only the plans' warnings. The demo films measure at most 2 transitions a second at full
+  size (tests/test_film_full.py, slow), and so does the CI-sized demo (ci.yml's demo job fails on a
+  film whose `render.flash` exceeds its limit). `.github/workflows/films.yml` runs the slow film
+  tests (full-size footage cached by the generator's source) on pull requests that touch
+  `src/vantage/film/`, `src/vantage/demo/`, `tests/test_film*.py`, the demo project or what every
+  film depends on (`config.py`, `models.py`, `media/`, `process/`, `site/facts.py`, the bundled
+  fonts, `pyproject.toml`, `uv.lock`), and on demand: the only CI that renders real pushes.
 
 ### plan.json
 
@@ -827,7 +1123,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
                                                                                 // (classic 1; story 2: rails inset by their knob;
                                                                                 //  3: stat land/text_in, aligned and clipped figures;
                                                                                 //  4: the title fades over a whole beat;
-                                                                                //  5: balanced line breaks)
+                                                                                //  5: balanced line breaks;
+                                                                                //  6: stats over a picture, one end card)
     "width": 1920, "height": 1080, "fps": 30, "frames": 1410, "loop": false, "sound": "none",
     "grid": null | {"bpm": 100.0, "fpb": 18, "dissolve": 12, "beats": 37},   // story: effective bpm; classic: null
     "layout": {"name": "classic-16x9", "safe": [54, 96, 54, 96], "margin": 106, "label_top": 54,
@@ -843,26 +1140,32 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
                 "text": {…}, "numeric": {…}},          // "pillow:default" (sha256 null) when a brand has no font file
       "colors": {"night": "#…", "paper": "#…", "ink": "#…", "accent": "#…"} },
     "camera": [],                                      // story: [{"a": 0, "b": 162, "x": 0.5, "y": 0.5, "zoom": 1.0}, …]
-    "captions": [{"f0": 36, "f1": 90, "text": "April 2025. Before.", "facts": []}],   // see "Tracks"; [] for loop films
+    "captions": [{"f0": 36, "f1": 90, "text": "April 2025. Before.", "facts": []}],   // see "Tracks" (+ "lasting": a line lasting under several cues); [] for loop films
     "chapters": [{"f0": 0, "title": "Every flight, one frame", "facts": []}],
     "transcript": {"title": "…", "subtitle": "…", "honesty": "…", "facts": [],
                    "lines": [{"f0": 0, "text": "Title over the April 2025 view: …", "facts": []}]} | null,
     "shots": [ /* see below */ ],
     "hold_s": 1.0, "fade_s": 0.8, "seconds_total": 47.0, "poster_seconds": 23.65 },   // classic timing
-    // story instead: "poster": <frame>: the latest capture at rest without its words (the frame
+    // story instead: "poster": <frame>: the latest capture of a series (never a montage's) at rest without its words (the frame
     // before a step's words land, else its last frame; its dissolve over and the camera back at
     // the rest view), else the title's key frame; never a push, never words over the picture
-  "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed;
+    // story also: "flash": {"limit": 2, "held": {"S07": 1, "C1.0": 1}, "slowed": {}, "softened": {"S12": 0.38}}
+    //   (the flash margin, see Safety; held/slowed in beats, softened as the share of its log zoom a
+    //   push keeps: z = z_full^share)
+  "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true, "text": "132",
+            "sources": ["Synthetic site plan"]}},  // snapshot at plan time (+ "attribution"), NOT hashed;
                                                        // every fact the shots and the tracks print
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
   "checks": {"safe": [96, 54, 1824, 1026], "ink": [{"shot": "T1", "layer": "stack", "box": [598, 330, 724, 420]}],
-             "outside": []},                           // NOT hashed: written by the renderer (see Layout presets)
+             "outside": [],                            // NOT hashed: written by the renderer (see Layout presets)
+             "flash": {"estimate": 2, "frame": 434, "proxy": [270, 480], "measures": [[135, 240], [67, 120]],
+                       "passes": 3}},                  // story: the flash margin's measurement (see Safety)
   "encode": {"crf": 18, "preset": "slow", "threads": 4, "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
              "bufsize": 8030000, "threads": 4} | null, "gop": null | 48, "tracks": true, "lang": "eng"},  // NOT hashed: bytes, not frames
                                                        // tracks: embed captions and chapters; lang: ISO 639-2
                                                        // gop: a loop film's closed GOP, 2B frames
   "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": {"bytes": 0, "sha256": ""} | null,
-             "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0467, "frame": 384},
+             "flash": {"pass": true, "max_transitions_per_s": 0, "max_delta": 0.0467, "frame": 384, "limit": 2},
              "ffmpeg": "6.1.1-3ubuntu5"} }             // written after the encode; null with --plan-only
 ```
 
@@ -891,24 +1194,38 @@ Shots (in film order; `f0`, `f1` are frames, half-open; `key` is the storyboard 
 Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without one):
 
 - `title` (`T1`): `vantage`, `capture` (date), `file`, `groups` (the frames the title's word groups
-  start rising). Text roles `kicker`, `title`.
+  start rising), `title_subject` and `title_lines` (1, when the title goes on one line; see the
+  title above). Text roles `kicker`, `title`.
 - `capture` (`S01…`): `vantage`, `capture` (date), `label`, `file`, `dissolve` (`{from: <date> |
-  <curtain id> | "night" | "paper", f0, f1}` or null on the film's first image), `series` (ordinal), `rail` (index on the
-  series' rail), `step` (null or `{index, words, words_from: film.line | lead | null,
+  <curtain or stat id> | "night" | "paper", f0, f1}`, plus `cam` [x, y, zoom] when the image before
+  is another vantage's, or null on the film's first image), `series` (ordinal; a montage has its
+  own), `rail` (index on the series' rail), `montage` (true on a montage's shots), `step` (null or
+  `{index, words, words_from: film.line | lead | kicker | title | null,
   focus_requested, focus [x, y, z_eff], target, subjects, z_eff, upscale, push, reason, land,
-  push_f0, push_f1}`). Text roles `label`, `words`.
+  push_f0, push_f1, gentled (only when the flash margin softened its push)}`, and with words `words_zone` (low | high | low-right), `words_reason` (clear |
+  near least subject | least subject | no subject), `words_subject` and `words_contrast` ({zone:
+  measure}); see **Words zones**). Text roles `label`, `words`.
 - `card` (`K1…`): `vantage`, `dip` (frames). Text roles `kicker`, `title`.
 - `curtain` (`C1…`): `vantage`, `before`, `after` (dates), `before_file`, `after_file`, `labels`
   [before, after], `label_scale`, `label_top` (cap-top px), `label_ink` [right edge of the before
   label, left edge of the after label] (px), `reveal` [[[f0, f1], …] per label], `dissolve` (as a
   capture's, or null), `from_after`, `keys` [{a, b, split}], `steps` [{index, split, f0 (sweep start),
   words, words_from: film.line | lead | sentence | null, land, focus_requested, and when focused: focus, target,
-  subjects, z_eff, upscale, push, reason}]. Text roles `before`, `after`, `words`.
-- `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper), `dip`, `land` (the
-  frame the figure starts to slide in), `text_in` (the frame unit, label and source fade in). Text roles
-  `value`, `unit`, `label`, `source`.
-- `end` (`E1`, then `E2` except in a loop): `dip`, `honesty`. Text roles: E1 `brand`, `credit`,
-  `role`, `partner`, `link`; E2 `honesty`, `fine`; a loop's end card has only `brand` and `url`.
+  subjects, z_eff, upscale, push, reason; with words `words_zone`, `words_reason`, `words_subject`,
+  `words_contrast`}]. Text roles `before`, `after`, `words`.
+- `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper: the panel's tint, or
+  the plain card's surface), `backdrop` (picture | plain), with a picture `vantage`, `capture`,
+  `file`; `place` (low | high), `place_subject` (over a picture: `{low, high}`, the share of the
+  picture's subject under each place's panel), `dissolve` (as a capture's: the first of a run over a picture, else
+  null; with `cam` after another vantage's image), `dip` (frames; plain cards), `land` (the frame the figure starts to slide in), `text_in`
+  (the frame label and source fade in), `honesty` (the riding line, or null), `move`
+  (null on a plain card, else `{how: focus+subject:<id> | drift | hold[, subject off-frame:<id>],
+  subjects, focus [x, y, zoom] | null, upscale, f0, f1}`). Text roles `value`, `unit`, `label`,
+  `source`, `honesty`.
+- `end` (`E1`): `dip`, `honesty`, `ride` (the honesty line's short form, then the disclaimer, or a
+  simulated film's disclaimer alone, rides along the stats instead). Text roles `brand`, `credit`, `role`, `partner`, `link`, `honesty` and
+  `disclaimer` (unless they ride), `fine`; a loop's
+  end card has only `brand` and `url`.
 - `rise` (`R1`), `dip` (`D1`): loop films only, no extra fields and no text.
 
 Shot kinds `ortho`, `heatmap` and `insert` are reserved and refused. A text that uses a
@@ -920,8 +1237,8 @@ date, a vantage name to the masters' name) and a warning is recorded.
 - Tiles show the key frames in film order. Classic: the middle of each card, the middle of each
   capture's hold, then the poster frame (`P1`). Story: one per shot `key` (the title once its words
   are in, a capture at its words or push hold, else the end of its hold, a card's middle, a curtain
-  holding the split nearest 0.5, a stat once its figure has landed, the end card once its text is
-  in). A curtain's date reads `<before>|<after>`. 8 columns of 320 px tiles for landscape films, 10 columns of
+  holding the split nearest 0.5, a stat a beat after its figure lands, the end card once its text
+  is in). A curtain's date reads `<before>|<after>`; a montage's tiles are of kind `montage`. 8 columns of 320 px tiles for landscape films, 10 columns of
   192 px for portrait ones.
 - Under each tile: `m:ss.ff · f<frame>` (prefixed with `bar.beat` on a beat grid), then
   `<shot id> <kind> <date>`, then one chip per fact: green releasable, amber needs-client or
@@ -962,19 +1279,33 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   without one) to the next cue's start, the last to the film's end; sorted, never overlapping;
   consecutive cues with the same text merge. Every cue then gets `tracks.cue_frames`: at least
   1 s (`MIN_CUE_S`) and its length at 17 characters a second. A run of short cues that are only a
-  quiet capture's date label becomes one "<first> – <last>" cue ("June 2026 – August 2026"); any
+  quiet capture's date label becomes one cue naming each date ("June 2026, August 2026": two
+  pictures, never a range); any
   other short cue is held into the next cue, which starts later but ends where it did. Only the
-  last cue can stay short (the film ends).
+  last cue can stay short (the film ends). A line printed under text that changes meanwhile (the
+  line riding along under the stats) is captioned once, as second lines (a cue's `under`;
+  `lasting` names each cue's part; mov_text cannot overlap cues): the stat run shares its sentences
+  out in order over its cues and lasts until each cue reads with its part, so the readability rule
+  measures every cue whole.
   - title → the title (else the kicker); card → the chapter title;
   - capture → "<label>. <words>" ("April 2025. Before."); its note is appended only when the whole
     cue stays at or under 17 characters per second of the cue's length (`tracks.CPS`);
-  - curtain → one cue per step, from the entry (first step) or the sweep start: "<before> / <after>:
-    <step text, plain>" under the same 17 characters/s rule, else "<before> / <after>";
-  - stat → "<value> <unit> <label>"; E1 → the credit line (else the brand name); E2 → the honesty line.
+  - curtain → one cue per step. A step that prints a line (film.line, its lead, its short first
+    sentence): "<before> / <after>: <line>" from when its line lands, only the line when the whole
+    does not read at 17 characters/s; the first step's labels come in before its line, so they
+    have a cue of their own, "<before> / <after>", from the entry, and its line follows alone from
+    when it lands (never captioned before it is printed). A step without:
+    "<before> / <after>: <step text, plain>" from the entry or the sweep start under the same rule,
+    else "<before> / <after>";
+  - stat → "<value> <unit> <label>" (from the middle of the first stat's entry, then each stat's
+    first frame), ". Source: <source>" added when the whole cue, riding part included, still reads
+    at 17 characters/s, with its part of the riding line under it when one rides; E1 → the
+    credit line (else the brand name). The honesty line is also in the transcript's header.
   - Classic cuts: the title, each capture's label (+ note under the same rule) from the middle of
     its incoming crossfade, each section card's name and the credit line.
-- **Chapters**: each series (the scrub title, else the vantage name), each curtain (the compare
-  title, else "<before> / <after>"), the stats (the stats title, else its kicker, else "Figures") and
+- **Chapters**: each series (the scrub title, else the vantage name), each montage (its words, which
+  say what it shows where a gallery title such as "Every flight, …" claims more pictures than it
+  plays; else the vantage name), each curtain (the compare title, else "<before> / <after>"), the stats (the stats title, else its kicker, else "Figures") and
   "Credits"; a chapter starts with the card that introduces it. The title shot belongs to the first
   chapter, which starts at frame 0. Classic: one chapter per section, then "Credits".
 - **Transcript** (`.txt`): the project title and subtitle, then "<m:ss> film, no sound. <honesty
@@ -986,13 +1317,22 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   fact snapshot):
   - title: "Title over the <label> view: <kicker>. <title>";
   - capture: "Aerial view (<vantage name>), <label>: <step text, plain, else the note>" for a series'
-    first capture, "Same view, <label>: …" after it; a pushed step adds "The camera moves in on
+    first capture, "Same view, <label>: …" after it; words on screen that the text does not start
+    with (a montage's, a step's film.line) are quoted first: "…, <label>, with the words “From the
+    water”: <note>"; a pushed step adds "The camera moves in on
     <subject hotspot labels joined by ' and '>." ("The camera moves in." without subjects);
   - card: "Chapter card: <kicker>. <title>";
   - curtain: "Split screen (<vantage name>), <before> left and <after> right. The line moves to
-    <split>%: <step text>. Then to <split>%: …";
-  - stat: "Figure: <value> <unit> <label> (source: <source>).";
-  - end: "End card: " and each end card's lines joined by " / " (one line per card).
+    <split>%: <step text>. Then to <split>%: …", each printed line the step text does not start with
+    quoted after its split ("The line moves to 50%, with the words “The pool became the beach”: …");
+  - stat: "Figure: <value> <unit> <label> (source: <source>)." and, when it pushes toward a
+    hotspot, "The camera moves in on <hotspot label>."; when the honesty line rides along, "Under the
+    figures: <riding text>" from when it comes in;
+  - end: "End card: " and the end card's lines joined by " / ".
+  Last, after a blank line, "Sources:" and one "<fact text>: <its facts.yaml sources joined by '; '>."
+  line per fact the transcript prints, in the order first printed (" (reported by <attribution>)"
+  for a reported fact; "no source recorded" when it has none): the full sources of every figure
+  and date the film shows, where a stat prints only the story's short `source`.
   It reads only the plan (`to_transcript(plan)`), so it never prints a fact the gate has not seen.
 - **Formats**: WebVTT `WEBVTT` with `hh:mm:ss.mmm` (cue text escapes `&`, `<`, `>`); SRT numbered
   with `hh:mm:ss,mmm`; times are frames converted to whole milliseconds, rounded half up (frame 36
@@ -1055,7 +1395,8 @@ that is not `auto` (such as `screen`).
    facts.yaml. Every film text comes from YAML that `check_release` already scans, so in
    `package --release` this is a second line behind it; `check_films` and build.json
    `films.<id>.unreleasable` report it on their own.
-7. `render.flash.pass` is false (every cut is metered; a failing film is never written).
+7. `render.flash.pass` is false (every cut is metered; a failing film is never written), or
+   `render.flash.max_transitions_per_s` is over its `limit` (the film's flash margin).
 8. `require_approval` is on and neither the hash nor its first 12 characters is listed in any
    `approvals.yaml` `approvals[].films`.
 9. Text outside the safe zone: `checks.outside` is not empty, or the plan has no `checks`. (`vantage
@@ -1096,7 +1437,8 @@ it is never pointed to.
 ```python
 vantage.models.FilmPlan                     # .load(path) / .save(path) / .hash; models.canonical_json
 vantage.film.plan.plan_films(project: Project, *, only: Sequence[str] | None = None,
-                             fast: bool | None = None) -> dict[str, FilmPlan]   # pure; hashes inputs
+                             fast: bool | None = None, margin: bool = True) -> dict[str, FilmPlan]
+    # hashes inputs; renders only flash proxies (cached in work/film/flash/); margin=False: none
 vantage.film.plan.check_films(project: Project, film_dir: Path) -> list[str]    # release problems
 vantage.film.plan.film_records(project: Project, film_dir: Path) -> tuple[dict, list[str]]  # build.json films + problems
 vantage.film.render.render_film(project, out_dir, *, only=None, release=False, plan_only=False,
@@ -1122,7 +1464,10 @@ vantage.film.plan.web_maxrate(duration_s: float) -> int                     # th
 vantage.film.story.derive_cut(project, film, index, fonts, hashes, warnings, *, fast) -> FilmPlan
 vantage.film.safety.check_plan(plan: dict) -> None                          # PlanError
 vantage.film.safety.surface_dip(fps, dissolve, night, paper) -> int          # frames of a dip to or from paper
-vantage.film.safety.LumaMeter(fps).add(frame) / .result() / .check(name)    # FlashError
+vantage.film.safety.LumaMeter(fps, size=None, log=None).add(frame) / .result() / .check(name)  # FlashError
+vantage.film.margin.proxy_size(width, height) -> ((w, h) of the proxy, (w, h) it is metered at)
+vantage.film.margin.meter_proxy(project, plan, measure, before=None) -> Measured   # transitions of a proxy plan
+vantage.film.margin.fixes(events, plan, limit, given: Fixes) -> (Fixes, added)     # holds, slows, softened pushes
 vantage.film.render.encode_frames(film, part, *, crf, preset, meter=None, web=None, gop=None)  # the one encode
                                                                             # path; web=(path, encode.web) adds the web copy;
                                                                             # gop=encode.gop closes a loop's GOPs

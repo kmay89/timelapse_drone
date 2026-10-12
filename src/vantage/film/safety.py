@@ -45,6 +45,7 @@ RED_SATURATION = 0.8  # R / (R + G + B) of a saturated red
 
 _c = np.arange(256, dtype=np.float64) / 255
 _SRGB_TO_LINEAR = np.where(_c <= 0.04045, _c / 12.92, ((_c + 0.055) / 1.055) ** 2.4).astype(np.float32)
+_SRGB_TO_LINEAR64 = _SRGB_TO_LINEAR.astype(np.float64)
 _BGR_WEIGHTS = np.array([0.0722, 0.7152, 0.2126], np.float32)  # Rec.709, BGR order
 
 
@@ -87,8 +88,17 @@ IMAGES = frozenset({"title", "capture", "curtain"})
 SURFACES = frozenset({"night", "paper"})
 
 
+def is_image(shot: dict[str, Any] | None) -> bool:
+    """A shot that shows a picture: a title, capture or curtain, or a stat over a picture (`file`)."""
+    if shot is None:
+        return False
+    return shot["kind"] in IMAGES or (shot["kind"] == "stat" and bool(shot.get("file")))
+
+
 def check_plan(plan: dict[str, Any]) -> None:
-    """Raise PlanError when a story plan cuts between images, dissolves faster than 0.34 s, sweeps a
+    """Raise PlanError when a story plan cuts between images (a stat over a picture is one; the next
+    stat of its run shows the same picture and needs no dissolve), moves the camera faster than a
+    push (except a cut on the first frame of a dissolve between vantages), dissolves faster than 0.34 s, sweeps a
     curtain in under 2 beats, dips into or out of paper faster than `surface_dip`, ends its title
     before its words are all in, or dips into a card, stat or end card for so long that less than
     a beat of the shot is left for its text.
@@ -111,7 +121,7 @@ def check_plan(plan: dict[str, Any]) -> None:
             return None
         if shot["kind"] in ("card", "end", "dip"):
             return "night"
-        return shot.get("surface") if shot["kind"] == "stat" else None
+        return shot.get("surface") if shot["kind"] == "stat" and not shot.get("file") else None
 
     shots = plan["shots"]
     if plan.get("loop"):
@@ -127,14 +137,21 @@ def check_plan(plan: dict[str, Any]) -> None:
             problems.append(
                 f"{sid}: a {shot['f1'] - shot['f0']}-frame {kind} is shorter than {shortest} frames"
             )
-        if kind in ("capture", "curtain"):
+        plain_stat = kind == "stat" and not shot.get("file")
+        if is_image(shot) and kind != "title":
             d = shot.get("dissolve")
             same = prev is not None and prev["kind"] == "title" and prev.get("capture") == shot.get("capture")
             if kind == "curtain":
                 same = shot.get("from_after", False)
-            if prev is not None and prev["kind"] in IMAGES and d is None and not same:
+            if kind == "stat":  # the next stat of a run, or a run on the picture before: the same picture
+                same = (
+                    prev is not None
+                    and prev["kind"] in ("stat", "capture")
+                    and prev.get("file") == shot["file"]
+                )
+            if prev is not None and is_image(prev) and d is None and not same:
                 problems.append(f"{sid}: a hard cut from {prev['id']} (every image change dissolves)")
-            if prev is not None and prev["kind"] not in IMAGES and d is None:
+            if prev is not None and not is_image(prev) and d is None:
                 problems.append(f"{sid}: a hard cut from {prev['id']} (images dip in from a surface)")
             if d is not None:
                 n = d["f1"] - d["f0"]
@@ -155,23 +172,28 @@ def check_plan(plan: dict[str, Any]) -> None:
             third = max(1, round(fpb / 3))  # beat.Grid.third
             if shot["groups"][-1] + third > shot["f1"] - fpb:  # all in before the last beat's fade
                 problems.append(f"{sid}: its words are never all on screen (title_beats too short)")
-        if kind in ("card", "end", "stat") and shot.get("dip", 0) > shot["f1"] - shot["f0"] - fpb:
+        if (kind in ("card", "end") or plain_stat) and shot.get("dip", 0) > shot["f1"] - shot["f0"] - fpb:
             problems.append(
                 f"{sid}: a {shot.get('dip', 0)}-frame dip leaves under a beat of its "
                 f"{shot['f1'] - shot['f0']} frames for its text (end_beats too short?)"
             )
-        if kind in ("card", "end", "stat") and prev is not None:
+        if (kind in ("card", "end") or plain_stat) and prev is not None:
             n = shot.get("dip", 0)
             mine, theirs = surface(shot), surface(prev)
             need = paper if "paper" in (mine, theirs) and mine != theirs else shortest
-            if (prev["kind"] in IMAGES or mine != theirs) and n < need:
+            if (is_image(prev) or mine != theirs) and n < need:
                 problems.append(f"{sid}: a {n}-frame dip is shorter than {need} frames")
         prev = shot
     third = max(1, round(fpb / 3))  # beat.Grid.third
     cams = plan.get("camera") or []
+    # A dissolve between two vantages may cut the camera on its first frame: the outgoing picture
+    # keeps its own framing (`dissolve.cam`), so no frame shows the camera in between.
+    cuts = {s["f0"] for s in shots if (s.get("dissolve") or {}).get("cam") is not None}
     for w0, w1 in pairwise(cams):
         n = w1["a"] - w0["b"]
         moved = (w0["x"], w0["y"], w0["zoom"]) != (w1["x"], w1["y"], w1["zoom"])
+        if moved and n <= 1 and w1["a"] in cuts:
+            continue
         if moved and n < fpb + third:
             problems.append(
                 f"camera: a {n}-frame move at frame {w0['b']} is faster than a push ({fpb + third} "
@@ -181,42 +203,35 @@ def check_plan(plan: dict[str, Any]) -> None:
         raise PlanError("film plan is not safe to render:\n  " + "\n  ".join(problems))
 
 
-def _sub_means(frame: np.ndarray, grid: int) -> np.ndarray:
-    """Mean linear B, G, R of each sub-cell of a (2·grid) × (2·grid) split of a BGR uint8 frame."""
+def _sub_means(frame: np.ndarray, grid: int, size: tuple[int, int] | None = None) -> np.ndarray:
+    """Mean linear B, G, R of each sub-cell of a (2·grid) × (2·grid) split of a BGR uint8 frame,
+    measured on the frame downscaled (INTER_AREA) to `size` (default 1/8 of it, at least 2·grid)."""
     n = 2 * grid
     h, w = frame.shape[:2]
-    small = cv2.resize(frame, (max(n, w // 8), max(n, h // 8)), interpolation=cv2.INTER_AREA)
-    lin = _SRGB_TO_LINEAR[small]
+    size = size or (max(n, w // 8), max(n, h // 8))
+    small = frame if (w, h) == size else cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+    lin = _SRGB_TO_LINEAR64[small]
     sh, sw = lin.shape[:2]
     ys = np.linspace(0, sh, n + 1).round().astype(int)
     xs = np.linspace(0, sw, n + 1).round().astype(int)
-    return np.array(
-        [
-            [lin[ys[r] : ys[r + 1], xs[c] : xs[c + 1]].reshape(-1, 3).mean(axis=0) for c in range(n)]
-            for r in range(n)
-        ],
-        np.float64,
-    )
+    sums = np.add.reduceat(np.add.reduceat(lin, ys[:-1], axis=0), xs[:-1], axis=1)
+    return sums / np.outer(np.diff(ys), np.diff(xs))[..., None]
 
 
-def regions(frame: np.ndarray, grid: int = CELLS) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def regions(
+    frame: np.ndarray, grid: int = CELLS, size: tuple[int, int] | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(relative luminance, red value, saturated red) of each measured region of a BGR uint8 frame:
     the grid × grid cells plus the (grid − 1)² cells offset by half a cell, so a flash that straddles
     a cell edge is still seen whole. Red value is max(0, (R − G − B)·320) and saturated red is
-    R / (R + G + B) ≥ 0.8, in linear light (WCAG 2.3.1's red flash)."""
-    sub = _sub_means(frame, grid)
+    R / (R + G + B) ≥ 0.8, in linear light (WCAG 2.3.1's red flash). `size`: the downscaled size it
+    is measured at (`_sub_means`; a small proxy of a film passes the size the film itself is measured
+    at, film/margin.py)."""
+    sub = _sub_means(frame, grid, size)
     n = 2 * grid
-    blocks = [
-        sub[r : r + 2, c : c + 2].reshape(-1, 3).mean(axis=0)
-        for r in range(0, n - 1, 2)
-        for c in range(0, n - 1, 2)
-    ]
-    blocks += [
-        sub[r : r + 2, c : c + 2].reshape(-1, 3).mean(axis=0)
-        for r in range(1, n - 2, 2)
-        for c in range(1, n - 2, 2)
-    ]
-    bgr = np.array(blocks)
+    aligned = sub.reshape(grid, 2, grid, 2, 3).mean(axis=(1, 3)).reshape(-1, 3)
+    offset = sub[1 : n - 1, 1 : n - 1].reshape(grid - 1, 2, grid - 1, 2, 3).mean(axis=(1, 3)).reshape(-1, 3)
+    bgr = np.concatenate([aligned, offset])
     lum = bgr @ _BGR_WEIGHTS.astype(np.float64)
     b, g, r = bgr[:, 0], bgr[:, 1], bgr[:, 2]
     red = np.maximum(0.0, (r - g - b) * 320)
@@ -298,9 +313,15 @@ class LumaMeter:
     that changes it by at least THRESHOLD while its darker end is below BRIGHT, or a run of its red
     value of more than RED_THRESHOLD with saturated red at one end. Two opposing transitions are one
     flash (WCAG 2.3.1); a film fails when any region holds more than LIMIT transitions (of either
-    kind) within `fps` frames, which is stricter than 3 flashes a second."""
+    kind) within `fps` frames, which is stricter than 3 flashes a second. `size`: the downscaled size
+    frames are measured at (default 1/8 of each frame, see `regions`); `log`: when a list, every
+    transition is appended to it as (frame, kind, region), for film/margin.py, whose proxies count
+    luminance runs from a lower `threshold`."""
 
     fps: int
+    size: tuple[int, int] | None = None
+    log: list[tuple[int, str, int]] | None = None
+    threshold: float = THRESHOLD  # a luminance run's size to be a transition (film/margin.py: lower)
     frames: int = 0
     worst: int = 0  # most transitions of one region in any window of fps frames
     worst_frame: int = 0  # last frame of that window
@@ -311,8 +332,12 @@ class LumaMeter:
     _red: _Runs = field(default_factory=lambda: _Runs(RED_THRESHOLD))
     _windows: dict[tuple[str, int], deque[int]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.threshold != THRESHOLD:
+            self._luma = _Runs(self.threshold)
+
     def add(self, frame: np.ndarray) -> None:
-        self.push(*regions(frame))
+        self.push(*regions(frame, size=self.size))
 
     def push(
         self, lum: np.ndarray, red: np.ndarray | None = None, saturated: np.ndarray | None = None
@@ -341,6 +366,8 @@ class LumaMeter:
             run.counted |= new
             for r in np.flatnonzero(new):
                 self._windows.setdefault((kind, int(r)), deque()).append(k)
+                if self.log is not None:
+                    self.log.append((k, kind, int(r)))
         for window in self._windows.values():
             while window and window[0] <= k - self.fps:
                 window.popleft()
@@ -375,6 +402,7 @@ __all__ = [
     "PlanError",
     "cells",
     "check_plan",
+    "is_image",
     "regions",
     "surface_dip",
 ]

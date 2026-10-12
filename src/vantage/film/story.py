@@ -7,42 +7,66 @@
     capture  one per capture of each scrub chapter (from..to, minus `exclude`d captures): 1 beat
              for a quiet capture, 3 for a step, 4 for a step that pushes in. Every capture but the
              film's first image opens with a dissolve; the step's words (film.line, else its
-             leading **bold** run) land on beat 1 and a push reaches its target at beat 2⅓
+             leading **bold** run) land on beat 1, in the zone (`_Placer`: low or high, or low-right
+             in 16:9) clear of the step's subject, and a push reaches its target at beat 2⅓
     curtain  one per compare chapter: an entry beat at split 0 (a dissolve to `after` unless it is
              already on screen), then 2 beats of sweep and 2 of hold per step with a split; the
              labels show only while the rule is 8 px clear of their ink (`reveal`)
-    stat     up to `stats` items of the first stats chapter whose value is a {fact:} token, 4 beats
-             each on the chapter's surface; the figure is the fact's text and never counts
-    card     between consecutive images of different vantages: the chapter's kicker and title on
-             night, dipped in and out
-    end      a dip to night, then the brand, credits, URL, fine print and the honesty line
+    stat     up to `stats` items of the first stats chapter whose value is a {fact:} token, at least
+             4 beats each, over the main vantage's latest picture (the one the curtain ends on; after
+             a montage, the first over its last picture) under a panel tinted by the chapter's
+             surface; the first dissolves in, a stat on another picture dissolves to it under the
+             panel, the next on one picture start on the beat and only their text crossfades; a stat
+             whose fact a hotspot prints pushes toward it, any other drifts. The figure is the fact's
+             text and never counts. (`stats_surface`: a plain card.)
+    montage  one per gallery chapter on a drone vantage other than the main one: up to `montage` (5)
+             of its captures spread evenly from first to last, 2 beats each, dissolving on the beat
+             with no card; its kicker (or film.line, or title) lands over the first picture on beat
+             1; no push, a 4 % drift over the run
+    card     between consecutive series or curtains of different vantages: the chapter's kicker and
+             title on night, dipped in and out
+    end      one card: a dip to night, then the brand, credits, URL, the honesty line and fine
+             print, at most END_MAX_S with its dip when it reads in that time; else the honesty
+             line rides under the stats
 
 A loop film (the `screen` preset) opens with a `rise` from pure night onto the title's image (the
 rail's knob sweeping back to its first tick) and closes with a `dip` back to pure night, so frame N
-(one past the last) equals frame 0. Its end card is only the brand and the short URL, every text
-it prints needs releasable facts (unless the project is a draft), and its end card is lengthened by a beat
-when needed so the film is a whole number of GOPs (2 beats).
+(one past the last) equals frame 0, a beat each. Its end card is only the brand and the short URL
+(the honesty line and the disclaimer ride under its stats instead), every text it prints needs
+releasable facts (unless the project is a draft), and its end card is lengthened by a beat when
+needed so the film is a whole number of GOPs (2 beats).
+
+Where a montage or a stat run dissolves in from another vantage's picture, that picture keeps its
+last framing through the dissolve (`dissolve.cam`) and the camera cuts to the new rest view.
 
 Every shot start, dissolve start, sweep, push start and word landing is a multiple of B
 (film/beat.py). Push targets are clamped so a master is never enlarged beyond `max_upscale` and
 recentred on the hotspots that changed since the previous step. A main vantage with one or two
 captures degrades to title → capture (→ curtain) → stats → end. Dips to or from paper last
 `surface_dip` frames so a paper card never flashes.
+
+`derive_cut` keeps every film's flash margin (film/margin.py): it plans and meters a small proxy of
+the cut, then holds a capture, a curtain or a stat a beat longer, softens a push or slows it where
+too many flash transitions fall within a second (`_Builder.holds`, `caps`, `slows`), and records
+what it did as plan `flash`.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import itertools
 import math
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vantage.config import (
     FACT_TOKEN_RE,
     CaptureNote,
     CompareChapter,
+    GalleryChapter,
     HeroChapter,
     Hotspot,
     Project,
@@ -56,6 +80,7 @@ from vantage.film.plan import (
     FILM_RENDERER,
     GOP_BEATS,
     HONESTY,
+    HONESTY_RIDE,
     LOOP_BEATS,
     FilmDef,
     _Printer,
@@ -67,12 +92,23 @@ from vantage.film.plan import (
     honesty_line,
     said,
 )
-from vantage.film.safety import IMAGES, check_plan, surface_dip
-from vantage.film.tracks import Tracks, cue_frames, iso639_2, plain_markdown, sentence, track_facts
+from vantage.film.safety import check_plan, is_image, surface_dip
+from vantage.film.tracks import (
+    Tracks,
+    cue_frames,
+    iso639_2,
+    one_line,
+    plain_markdown,
+    sentence,
+    track_facts,
+)
 from vantage.models import FilmPlan, MastersIndex
 from vantage.site.build import resolve_capture_ref
 from vantage.site.facts import FactNotes
 from vantage.site.render import capture_label as date_label
+
+if TYPE_CHECKING:
+    from vantage.film.subject import Point
 
 LEAD_RE = re.compile(r"^\s*\*\*(.+?)\*\*", re.S)
 SOFT = 1.25  # output px per master px beyond which a push is "soft"
@@ -236,6 +272,7 @@ class _Capture:
     step: Step | None = None
     step_index: int | None = None
     subjects: list[Hotspot] = field(default_factory=list)
+    before: str | None = None  # the vantage's previous capture's file (what changed comes from it)
 
 
 @dataclass
@@ -266,15 +303,20 @@ def main_vantage(project: Project, index: MastersIndex) -> str | None:
 
 
 def in_scope(project: Project, film: FilmDef, index: MastersIndex, warnings: list[str]) -> list[int]:
-    """Indices of the chapters a film uses: all, main (the main vantage's chapters plus stats) or ids."""
+    """Indices of the chapters a film uses: all, main (the main vantage's chapters, stats and gallery
+    chapters, whose montages show other vantages) or ids."""
     ids = _chapter_ids(project)
     chapters = project.story.chapters
     if film.chapters == "all":
         return list(range(len(chapters)))
-    if film.chapters == "main":
+    if film.chapters == "main":  # plus the montages of the other vantages' gallery chapters
         main = main_vantage(project, index)
         return [
-            i for i, ch in enumerate(chapters) if getattr(ch, "vantage", None) == main or ch.type == "stats"
+            i
+            for i, ch in enumerate(chapters)
+            if getattr(ch, "vantage", None) == main
+            or ch.type == "stats"
+            or (isinstance(ch, GalleryChapter) and ch.vantage is not None)
         ]
     wanted = list(film.chapters)
     unknown = [c for c in wanted if c not in ids]
@@ -308,7 +350,8 @@ class _Captures:
                 self.warnings,
                 releasable_only=self.strict,
             )
-            out.append(_Capture(c.date, c.file, label, list(say.facts), i, note, note_facts))
+            before = caps[i - 1].file if i else None
+            out.append(_Capture(c.date, c.file, label, list(say.facts), i, note, note_facts, before=before))
         return out
 
 
@@ -379,6 +422,61 @@ def _fallback_series(project: Project, caps: _Captures, vid: str, size: tuple[in
     return _Series(
         None, vid, name, None, None, caps.of(vid), geo, (pf[0], pf[1]), caps.index.vantages[vid].name
     )
+
+
+@dataclass
+class _Montage(_Series):
+    """A gallery chapter of another drone vantage as a montage: `captures` spread evenly over the
+    chapter's captures (first and last included), and the words over its first picture."""
+
+    words: str | None = None  # raw: film.line, else the kicker, else the title
+    words_from: str | None = None  # film.line | kicker | title
+
+
+def _montage(
+    project: Project,
+    chapter_index: int,
+    ch: GalleryChapter,
+    caps: _Captures,
+    size: tuple[int, int],
+    *,
+    main: str | None,
+    count: int,
+) -> _Montage | None:
+    """A gallery chapter's montage, or None: no vantage, the main vantage (it plays as the scrub),
+    `film.skip`, a montage cap of 0, a vantage films do not show (not a drone) or one with fewer than
+    two captures (a warning)."""
+    vid = ch.vantage
+    if vid is None or vid == main or count < 2 or (ch.film is not None and ch.film.skip):
+        return None
+    vantage = next((v for v in project.story.vantages if v.id == vid), None)
+    if vantage is not None and vantage.kind != "drone":
+        return None  # film_vantages has warned
+    where = f"chapter {_chapter_ids(project)[chapter_index]!r}"
+    if vid not in caps.index.vantages:
+        caps.warnings.append(f"{where}: vantage {vid!r} has no masters; left out of the films")
+        return None
+    every = caps.of(vid)
+    if ch.captures and every:
+        dates = [c.date for c in every]
+        every = [every[k] for k in sorted({resolve_capture_ref(r, dates) for r in ch.captures})]
+    if len(every) < 2:
+        caps.warnings.append(f"{where}: fewer than two captures for a montage; left out of the films")
+        return None
+    n = min(count, len(every))
+    last = len(every) - 1
+    picks = sorted({(2 * k * last + n - 1) // (2 * (n - 1)) for k in range(n)})  # k·last/(n−1), half up
+    words, source = ch.title, "title"
+    if ch.film is not None and ch.film.line:
+        words, source = ch.film.line, "film.line"
+    elif ch.kicker:
+        words, source = ch.kicker, "kicker"
+    name, pf = _vantage_info(project, caps, vid)
+    return _Montage(
+        _chapter_ids(project)[chapter_index], vid, name, ch.kicker, ch.title, [every[k] for k in picks],
+        _geometry(project, caps.index, vid, *size), pf, caps.index.vantages[vid].name,
+        words=words, words_from=source if words else None,
+    )  # fmt: skip
 
 
 @dataclass
@@ -453,17 +551,30 @@ def _stat_items(
     project: Project,
     cid: str,
     ch: StatsChapter,
-    limit: int,
+    limit: int | tuple[str, ...],
     warnings: list[str],
     *,
     releasable_only: bool = False,
+    film: str = "",
 ) -> list[dict[str, Any]]:
-    """Up to `limit` stats whose value is a {fact:} token, printed through the facts. Any other item,
-    and any item that uses a do-not-print fact, is left out with a warning, as is (with
+    """Up to `limit` stats whose value is a {fact:} token (or, when `limit` names fact ids, the items
+    whose value prints those facts, in that order), printed through the facts. Any other item, and
+    any item that uses a do-not-print fact, is left out with a warning, as is (with
     `releasable_only`, loop films of a project that is not a draft) any item that prints a fact
     that is not releasable. Values never count."""
     out: list[dict[str, Any]] = []
-    for k, item in enumerate(ch.items):
+    order = list(enumerate(ch.items))
+    if isinstance(limit, tuple):  # by fact id, in the film's order
+        named = {fid: k for k, item in order for fid in FACT_TOKEN_RE.findall(item.value)}
+        missing = [fid for fid in limit if fid not in named]
+        if missing:
+            warnings.append(
+                f"films.{film}.stats: no item of chapter {cid!r} prints {', '.join(missing)} in its value; "
+                "left out"
+            )
+        order = [(named[fid], ch.items[named[fid]]) for fid in limit if fid in named]
+        limit = len(order)
+    for k, item in order:
         if len(out) >= limit:
             break
         where = f"chapter {cid!r} stat {k}"
@@ -500,8 +611,10 @@ class _Camera:
 
     def __init__(self) -> None:
         self.windows: list[dict[str, Any]] = []
+        self.drifting = False  # the last window is the key a drift is heading for (`drift`)
 
     def hold(self, a: int, cam: Cam, b: int | None = None) -> None:
+        self.drifting = False
         b = a if b is None else b
         if self.windows:
             last = self.windows[-1]
@@ -511,7 +624,40 @@ class _Camera:
         self.windows.append({"a": a, "b": b, "x": cam[0], "y": cam[1], "zoom": cam[2]})
 
     def until(self, f: int) -> None:
-        self.windows[-1]["b"] = max(self.windows[-1]["b"], f)
+        last = self.windows[-1]
+        if f > last["a"]:  # a drift's key held on is a hold: what follows moves from there
+            self.drifting = False
+        last["b"] = max(last["b"], f)
+
+    def drift(self, f: int, cam: Cam) -> None:
+        """A slow drift reaching `cam` on frame f: one move from the window before it. When the
+        camera is already drifting (a montage's drift, a stat's), that drift is carried on to
+        `cam` as the same move (its key moves to f), so the picture never stops between two parts
+        of one drift."""
+        if self.drifting and len(self.windows) > 1:
+            last = self.windows[-1]
+            last.update(a=f, b=f, x=cam[0], y=cam[1], zoom=cam[2])
+        else:
+            self.hold(f, cam)
+        self.drifting = True
+
+    def drift_base(self) -> dict[str, Any] | None:
+        """The window a drift in progress started from (None when the camera is not drifting)."""
+        return self.windows[-2] if self.drifting and len(self.windows) > 1 else None
+
+    def at(self, f: int) -> Cam:
+        """The camera on frame f (as film/cut.py evaluates it)."""
+        from vantage.film.beat import Window, keyed, mix_cam
+
+        wins = [Window(w["a"], w["b"]) for w in self.windows]
+        cam = keyed(wins, [(w["x"], w["y"], w["zoom"]) for w in self.windows], f, mix_cam)
+        return cam[0], cam[1], cam[2]
+
+    def cut(self, f: int, cam: Cam) -> None:
+        """Cut to `cam` on frame f: the windows before hold through f − 1, so no frame shows a
+        camera in between (only on a dissolve between two vantages, see `_Builder.cross`)."""
+        self.until(f - 1)
+        self.hold(f, cam)
 
 
 @dataclass
@@ -527,6 +673,30 @@ class _Builder:
     f: int = 0  # the next shot's first frame (always on the grid)
     camera: _Camera = field(default_factory=_Camera)
     tracks: Tracks = field(default_factory=lambda: Tracks(1, enabled=False))
+    placer: _Placer | None = None  # chooses the words' zones (None: always the default zone)
+    # The flash margin (film/margin.py): beats held at a slot (a shot id, "<curtain id>.<k>" or
+    # "<first stat id>.0"), beats added to a capture's push (and its ease back) or a curtain step's
+    # move, and the share of its move a push keeps (by push key).
+    holds: dict[str, int] = field(default_factory=dict)
+    slows: dict[str, int] = field(default_factory=dict)
+    caps: dict[str, float] = field(default_factory=dict)
+    back: int | None = None  # frames the next ease back from a push takes (None: `ease`)
+    # What depends on where text sets, decided at the full size (`decide`): fixed inputs, and this
+    # plan's own decisions (recorded for the proxy and a VANTAGE_FAST plan).
+    decided: dict[str, Any] | None = None
+    decisions: dict[str, Any] = field(default_factory=dict)
+
+    def decide(self, key: str, compute: Callable[[], Any]) -> Any:
+        """The decision `key` (a words zone, a stat run's place and aims, a push target): as decided
+        at the full size when given (`decided`), else computed here; recorded either way."""
+        import copy
+
+        if self.decided is not None and key in self.decided:
+            value = copy.deepcopy(self.decided[key])
+        else:
+            value = compute()
+        self.decisions[key] = copy.deepcopy(value)
+        return value
 
     @property
     def strict(self) -> bool:
@@ -555,10 +725,22 @@ class _Builder:
 
     @property
     def ease(self) -> int:
-        """Frames a push takes to go in, and to ease back: B + B/3, or 2 beats in a loop film, whose
-        unattended screen should move calmly and whose meter must pass at full size (a fast pull back
-        sweeps a bright path through a region more than 3 times a second)."""
-        return 2 * self.grid.fpb if self.film.loop else self.grid.fpb + self.grid.third
+        """Frames a push takes to go in, and to ease back: B + B/3 in a portrait film, or 2 beats in
+        a landscape one (a 1.6× push over B + B/3 lurches on a desktop or a TV) and in a loop film,
+        whose unattended screen should move calmly and whose meter must pass at full size (a fast
+        pull back sweeps a bright path through a region more than 3 times a second)."""
+        landscape = self.layout.width > self.layout.height
+        return 2 * self.grid.fpb if self.film.loop or landscape else self.grid.fpb + self.grid.third
+
+    def push_ease(self, sid: str) -> int:
+        """Frames the push of shot `sid` takes: `ease`, plus a beat per level the flash margin slowed
+        it (`slows`); it eases back as slowly (`back`)."""
+        return self.ease + self.slows.get(sid, 0) * self.grid.fpb
+
+    @property
+    def easing_back(self) -> int:
+        """Frames the ease back from the last push takes (as slowly as it went in)."""
+        return self.ease if self.back is None else self.back
 
     def rest(self, part: _Series | _Curtain) -> Cam:
         if self.layout.width < self.layout.height:
@@ -575,7 +757,7 @@ class _Builder:
         assert prev is not None
         if prev["kind"] in ("card", "end"):
             return {"from": "night", "f0": f0, "f1": f0 + D}
-        if prev["kind"] == "stat":
+        if prev["kind"] == "stat" and not prev.get("file"):
             n = self.paper_dip if prev["surface"] == "paper" else D
             return {"from": prev["surface"], "f0": f0, "f1": f0 + n}
         return {
@@ -584,18 +766,83 @@ class _Builder:
             "f1": f0 + D,
         }
 
+    def cross(self, vantage: str, dissolve: dict[str, Any] | None, rest: Cam) -> bool:
+        """A dissolve from another vantage's picture: that picture keeps the framing of its last frame
+        through the dissolve (`dissolve.cam`), and the camera cuts to this shot's `rest` on its
+        first frame, so one vantage's push never frames the other. Returns whether it did."""
+        prev = self.prev
+        if dissolve is None or not is_image(prev) or prev is None or prev.get("vantage") in (None, vantage):
+            return False
+        dissolve["cam"] = list(self.camera.at(self.f - 1))
+        self.camera.cut(self.f, rest)
+        return True
+
     def dip(self, surface: str) -> int:
         """Frames of the dip into a `surface` shot starting now."""
         prev = self.prev
         theirs = None
         if prev is not None and prev["kind"] in ("card", "end"):
             theirs = "night"
-        elif prev is not None and prev["kind"] == "stat":
+        elif prev is not None and prev["kind"] == "stat" and not prev.get("file"):
             theirs = prev["surface"]
         return self.paper_dip if "paper" in (surface, theirs) and surface != theirs else self.grid.dissolve
 
 
-def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> dict[str, Any]:
+def _title_lines(
+    b: _Builder, kicker: str | None, title: str, cap: _Capture, last: str | None, geo: Geometry, rest: Cam
+) -> dict[str, Any]:
+    """Whether the title keeps its wrapped lines or goes on one line (`title_lines: 1`): its subject
+    is what the film shows changing on its picture (film/subject.py: the title picture against the
+    vantage's last); the wrapped title stays while it covers at most WORDS_CLEAR of it or within
+    WORDS_MARGIN of one line, else the title goes on one line (shrunk, never under TITLE_ONE_LINE of
+    its wrapped size), and a title on the subject either way (over WORDS_ON) is a warning."""
+    from vantage.film.cut import TITLE_ONE_LINE, title_box, title_groups, title_rows
+    from vantage.film.subject import subject_map, under
+
+    placer, lay = b.placer, b.layout
+    groups = title_groups(title)
+    if placer is None or not groups or last is None or last == cap.file:
+        return {}
+    t = placer.t
+    wrapped, rows = title_rows(t, lay, groups)
+    one, _ = title_rows(t, lay, groups, one_line=True)
+    subject = subject_map(placer.seen, cap.file, last, [])
+    u = lay.unit
+    crops = [_crop(geo, rest)]
+    on: dict[str, float] = {}
+    for name, single in (("wrap", False), ("one line", True)):
+        if single and (len(rows) < 2 or one < TITLE_ONE_LINE * wrapped):
+            continue
+        x0, y0, x1, y1 = title_box(t, lay, kicker, title, single)
+        box = ((x0 - 26 * u) / lay.width, (y0 - 18 * u) / lay.height,
+               (x1 + 26 * u) / lay.width, (y1 + 18 * u) / lay.height)  # fmt: skip
+        on[name] = round(under(subject, crops, box), 3)
+    pick = "wrap"
+    if "one line" in on and on["wrap"] > WORDS_CLEAR and on["wrap"] > on["one line"] + WORDS_MARGIN:
+        pick = "one line"
+    return {**({"title_lines": 1} if pick == "one line" else {}), "title_subject": on}
+
+
+def _warn_title(b: _Builder, title: str, record: dict[str, Any]) -> None:
+    """Warn when the title, as `_title_lines` set it, sits on its picture's subject."""
+    on = record.get("title_subject") or {}
+    pick = "one line" if record.get("title_lines") == 1 else "wrap"
+    if on.get(pick, 0.0) > WORDS_ON:
+        b.warnings.append(
+            f"title: {title!r} sits on what changes on its picture ({b.film.id}; {pick} covers "
+            f"{on[pick]:.1f}× its share of it)"
+        )
+
+
+def _title(
+    b: _Builder,
+    vantage: str,
+    cap: _Capture,
+    dates: Sequence[str],
+    last: str | None = None,
+    geo: Geometry | None = None,
+    rest: Cam = (0.5, 0.5, 1.0),
+) -> dict[str, Any]:
     project, cfg = b.project, b.project.config
     hero = next((ch for ch in project.story.chapters if isinstance(ch, HeroChapter)), None)
     kicker, kicker_facts = b.said(hero.kicker if hero else None, "hero kicker")
@@ -626,9 +873,15 @@ def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> di
         "file": cap.file,
         "groups": [f0 + B, f0 + B + third, f0 + B + 2 * third],
     }
-    # All in by 2B; held until kicker and title read at 17 characters a second; out over the last beat.
-    read = sentence(kicker, title)
-    b.add(shot, max(b.film.title_beats, -(-(2 * B + cue_frames(read, b.grid.fps) + B) // B)))
+    if geo is not None:  # one line when the wrapped title sits on what changes on its picture
+        shot.update(b.decide("title:lines", lambda: _title_lines(b, kicker, title, cap, last, geo, rest)))
+        _warn_title(b, title, shot)
+    # All in by 2B; held until kicker and title read at 17 characters a second, the kicker first (it
+    # is in from B/3, while the title rises), then the title once it is in; out over the last beat.
+    fps = b.grid.fps
+    read_kicker = third + cue_frames(kicker, fps) if kicker else 0
+    need = max(2 * B, read_kicker) + (cue_frames(title, fps) if title else 0) + B
+    b.add(shot, max(b.film.title_beats, -(-need // B)))
     shot["key"] = min(shot["f1"] - third - 1, f0 + 2 * B + third)
     b.tracks.cue(f0, title or kicker, title_facts if title else kicker_facts)
     b.tracks.line(
@@ -648,42 +901,68 @@ def _aim_step(
     rest: Cam,
     zmax: float,
     label: str,
+    box: Box | None = None,
+    key: str = "",
 ) -> tuple[Cam, dict[str, Any]]:
-    """A step's camera target, clamped by max_upscale (with warnings), and its plan record."""
-    cam, target = aim(
-        geo, requested, zmax, [] if explicit else subjects, explicit=explicit, rest=rest,
-        box=subject_box(b.layout),
-    )  # fmt: skip
-    if target.startswith("focus, subject off-frame"):
+    """A step's camera target, clamped by max_upscale (with warnings), and its plan record. `box`:
+    where its subjects may land (default: above the low words, `subject_box`). The flash margin may
+    soften push `key` to a share of its move (`b.caps`, recorded as `gentled`): it asks for that
+    share of the log zoom it would get (then aims as usual), and a push that zooms under MIN_ZOOM (a pan)
+    moves that share of the way from the rest view."""
+    amount = b.caps.get(key, 1.0)
+    asked = requested
+    if amount < 1.0:  # a share of the zoom it would get (after the max_upscale clamp)
+        requested = (
+            requested[0],
+            requested[1],
+            math.exp(amount * math.log(min(max(requested[2], 1.0), zmax))),
+        )
+    if b.decided is not None and f"aim:{label}" in b.decided:  # aimed at the full size
+        cam, target = b.decide(f"aim:{label}", lambda: None)
+        cam = (cam[0], cam[1], cam[2])
+    else:
+        cam, target = aim(
+            geo, requested, zmax, [] if explicit else subjects, explicit=explicit, rest=rest,
+            box=subject_box(b.layout) if box is None else box,
+        )  # fmt: skip
+        b.decisions[f"aim:{label}"] = [list(cam), target]
+    if amount < 1.0 and cam[2] < MIN_ZOOM:
+        cam = (rest[0] + amount * (cam[0] - rest[0]), rest[1] + amount * (cam[1] - rest[1]), cam[2])
+    off = target.startswith("focus, subject off-frame")
+    if off:  # pushing to the focus alone would frame what the step does not name: hold instead
         b.warnings.append(
             f"{label}: subject {target.split(':', 1)[1]} cannot be framed above the words within reach "
-            f"of the rest view ({b.film.id}); the push aims at the step's focus"
+            f"of the rest view ({b.film.id}); the step holds its picture instead of pushing"
         )
-    z = max(requested[2], 1.0)
-    if zmax < z - 1e-9:
+    z = max(asked[2], 1.0)
+    if zmax < z - 1e-9 and not off:
         b.warnings.append(
             f"{label}: push clamped from {z:g} to {zmax:.3g} ({b.film.id}; max_upscale {b.film.max_upscale:g})"
         )
     upscale = geo.s0 * cam[2]
-    if upscale / b.px > SOFT + 1e-9:  # judged at the full size, so a VANTAGE_FAST plan warns alike
+    if (
+        upscale / b.px > SOFT + 1e-9 and not off
+    ):  # judged at the full size, so a VANTAGE_FAST plan warns alike
         b.warnings.append(f"{label}: soft push, {upscale / b.px:.2f} output px per master px ({b.film.id})")
     a, c = geo.centre(rest[0], rest[1], 1.0), geo.centre(cam[0], cam[1], cam[2])
-    push = not (cam[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
+    push = not off and not (cam[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
     return cam, {
         "focus": [cam[0], cam[1], cam[2]],
+        **({"gentled": amount} if amount < 1.0 else {}),
         "target": target,
         "subjects": [] if explicit else [h.id for h in subjects],
         "z_eff": cam[2],
         "upscale": upscale,
         "push": push,
-        "reason": None if push else "clamped",
+        "reason": None if push else "subject off-frame" if off else "clamped",
     }
 
 
 def _push(
-    b: _Builder, series: _Series, cap: _Capture, rest: Cam, zmax: float
+    b: _Builder, series: _Series, cap: _Capture, rest: Cam, zmax: float, box: Box | None = None, sid: str = ""
 ) -> tuple[dict[str, Any] | None, Cam | None]:
-    """The step record of a capture and its push target (None without a push)."""
+    """The step record of a capture and its push target (None without a push); `box`: where the
+    push may put its subjects (the words' zone decides it)."""
     step = cap.step
     if step is None:
         return None, None
@@ -709,34 +988,184 @@ def _push(
         "reason": None if requested else "no focus",
     }
     if not requested:
-        _under_words(b, series.geometry, rest, cap, words, f"{series.chapter} {cap.date}")
         return record, None
     explicit = bool(step.film and step.film.focus)
     cam, aimed = _aim_step(
-        b, series.geometry, requested, explicit, cap.subjects, rest, zmax, f"{series.chapter} {cap.date}"
-    )
+        b, series.geometry, requested, explicit, cap.subjects, rest, zmax, f"{series.chapter} {cap.date}", box,
+        sid,
+    )  # fmt: skip
     record.update(aimed)
-    _under_words(
-        b, series.geometry, cam if aimed["push"] else rest, cap, words, f"{series.chapter} {cap.date}"
-    )
     return record, (cam if aimed["push"] else None)
 
 
-def _under_words(b: _Builder, geo: Geometry, cam: Cam, cap: _Capture, words: str | None, label: str) -> None:
-    """Warn when a step's subject sits under its lead words on screen (the camera at `cam`)."""
-    if not words or not cap.subjects:
-        return
-    lay = b.layout
-    u0, u1, _, v1 = subject_box(lay)
+# --------------------------------------------------------------------------- #
+# Where a step's words sit
+# --------------------------------------------------------------------------- #
+
+# How much of the subject on screen a zone's words cover for their size (film/subject.py `under`; 1:
+# as much as anywhere on screen): a zone is clear at most WORDS_CLEAR, and the words keep their zone
+# unless another one covers WORDS_MARGIN less (so lines do not hop between zones for a few
+# per cent); words over more than WORDS_ON of it sit on the subject.
+WORDS_CLEAR, WORDS_MARGIN, WORDS_ON = 0.5, 0.25, 1.0
+WORDS_CONTRAST = 3.0  # WCAG 1.4.3 for large text: the words (120 units) over the picture behind their scrim
+
+
+def _crop(geo: Geometry, cam: Sequence[float]) -> tuple[float, float, float, float]:
+    """The part of the master a camera shows, as master fractions (x0, y0, x1, y1)."""
     hw, hh = geo.half(cam[2])
-    cx, cy = geo.centre(*cam)
-    below = (lay.lead_baseline + 30 * lay.unit) / lay.height
-    for h in cap.subjects:
-        u, v = (h.x - (cx - hw)) / (2 * hw), (h.y - (cy - hh)) / (2 * hh)
-        if u0 <= u <= u1 and v1 < v < below:
-            warning = f"{label}: subject {h.id} sits under the words {words!r} ({b.film.id})"
-            if warning not in b.warnings:
-                b.warnings.append(warning)
+    cx, cy = geo.centre(cam[0], cam[1], cam[2])
+    return cx - hw, cy - hh, cx + hw, cy + hh
+
+
+def _path(windows: list[dict[str, Any]], geo: Geometry, f0: int, f1: int, step: int) -> list[Any]:
+    """The crops a camera (hold windows) shows on frames f0, f0 + step, … and f1 − 1."""
+    from vantage.film.beat import Window, keyed, mix_cam
+
+    wins = [Window(w["a"], w["b"]) for w in windows]
+    cams = [(w["x"], w["y"], w["zoom"]) for w in windows]
+    frames = sorted({*range(f0, f1, max(1, step)), f1 - 1})
+    return [_crop(geo, keyed(wins, cams, f, mix_cam)) for f in frames]
+
+
+class _Placer:
+    """Chooses each step's words zone (`cut.words_set`) from where its subject is on screen while
+    the words are up (film/subject.py), and the contrast they keep over the picture."""
+
+    def __init__(self, project: Project, fonts: dict[str, Any], lay: Layout, seen: Any = None) -> None:
+        from vantage.film.cut import DATE, _cap_of, words_zones
+        from vantage.film.render import _hex
+        from vantage.film.subject import Seen
+
+        self.lay = lay
+        self.t = _stat_type(project, fonts, lay)
+        self.seen = seen or Seen(project.masters_dir)
+        self.zones = words_zones(lay)
+        self.label_base = lay.label_top + _cap_of(self.t, DATE)  # a capture's date label baseline
+        c = project.brand.colors
+        self.paper, self.night = _hex(c.paper), _hex(c.night)
+
+    def curtain_base(self, label_top: float, scale: float) -> float:
+        """The baseline of a curtain's labels (film/cut.py `_typeset_curtain`)."""
+        from vantage.film.cut import CURTAIN_LABEL, _cap_of
+
+        return label_top + _cap_of(
+            self.t, dataclasses.replace(CURTAIN_LABEL, size=CURTAIN_LABEL.size * scale)
+        )
+
+    def set(self, words: str, zone: str, label_base: float, scale: float | None = None) -> Any:
+        from vantage.film.cut import words_set
+
+        return words_set(self.t, self.lay, words, zone, label_base, scale)
+
+    def aim_box(self, words: str, zone: str, label_base: float) -> Box:
+        """Where a push may put its subjects with the words in `zone`: above the low words
+        (`subject_box`), or below the high words and above the rail."""
+        from vantage.film.cut import RISE
+
+        if zone != "high":
+            return subject_box(self.lay)
+        lay, u = self.lay, self.lay.unit
+        u0, u1, _, _ = subject_box(lay)
+        bottom = self.set(words, zone, label_base).box[3]
+        return u0, u1, (bottom + (RISE + 40) * u) / lay.height, (lay.rail_y - 40 * u) / lay.height
+
+    def box(
+        self, words: str, zone: str, label_base: float, scale: float | None = None
+    ) -> tuple[float, float, float, float]:
+        """The words' ink in `zone` with their scrim's padding and rise, as frame fractions."""
+        from vantage.film.cut import RISE, WORDS_PAD
+
+        lay, u = self.lay, self.lay.unit
+        x0, y0, x1, y1 = self.set(words, zone, label_base, scale).box
+        px, py = WORDS_PAD[0] * u, WORDS_PAD[1] * u
+        return (
+            (x0 - px) / lay.width, (y0 - py) / lay.height,
+            (x1 + px) / lay.width, (y1 + py + RISE * u) / lay.height,
+        )  # fmt: skip
+
+    def choose(
+        self,
+        b: _Builder,
+        label: str,
+        words: str,
+        label_base: float,
+        subject: Any,
+        files: Sequence[str],
+        paths: dict[str, list[Any]],
+        default: str,
+        scale: float | None = None,
+    ) -> dict[str, Any]:
+        """The zone for a step's words and why: `default` (the step before's zone, else the first)
+        while it is clear (`under` at most WORDS_CLEAR) or within WORDS_MARGIN of the least (but
+        not on the subject, over WORDS_ON, while a legible zone is not), else the zone over the
+        least of the subject (ties: zone order); a zone whose words keep less than WORDS_CONTRAST
+        over the picture is chosen only when every zone does. `paths`: the crops the camera shows
+        in each zone while the words are up; `files`: the pictures under them. Warns when even that
+        zone sits on the subject (`under` over WORDS_ON) or misses the contrast."""
+        from vantage.film.cut import WORDS_SCRIM
+        from vantage.film.subject import contrast, under
+
+        on, ratio = {}, {}
+        for zone in self.zones:
+            box = self.box(words, zone, label_base, scale)
+            on[zone] = round(under(subject, paths[zone], box), 3)
+            ratio[zone] = round(
+                min(
+                    contrast(self.seen, f, paths[zone], box, self.paper, self.night, WORDS_SCRIM)
+                    for f in files
+                ),
+                2,
+            )
+        legible = [z for z in self.zones if ratio[z] >= WORDS_CONTRAST] or list(self.zones)
+        order = {z: k for k, z in enumerate(self.zones)}
+        if subject is None:
+            zone, reason = (default if default in legible else legible[0]), "no subject"
+        else:
+            best = min(legible, key=lambda z: (on[z], order[z]))
+            if default in legible and on[default] <= WORDS_CLEAR:
+                zone, reason = default, "clear"
+            elif (
+                default in legible
+                and on[default] <= on[best] + WORDS_MARGIN
+                and (on[default] <= WORDS_ON or on[best] > WORDS_ON)  # never stay on it to stay put
+            ):
+                zone, reason = default, "near least subject"
+            else:
+                zone, reason = best, "least subject"
+        out = {"words_zone": zone, "words_reason": reason, "words_subject": on, "words_contrast": ratio}
+        self.warn(b, label, words, out)
+        return out
+
+    @staticmethod
+    def warn(b: _Builder, label: str, words: str, record: dict[str, Any]) -> None:
+        """Warn when a zone record's words sit on the subject or miss WORDS_CONTRAST."""
+        zone, on, ratio = record["words_zone"], record["words_subject"], record["words_contrast"]
+        if on[zone] > WORDS_ON:
+            where = (
+                "in every zone"
+                if min(on.values()) > WORDS_ON
+                else f"in {zone}, as the zones clear of it keep under {WORDS_CONTRAST:g}:1"
+            )
+            b.warnings.append(
+                f"{label}: the words {words!r} sit on the subject {where} ({b.film.id}; "
+                f"{zone} covers {on[zone]:.1f}× its share of it)"
+            )
+        if ratio[zone] < WORDS_CONTRAST:
+            b.warnings.append(
+                f"{label}: the words {words!r} keep {ratio[zone]:.1f}:1 over the picture "
+                f"({b.film.id}; WCAG 1.4.3 asks {WORDS_CONTRAST:g}:1 of large text)"
+            )
+
+    def zone(
+        self, b: _Builder, label: str, words: str, choose: Callable[[], dict[str, Any]]
+    ) -> dict[str, Any]:
+        """The zone record of `label`'s words: decided at the full size (warned again here), or chosen."""
+        key = f"zone:{label}"
+        if b.decided is not None and key in b.decided:
+            record = b.decide(key, choose)
+            self.warn(b, label, words, record)
+            return record
+        return b.decide(key, choose)
 
 
 def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, part: _Series | _Curtain):
@@ -773,7 +1202,8 @@ def _curtain_labels(
     project: Project, fonts: dict[str, Any], lay: Layout, texts: Sequence[str], tagged: bool
 ) -> tuple[float, int, list[float]]:
     """(scale, cap-top y, advance widths in px) of the curtain labels as film/cut.py sets them: each
-    label fits between its text edge and a rule at the centre, and the row sits under a top-right tag when there is one."""
+    label fits between its text edge and a rule at the centre, and the row sits a label line under a
+    top-right tag when there is one."""
     from vantage.film.cut import CURTAIN_LABEL, TAG
     from vantage.film.plan import font_path
     from vantage.film.render import _Type
@@ -785,8 +1215,8 @@ def _curtain_labels(
     widest = max(t.width(text, CURTAIN_LABEL) for text in texts)
     scale = min(1.0, room / widest) if widest > 0 else 1.0
     top = lay.label_top
-    if tagged and lay.tag == "top-right":
-        top += round(-t.font(TAG).getbbox("H", anchor="ls")[1] + 18 * lay.unit)
+    if tagged and lay.tag == "top-right":  # a label line's height under the tag: two blocks, not one
+        top += round(-t.font(TAG).getbbox("H", anchor="ls")[1] + CURTAIN_LABEL.size * lay.unit)
     return scale, top, [t.width(text, CURTAIN_LABEL, scale) for text in texts]
 
 
@@ -800,6 +1230,576 @@ def _intervals(flags: Sequence[bool], f0: int) -> list[list[int]]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Stats and the end card
+# --------------------------------------------------------------------------- #
+
+STAT_ZOOM = 1.6  # the zoom a stat's push asks for (clamped by max_upscale, lowered to frame its hotspot)
+DRIFT = 1.04  # a stat without a hotspot to push to drifts in this much over its shot
+DRIFT_EXTENT = 0.8  # the share of what changed on a picture (its middle) a drift keeps in frame
+STAT_MIN_BEATS = 4
+END_MAX_S = 6.0  # the end card, its dip included, is at most this long when its text allows it
+
+
+@dataclass(frozen=True)
+class _StatsOn:
+    """The picture a run of stats sits on: the main vantage's latest capture (the picture the
+    curtain ends on) or the last montage's last picture, its geometry and portrait focus, its
+    hotspots that print a fact, and the vantage's first picture (`first`: what the site was, so
+    what changed since is what the picture shows; None when it is the same picture)."""
+
+    vantage: str
+    capture: _Capture
+    geometry: Geometry
+    portrait_focus: tuple[float, float]
+    hotspots: list[tuple[Hotspot, frozenset[str]]]
+    first: str | None = None
+
+
+def _stat_hotspots(
+    project: Project, caps: _Captures, vid: str, cap: _Capture
+) -> list[tuple[Hotspot, frozenset[str]]]:
+    """The hotspots of the scrub and compare chapters on `vid` that are shown at `cap` and print a
+    fact in their label or body, with those fact ids (the first of each id, in story order)."""
+    dates = [c.date for c in caps.of(vid)]
+    at, last = dates.index(cap.date), len(dates) - 1
+    seen: set[str] = set()
+    out: list[tuple[Hotspot, frozenset[str]]] = []
+    for ch in project.story.chapters:
+        if not isinstance(ch, ScrubChapter | CompareChapter) or ch.vantage != vid:
+            continue
+        for h in ch.hotspots:
+            lo = resolve_capture_ref(h.from_, dates, default=0)
+            hi = resolve_capture_ref(h.to, dates, default=last)
+            ids = frozenset(FACT_TOKEN_RE.findall(f"{h.label} {h.body or ''}"))
+            if h.id in seen or not ids or not lo <= at <= hi:
+                continue
+            seen.add(h.id)
+            out.append((h, ids))
+    return out
+
+
+def _stat_type(project: Project, fonts: dict[str, Any], lay: Layout) -> Any:
+    """The brand's type at this film's unit (film/render._Type), to set stat runs as film/cut.py does."""
+    from vantage.film.plan import font_path
+    from vantage.film.render import _Type
+
+    files = {role: font_path(fonts[role]["file"], project.brand) for role in ("display", "text", "numeric")}
+    c = project.brand.colors
+    return _Type(files, {"paper": c.paper, "accent": c.accent, "ink": c.ink}, lay.unit)  # type: ignore[arg-type]
+
+
+def _shows(shot: dict[str, Any] | None, file: str) -> bool:
+    """Whether `shot` is a capture of the picture `file` (a stat run then starts on it as it is)."""
+    return shot is not None and shot["kind"] == "capture" and shot.get("file") == file
+
+
+@dataclass
+class _Backdrop:
+    """One picture a stat run shows (`on`), at this film's size: how far it may zoom and its rest view."""
+
+    on: _StatsOn
+    zmax: float
+    rest: Cam
+
+    @property
+    def geo(self) -> Geometry:
+        return self.on.geometry
+
+
+def _backdrops(items: list[dict[str, Any]], ons: Sequence[_StatsOn], plain: bool) -> list[int]:
+    """Which picture of `ons` each stat sits on: the first stat on the run's own picture (`ons[0]`,
+    the montage's last, carrying it on), the next ones on the main vantage's latest (`ons[1]`, when
+    the run has one), so the film's close is never one photograph held under all its figures."""
+    if plain or len(ons) < 2:
+        return [0] * len(items)
+    return [0] + [1] * (len(items) - 1)
+
+
+def _subject_extent(subject: Any, crop: tuple[float, float, float, float]) -> list[float] | None:
+    """The middle DRIFT_EXTENT of a subject map's mass inside `crop` (master fractions), as a box
+    [x0, y0, x1, y1] in master fractions: what a drift keeps in frame (None without a subject)."""
+    import numpy as np
+
+    if subject is None:
+        return None
+    h, w = subject.shape
+    x0, x1 = (min(max(round(v * w), 0), w) for v in (crop[0], crop[2]))
+    y0, y1 = (min(max(round(v * h), 0), h) for v in (crop[1], crop[3]))
+    part = subject[y0:y1, x0:x1]
+    total = float(part.sum())
+    if x1 <= x0 or y1 <= y0 or total <= 1e-12:
+        return None
+    lo, hi = (1 - DRIFT_EXTENT) / 2, (1 + DRIFT_EXTENT) / 2
+
+    def span(marginal: Any, start: int, cells: int) -> tuple[float, float]:
+        cum = np.cumsum(marginal) / total
+        a = int(np.searchsorted(cum, lo))
+        b = int(np.searchsorted(cum, hi))
+        return (start + a) / cells, (start + b + 1) / cells
+
+    sx = span(part.sum(axis=0), x0, w)
+    sy = span(part.sum(axis=1), y0, h)
+    return [round(sx[0], 4), round(sy[0], 4), round(sx[1], 4), round(sy[1], 4)]
+
+
+def _drift_to(geo: Geometry, frm: Cam, zoom: float, keep: Sequence[float] | None) -> Cam:
+    """Where a drift from `frm` in to `zoom` heads: about the middle of `keep` (a box in master
+    fractions, `_subject_extent`), moved as little as it takes to keep all of `keep` in frame when
+    it fits; without `keep`, in about the view's own centre."""
+    if keep is None:
+        return frm[0], frm[1], zoom
+    cx, cy = geo.centre(*frm)
+    px, py = (keep[0] + keep[2]) / 2, (keep[1] + keep[3]) / 2
+    k = frm[2] / zoom  # zooming about p keeps p where it is on screen
+    x, y = px + (cx - px) * k, py + (cy - py) * k
+    corners = [(keep[0], keep[1]), (keep[2], keep[3])]
+    fit = _fit(geo, x, y, zoom, corners, (0.0, 1.0, 0.0, 1.0))
+    if fit is not None:
+        return fit
+    x, y = geo.centre(x, y, zoom)
+    return x, y, zoom
+
+
+def _place_stats(
+    b: _Builder,
+    items: list[dict[str, Any]],
+    honesty: str | None,
+    subjects: Sequence[Hotspot | None],
+    pics: Sequence[_Backdrop],
+    at: Sequence[int],
+    t: Any,
+    tagged: bool,
+    maps: Sequence[Any] = (),
+) -> tuple[str, list[tuple[Cam | None, str] | None], dict[str, float]]:
+    """(place, aims, covered) of a stat run: 'low' or 'high', whichever frames more of its stats'
+    hotspots clear of the panel; between places that frame as many, the one whose panel covers
+    less of its pictures' subjects (`maps`, film/subject.py: what changed since the vantage's first
+    picture, and the stats' hotspots) in the views the stats end on (a push's target, else the rest
+    view; ties: low). Each aim is (target, how) on the stat's own picture (`pics[at[k]]`), or None
+    for a stat with no hotspot; `covered` is the mean share of the subjects under each place's
+    panel over the run's stats."""
+    from vantage.film.cut import stat_panel_box, stat_run, stat_subject_box
+    from vantage.film.subject import under
+
+    lay = b.layout
+    best: tuple[tuple[bool, int, float], str, list[tuple[Cam | None, str] | None]] | None = None
+    covered: dict[str, float] = {}
+    for place in ("low", "high"):
+        run = stat_run(t, lay, items, honesty, place, tagged)
+        x0, y0, x1, y1 = panel = stat_panel_box(lay, run)
+        area = max(0.0, min(x1, 1.0) - max(x0, 0.0)) * max(0.0, min(y1, 1.0) - max(y0, 0.0))
+        box = stat_subject_box(lay, run)
+        aims: list[tuple[Cam | None, str] | None] = []
+        first = sum(s["kind"] == "stat" for s in b.shots) + 1
+        for k, h in enumerate(subjects):
+            if h is None:
+                aims.append(None)
+                continue
+            pic = pics[at[k]]
+            zoom = min(STAT_ZOOM, pic.zmax) ** b.caps.get(
+                f"N{first + k}", 1.0
+            )  # the flash margin may ask less
+            target, how = aim(
+                pic.geo, (h.x, h.y, zoom), pic.zmax, [h], explicit=False, rest=pic.rest, box=box
+            )
+            a, c = pic.geo.centre(*pic.rest), pic.geo.centre(*target)
+            moves = not (target[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
+            framed = how.startswith("focus+subject") and moves
+            aims.append((target, how) if framed else (None, f"drift, subject off-frame:{h.id}"))
+        # What each stat shows under the panel: its picture's subject in the view its camera ends on
+        # (where its push frames its hotspot, else the rest view).
+        shares = []
+        for k in range(len(items)):
+            pic, x = pics[at[k]], aims[k]
+            view = x[0] if x is not None and x[0] is not None else pic.rest
+            shares.append(under(maps[at[k]] if at[k] < len(maps) else None, [_crop(pic.geo, view)], panel))
+        covered[place] = round(sum(shares) / max(1, len(shares)) * area, 3)
+        full = run.words >= 1 - 1e-6  # its words at full size (`stat_type_problem`)
+        score = (full, sum(1 for x in aims if x is not None and x[0] is not None), -covered[place])
+        if best is None or score > best[0]:
+            best = (score, place, aims)
+    assert best is not None
+    return best[1], best[2], covered
+
+
+def _stats(
+    b: _Builder,
+    cid: str,
+    tint: str,
+    items: list[dict[str, Any]],
+    *,
+    plain: bool,
+    ons: Sequence[_StatsOn],
+    fonts: dict[str, Any],
+    hashes: dict[str, str],
+    honesty: str | None,
+    honesty_facts: Sequence[str] = (),
+) -> Cam | None:
+    """A run of stat shots. Over pictures (`ons`: the run's own picture, then after a montage the
+    main vantage's latest) unless `plain`: the first stat on the run's own picture, the next ones on
+    the main vantage's latest (`_backdrops`). The first dissolves in from the image before it (none on the picture already on screen), and so
+    does a stat on another picture than the one before it, under the panel; the run is placed low
+    (default) or high, whichever frames more of its stats' hotspots clear of the panel. A stat whose
+    facts a hotspot prints pushes slowly toward it (`aim`, clamped like a step's push); any other
+    stat drifts in by DRIFT, keeping what changed on its picture in frame (`_drift_to`; consecutive
+    drifts on one picture, a montage's included, are one move), or holds. Consecutive stats on one
+    picture start on the beat with no dip and only the text crossfades. The riding `honesty` line
+    (with its `honesty_facts`) is captioned once, its sentences shared out under the stats' cues
+    (`_ride_parts`), and has its own transcript line; the run lasts until it reads with the stats'
+    own words, one after another at 17 characters a second, not beside them.
+    Returns the camera the run ends on when that is not the rest view (what follows eases back from
+    it)."""
+    project, film, lay = b.project, b.film, b.layout
+    B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
+    cam = b.camera
+    portrait = lay.width < lay.height
+    at = _backdrops(items, ons, plain)
+    pics = [
+        _Backdrop(
+            on,
+            on.geometry.zmax(film.max_upscale * b.px),
+            (*on.portrait_focus, 1.0) if portrait else (0.5, 0.5, 1.0),
+        )
+        for on in ons
+    ]
+    subjects = [
+        None if plain else next((h for h, ids in ons[k].hotspots if ids & set(item["facts"])), None)
+        for item, k in zip(items, at, strict=True)
+    ]
+    tagged = project.config.simulated or project.config.draft
+    t = _stat_type(project, fonts, lay)
+
+    def placed() -> tuple[str, list[Any], dict[str, float], list[Any]]:
+        maps: list[Any] = [None] * len(pics)
+        if not plain and b.placer is not None:
+            from vantage.film.subject import subject_map
+
+            for k in sorted(set(at)):
+                on = pics[k].on
+                points = list(
+                    {h.id: (h.x, h.y) for h, i in zip(subjects, at, strict=True) if h and i == k}.values()
+                )
+                maps[k] = subject_map(b.placer.seen, on.capture.file, on.first, points)
+        place, aims, covered = _place_stats(b, items, honesty, subjects, pics, at, t, tagged, maps)
+        keep = [
+            _subject_extent(maps[at[k]], _crop(pics[at[k]].geo, pics[at[k]].rest))
+            if x is None or x[0] is None
+            else None
+            for k, x in enumerate(aims)
+        ]
+        kept = [None if x is None else [list(x[0]) if x[0] else None, x[1]] for x in aims]
+        return place, kept, covered, keep
+
+    place, kept, covered, keeps = b.decide(f"stats:{cid}", placed)
+    from vantage.film.cut import stat_run, stat_type_problem
+
+    first_id = f"N{sum(s['kind'] == 'stat' for s in b.shots) + 1}"
+    if small := stat_type_problem(film.id, first_id, stat_run(t, lay, items, honesty, place, tagged)):
+        b.warnings.append(small)
+    aims: list[tuple[Cam | None, str] | None] = [
+        None if x is None else ((tuple(x[0]) if x[0] else None), x[1])  # type: ignore[misc]
+        for x in kept
+    ]
+    ride_in = ride_on = 0  # the riding line comes in with the panel, whole as the first figure lands
+    cues = [" ".join(filter(None, (item["value"], item["unit"], item["label"]))) for item in items]
+    reads = [" ".join(filter(None, (item["label"], item["source"]))) for item in items]
+    unders = _ride_parts(honesty, cues, reads) if honesty else [""] * len(items)
+    drifts: list[dict[str, Any]] = []  # the moves of the stats one drift in progress carries
+    for k, item in enumerate(items):
+        f0 = b.f
+        pic = pics[at[k]]
+        on, geo, rest, zmax = pic.on, pic.geo, pic.rest, pic.zmax
+        dissolve: dict[str, Any] | None = None
+        dip = 0
+        # On the picture already on screen (a montage's last): no dissolve, a beat's lead. A stat on
+        # another picture than the stat before it dissolves to it under the panel.
+        same = k == 0 and not plain and _shows(b.prev, on.capture.file)
+        enters = not plain and (k == 0 or at[k] != at[k - 1])
+        if k == 0 and plain:
+            dip = b.dip(tint)
+            if is_image(b.prev):
+                cam.until(f0 + dip)
+        elif enters and not same:
+            dissolve = b.entry()
+            b.cross(on.vantage, dissolve, rest)  # from another vantage: the camera cuts to rest
+        entry = dissolve["f1"] - dissolve["f0"] if dissolve else B if same else dip
+        # The first figure lands on the first beat after its entry, as does one on a new picture;
+        # the next ones on their first frame, once the text before them has faded out (over that
+        # stat's last B/3). Each figure slides in whole over half a beat; label and source fade in
+        # after it (`text_in`) and stay until the shot's end (or its last B/3 before another stat),
+        # long enough to read at 17 characters a second. (The flash margin may hold the picture
+        # before such a figure lands, "N<n>.0", and any stat longer before the next, "N<n>".)
+        n = sum(s["kind"] == "stat" for s in b.shots) + 1
+        land = f0 + (-(-entry // B) + b.holds.get(f"N{n}.0", 0)) * B if k == 0 or dissolve else f0
+        text_in = land + round(B / 2)
+        if k == 0:
+            from vantage.film.cut import panel_from
+
+            ride_in = panel_from({"f0": f0, "land": land, "dissolve": dissolve, "dip": dip}, B)
+            ride_on = land
+        out = third if k + 1 < len(items) else 0  # its text leaves before the next figure lands
+        need = text_in - f0 + third + cue_frames(reads[k], fps) + out
+        # Its caption cue (from the middle of its entry), with its part of the riding line under it,
+        # reads at 17 characters a second; and the run as a whole gives every word it prints its
+        # time: the riding line is read alongside the figures, never in parallel with them.
+        need = max(need, entry // 2 + cue_frames(sentence(cues[k], unders[k]), fps))
+        if honesty and k == len(items) - 1:
+            need = max(need, ride_on + cue_frames(" ".join([*reads, honesty]), fps) - f0)
+        beats = max(STAT_MIN_BEATS, -(-need // B)) + b.holds.get(f"N{n}", 0)
+        f1 = f0 + beats * B
+        move: dict[str, Any] | None = None
+        if not plain:
+            start = land
+            current = cam.windows[-1]
+            if enters and not same and (current["x"], current["y"], current["zoom"]) != rest:
+                cam.until(f0)  # a push before eases back to the rest view first
+                cam.hold(f0 + b.easing_back, rest)
+                start = max(start, f0 + b.easing_back)
+            current = cam.windows[-1]
+            now: Cam = (current["x"], current["y"], current["zoom"])
+            target, how = aims[k] or (None, "drift")
+            drifting = target is None
+            reach = max(start + b.ease, f1 - third)
+            if drifting:
+                z = min(now[2] * DRIFT, zmax)
+                off = how.split("drift", 1)[1]  # ", subject off-frame:<id>" or ""
+                base = cam.drift_base()
+                frm: Cam = (base["x"], base["y"], base["zoom"]) if base else now
+                keep = keeps[k]
+                target = _drift_to(geo, frm, z, keep) if z > now[2] + 1e-6 else None
+                how = how if target is not None else f"hold{off}"
+                if base is None:
+                    drifts = []
+            if target is not None and target != now and reach <= f1:
+                if drifting:  # one move from where the drift began, never stopping on a stat's beat
+                    cam.drift(reach, target)
+                else:
+                    cam.until(start)
+                    cam.hold(reach, target, f1)
+            else:
+                target, start, reach = None, f0, f0
+                how = how if how.startswith("hold") else "hold"
+                cam.until(f1)
+                drifting = False
+            h = subjects[k]
+            share = b.caps.get(f"N{n}", 1.0)
+            move = {
+                **({"gentled": share} if share < 1.0 and target is not None else {}),
+                "how": how,
+                "subjects": [h.id] if h is not None and how.startswith("focus+subject") else [],
+                "focus": list(target) if target is not None else None,
+                "upscale": geo.s0 * target[2] if target is not None else None,
+                "f0": start,
+                "f1": reach,
+            }
+            if drifting:
+                for earlier in drifts:  # the stats before it on this drift now head where it does
+                    earlier.update(focus=move["focus"], upscale=move["upscale"], f1=reach)
+                drifts.append(move)
+            else:
+                drifts = []
+            if move["subjects"] and geo.s0 * target[2] / b.px > SOFT + 1e-9:  # type: ignore[index]
+                b.warnings.append(
+                    f"chapter {cid!r} stat {k}: soft push, {geo.s0 * target[2] / b.px:.2f} output px "
+                    f"per master px ({film.id})"
+                )
+        text = [
+            {"role": role, "text": item[role]} for role in ("value", "unit", "label", "source") if item[role]
+        ]
+        if honesty:
+            text.append({"role": "honesty", "text": honesty})
+        shot = b.add(
+            {
+                "id": f"N{n}",
+                "kind": "stat",
+                "chapter": cid,
+                "text": text,
+                "facts": item["facts"],
+                "value": item["value"],
+                "unit": item["unit"],
+                "label": item["label"],
+                "source": item["source"],
+                "surface": tint,
+                "backdrop": "plain" if plain else "picture",
+                **(
+                    {}
+                    if plain
+                    else {"vantage": on.vantage, "capture": on.capture.date, "file": on.capture.file}
+                ),
+                "place": place,
+                **({} if plain else {"place_subject": covered}),
+                "dissolve": dissolve,
+                "dip": dip,
+                "land": land,
+                "text_in": text_in,
+                "honesty": honesty,
+                "move": move,
+            },
+            beats,
+        )
+        shot["key"] = min(shot["f1"] - 1, land + B)
+        if not plain and on.capture.file not in hashes:
+            hashes[on.capture.file] = _sha256(project.masters_dir / on.capture.file)
+        start_cue = f0 + entry // 2
+        # The source joins its figure's cue when the whole still reads at 17 characters a second.
+        more = (sentence(cues[k], f"Source: {item['source']}"), item["facts"]) if item["source"] else None
+        under = (unders[k], honesty_facts) if unders[k] else None
+        b.tracks.cue(start_cue, cues[k], item["facts"], more, under=under)
+        figure = " ".join(filter(None, (item["value"], item["unit"])))
+        source = f" (source: {item['source']})" if item["source"] else ""
+        line, facts = f"Figure: {figure} {item['label']}{source}.", list(item["facts"])
+        if move is not None and move["subjects"]:
+            spot = subjects[k]
+            assert spot is not None
+            label, label_facts = b.said(spot.label, f"hotspot {spot.id} label")
+            if label:
+                line = sentence(line, f"The camera moves in on {plain_markdown(label)}.")
+                facts += label_facts
+        b.tracks.line(start_cue, line, facts)
+    if honesty:  # printed under the figures from the panel's entry to the run's end
+        b.tracks.line(ride_in, f"Under the figures: {honesty}", honesty_facts)
+    last = cam.windows[-1]
+    held = (last["x"], last["y"], last["zoom"])
+    b.back = None
+    end_rest = pics[at[-1]].rest if items else None
+    return None if plain or held == end_rest else held
+
+
+def _ride_parts(honesty: str, cues: Sequence[str], reads: Sequence[str]) -> list[str]:
+    """The riding line's sentences shared out in order over a stat run's caption cues, each sentence
+    captioned once: of every way to split them, the one that asks for the fewest characters of
+    reading time over the run (a stat's own words on screen, `reads`, already take a while; a cue
+    with a part takes its figure's caption and the part), then the most even, then the earliest."""
+    sentences = [p for p in re.split(r"(?<=[.!?…])\s+", one_line(honesty)) if p]
+    n = len(cues)
+    if n == 0:
+        return []
+
+    def cost(cuts: tuple[int, ...]) -> tuple[int, int]:
+        edges = (0, *cuts, len(sentences))
+        sizes = [
+            max(len(reads[k]), len(cues[k]) + len(" ".join(sentences[edges[k] : edges[k + 1]])))
+            for k in range(n)
+        ]
+        return sum(sizes), max(sizes)
+
+    best = min(
+        itertools.combinations_with_replacement(range(len(sentences) + 1), n - 1), key=cost, default=()
+    )
+    edges = (0, *best, len(sentences))
+    return [" ".join(sentences[edges[k] : edges[k + 1]]) for k in range(n)]
+
+
+def _end_text(
+    b: _Builder,
+    honesty: str,
+    short: str,
+    has_stats: bool,
+    last_part: tuple[str, Any],
+    fits: Callable[[str], bool] = lambda _ride: True,
+) -> dict[str, Any]:
+    """The end card's text and length. A loop's: the brand and the short URL, `end_beats` or as long
+    as they take to read after the dip, with the honesty line and the disclaimer riding under its
+    stats (when it has stats). Any other
+    film's: the brand, credit line, partners and link, then the honesty line and the disclaimer
+    (read, like the credit line: it says what is fictional) and the copyright as fine print (read at
+    a glance, as legal text is). The card takes as long as its words take to read at 17 characters
+    a second after its dip (the partners a beat to scan), plus the last beat its text fades out
+    over, and at least `end_beats`. When that is over END_MAX_S and the film has stats, the honesty
+    line rides along under the stats instead, in its short form (`ride`, HONESTY_RIDE), then the disclaimer
+    too (a simulated film's disclaimer alone, its tag saying the rest), as long as the run
+    still `fits` with them (its words at full size, `stat_run`); a card still over
+    END_MAX_S leaves the partners out (a warning), and one over it even so is a warning too (a film
+    without stats has nothing for its honesty line to ride along with).
+    Returns {text, facts, ride, ride_facts, beats(dip)}."""
+    project, film = b.project, b.film
+    brand, cfg = project.brand, project.config
+    B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
+    say = b.say()
+    lines: list[dict[str, Any]] = [{"role": "brand", "text": brand.name}]
+    short_url = cfg.output.base_url.split("://")[-1].rstrip("/") if cfg.output.base_url else None
+    if film.loop:  # a loop's end card: the brand and the URL in large type, nothing else
+        if short_url:
+            lines.append({"role": "url", "text": short_url})
+        # An unattended screen prints figures with no end card to qualify them: the honesty line
+        # (short) and the disclaimer ride under its stats, as in a cut whose card is full.
+        riding, ride_facts = [], []
+        if has_stats:
+            disclaimer, ride_facts = b.said(brand.disclaimer, "brand.yaml disclaimer")
+            riding = [disclaimer] if cfg.simulated and disclaimer else [t for t in (short, disclaimer) if t]
+        return {
+            "text": lines, "facts": list(say.facts), "ride": " ".join(riding) or None,
+            "ride_facts": ride_facts,
+            "beats": lambda dip: max(
+                film.end_beats, -(-(dip + third + cue_frames(sentence(*(t["text"] for t in lines)), fps)) // B)
+            ),
+        }  # fmt: skip
+    credit = say(brand.credit_line, "brand.yaml credit_line") if brand.credit_line else None
+    if credit:
+        lines.append({"role": "credit", "text": credit})
+    partners = [
+        item for partner in brand.partners
+        for item in ({"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name})
+    ]  # fmt: skip
+    link = [{"role": "link", "text": short_url}] if short_url else []
+    disclaimer = say(brand.disclaimer, "brand.yaml disclaimer") if brand.disclaimer else None
+    copyright_ = say(brand.copyright, "brand.yaml copyright") if brand.copyright else None
+    fine = [{"role": "fine", "text": copyright_}] if copyright_ else []
+    # The dip into the end card: from paper after a plain paper stat card, else D frames.
+    paper_last = last_part[0] == "stats" and last_part[1][5] and last_part[1][1] == "paper"
+    dip0 = b.paper_dip if paper_last else b.grid.dissolve
+
+    def need(read: str, scan: bool, dip: int) -> int:
+        return max(film.end_beats, -(-(dip + third + cue_frames(read, fps) + (B if scan else 0) + B) // B))
+
+    most = int(END_MAX_S * fps // B)
+    riding: list[str] = []  # what rides under the stats instead, in order
+    card = [t for t in (honesty, disclaimer) if t]
+
+    def read() -> str:
+        return sentence(" ".join(filter(None, (credit, short_url))), *card)
+
+    # What rides is read alongside the figures, so it is kept short: the honesty line in its short
+    # form, then the disclaimer. In a simulated film whose brand has a disclaimer, the disclaimer
+    # alone rides: the tag says "simulated" on every frame, and the disclaimer says the rest.
+    instead = cfg.simulated and disclaimer is not None
+    for text in (honesty, disclaimer):
+        if text and text in card and has_stats and need(read(), bool(partners), dip0) > most:
+            moving = [disclaimer] if text == honesty and instead else [short if text == honesty else text]
+            if not fits(" ".join([*riding, *moving])):
+                break  # the run would set its words under the type floor: the card keeps the rest
+            for t in (text, *moving):
+                if t in card:
+                    card.remove(t)
+            riding += moving
+    if partners and need(read(), True, dip0) > most:
+        b.warnings.append(
+            f"end card: the partners are left out of film {film.id} (with them it would run over "
+            f"{END_MAX_S:g} s)"
+        )
+        partners = []
+    scan = bool(partners)
+    if need(read(), scan, dip0) > most:
+        b.warnings.append(
+            f"end card: film {film.id}'s end card runs {need(read(), scan, dip0) * B / fps:.1f} s, over "
+            f"{END_MAX_S:g} s, to give its words time to read"
+            + ("" if has_stats else " (with no stats, the honesty line has nothing to ride along with)")
+        )
+    roles = {honesty: "honesty", disclaimer: "disclaimer"}
+    text = [*lines, *partners, *link, *({"role": roles[t], "text": t} for t in card), *fine]
+    ride_facts = (
+        b.said(brand.disclaimer, "brand.yaml disclaimer")[1] if disclaimer and disclaimer in riding else []
+    )
+    return {
+        "text": text,
+        "facts": list(say.facts),
+        "ride": " ".join(riding) or None,
+        "ride_facts": ride_facts,
+        "beats": lambda dip: need(read(), scan, dip),
+    }
+
+
 def derive_cut(
     project: Project,
     film: FilmDef,
@@ -809,15 +1809,136 @@ def derive_cut(
     warnings: list[str],
     *,
     fast: bool,
+    margin_on: bool = True,
 ) -> FilmPlan:
-    """The story cut of `film` as a FilmPlan (raises ValueError when there is nothing to film)."""
+    """The story cut of `film` as a FilmPlan (raises ValueError when there is nothing to film), held,
+    softened and slowed where needed to keep its flash margin (film/margin.py): planned and metered
+    at a proxy size until the estimate keeps `output.film.flash_limit`, then planned at its own size
+    with the same fixes (and so the same beats), recorded as plan `flash` (the estimate itself in
+    checks `flash`). What depends on where text sets (words zones, the stats' place, every push
+    target) is decided once per pass at the full size and passed to the proxy and to a VANTAGE_FAST
+    plan as fixed inputs, so all three frame the same film. The proxy is metered at the 1/8 sizes of
+    both the full-size film and the VANTAGE_FAST one, and the margin keeps both. `margin_on=False`
+    (vantage validate) plans without metering: no fixes, no estimate."""
+    from vantage.film import margin
+    from vantage.film.subject import Seen
+
+    seen = Seen(project.masters_dir)
+    settings = project.config.output.film
+    limit = settings.flash_limit
+    full = film_size(settings, film.aspect, fast=False)
+    proxy, measure = margin.proxy_size(*full)
+    _, fast_measure = margin.proxy_size(*film_size(settings, film.aspect, fast=True))
+    measures = [measure] if fast_measure == measure else [measure, fast_measure]
+    fixes = margin.Fixes()
+    measured: margin.Measured | None = None
+    estimate, frame, passes = 0, 0, 0
+    small: FilmPlan | None = None
+
+    def decide() -> dict[str, Any]:
+        decided: dict[str, Any] = {}
+        _derive_cut(
+            project, film, index, fonts, hashes, [], fast=False, size=full,
+            holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen, record=decided,
+        )  # fmt: skip
+        return decided
+
+    decided = decide()
+    while margin_on:
+        passes += 1
+        small = _derive_cut(
+            project, film, index, fonts, hashes, [], fast=fast, size=proxy,
+            holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen, decided=decided,
+        )  # fmt: skip
+        measured = margin.meter_proxy(project, small, measures, measured)
+        estimate, frame = margin.worst(measured.events, small.plan["fps"])
+        if estimate <= limit or passes >= margin.PASSES:
+            break
+        fixes, added = margin.fixes(measured.events, small.plan, limit, fixes)
+        if not added:
+            break
+        decided = decide()
+    plan = _derive_cut(
+        project, film, index, fonts, hashes, warnings, fast=fast,
+        holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen, decided=decided,
+    )  # fmt: skip
+    p = plan.plan
+    p["flash"] = {"limit": limit, **fixes.record()}
+    if not margin_on:
+        return plan
+    plan.checks["flash"] = {
+        "estimate": estimate, "frame": frame, "proxy": list(proxy), "measures": [list(m) for m in measures],
+        "passes": passes,
+    }  # fmt: skip
+    assert small is not None
+    if (differs := _proxy_differs(p, small.plan)) is not None:
+        plan.warnings.append(
+            f"flash margin: the {proxy[0]}×{proxy[1]} proxy plans other {differs} than the film ({film.id}); "
+            "the estimate may not hold"
+        )
+    if estimate > limit:
+        plan.warnings.append(
+            f"flash margin: the planner estimates {estimate} flash transitions in one region within a "
+            f"second around frame {frame}, over the limit of {limit} ({film.id}); nothing left to lengthen "
+            "there (the render meter refuses more than 3)"
+        )
+    return plan
+
+
+def _proxy_differs(a: dict[str, Any], b: dict[str, Any]) -> str | None:
+    """What a film's plan and its proxy's frame differently ('beats', 'words zones', 'stat places',
+    'camera moves'), or None: every shot's beats, every zone and place, and every camera window
+    (within 1e-6 of the master) must match for the proxy's estimate to hold for the film."""
+    if [(s["id"], s["f0"], s["f1"]) for s in a["shots"]] != [(s["id"], s["f0"], s["f1"]) for s in b["shots"]]:
+        return "beats"
+
+    def zones(p: dict[str, Any]) -> list[Any]:
+        out = []
+        for s in p["shots"]:
+            steps = s.get("steps") or ([s["step"]] if s.get("step") else [])
+            out += [st.get("words_zone") for st in steps]
+            out.append(s.get("place"))
+        return out
+
+    if zones(a) != zones(b):
+        return "words zones or stat places"
+    ca, cb = a["camera"], b["camera"]
+    if len(ca) != len(cb) or any(
+        x["a"] != y["a"] or x["b"] != y["b"] or any(abs(x[k] - y[k]) > 1e-6 for k in ("x", "y", "zoom"))
+        for x, y in zip(ca, cb, strict=True)
+    ):
+        return "camera moves"
+    return None
+
+
+def _derive_cut(
+    project: Project,
+    film: FilmDef,
+    index: MastersIndex,
+    fonts: dict[str, Any],
+    hashes: dict[str, str],
+    warnings: list[str],
+    *,
+    fast: bool,
+    size: tuple[int, int] | None = None,
+    holds: dict[str, int] | None = None,
+    slows: dict[str, int] | None = None,
+    gentle: dict[str, float] | None = None,
+    seen: Any = None,
+    decided: dict[str, Any] | None = None,
+    record: dict[str, Any] | None = None,
+) -> FilmPlan:
+    """The story cut of `film` at its size (or `size`, a flash proxy), with the margin's holds,
+    slows and zoom caps (`gentle`, `_Builder.caps`); `seen`: the masters as film/subject.py reads
+    them, shared by the plans of one `derive_cut`. `decided`: words zones, stat places and push
+    targets decided at the full size (`_Builder.decide`); `record`: filled with this plan's."""
     cfg, settings = project.config, project.config.output.film
     fps = settings.fps
     if fps <= 0:
         raise ValueError("output.film needs fps > 0")
     grid = beat_grid(fps, film.bpm)
-    B, D, third = grid.fpb, grid.dissolve, grid.third
-    width, height = film_size(settings, film.aspect, fast=fast)
+    B, D = grid.fpb, grid.dissolve
+    width, height = size or film_size(settings, film.aspect, fast=fast)
     preset = "screen" if film.preset == "screen" and film.aspect == "16x9" else f"story-{film.aspect}"
     lay = layout(preset, width, height, safe=film.safe, type_scale=film.type_scale)
     colors = project.brand.colors
@@ -839,9 +1960,13 @@ def derive_cut(
         elif isinstance(ch, CompareChapter):
             if c := _curtain(project, i, ch, caps, ch.vantage, size):
                 parts.append(("curtain", c))
+        elif isinstance(ch, GalleryChapter):
+            main_vid = main_vantage(project, index)
+            if m := _montage(project, i, ch, caps, size, main=main_vid, count=film.montage):
+                parts.append(("montage", m))
         elif isinstance(ch, StatsChapter) and not any(k == "stats" for k, _ in parts):
             items = (
-                _stat_items(project, ids[i], ch, film.stats, warnings, releasable_only=strict)
+                _stat_items(project, ids[i], ch, film.stats, warnings, releasable_only=strict, film=film.id)
                 if film.stats
                 else []
             )
@@ -853,9 +1978,11 @@ def derive_cut(
                     heading, heading_facts = said(
                         project, ch.kicker, f"chapter {ids[i]!r} kicker", warnings, releasable_only=strict
                     )
-                parts.append(
-                    ("stats", (ids[i], film.stats_surface, items, heading or "Figures", heading_facts))
-                )
+                # Over a picture by default, under a panel in the chapter's surface (the web's
+                # default for stats: paper); a FilmSpec `stats_surface` asks for a plain card instead.
+                tint = film.stats_surface or ch.surface or "paper"
+                plain = film.stats_surface is not None
+                parts.append(("stats", (ids[i], tint, items, heading or "Figures", heading_facts, plain)))
 
     # Degrade on the main vantage's captures (after exclusions).
     main = main_vantage(project, index)
@@ -863,8 +1990,11 @@ def derive_cut(
     if not every:
         raise FileNotFoundError(f"no masters to film in {project.masters_dir}; run `vantage process` first")
     assert main is not None
-    stats = [p for p in parts if p[0] == "stats"]
-    still: set[int] = set()  # id() of captures that must not push (the two-capture cut's before)
+    stats = [p for p in parts if p[0] in ("stats", "montage")]  # kept, in story order, when degrading
+    # id() of captures that must not push, and why: the two-capture cut's before, and a step whose
+    # picture the next curtain shows as `after` and pushes to the same place (it pushes there itself:
+    # pushing twice, with an ease back between, frames one subject in, out and in again).
+    still: dict[int, str] = {}
     if len(every) <= 2:
         series = next((s for k, s in parts if k == "series" and s.vantage == main), None)
         series = series or _fallback_series(project, caps, main, size)
@@ -879,22 +2009,30 @@ def derive_cut(
                 ),
                 (None, None),
             )  # fmt: skip
-            still.add(id(series.captures[0]))
+            still[id(series.captures[0])] = "two captures"
             c = _curtain(project, compare[0], compare[1], caps, main, size, pair=(every[0], every[1]))
             if c is not None:
                 parts.append(("curtain", c))
         parts += stats
     elif not any(k in ("series", "curtain") for k, _ in parts):
         parts.insert(0, ("series", _fallback_series(project, caps, main, size)))
+    for (k1, p1), (k2, p2) in itertools.pairwise(parts):
+        if k1 == "series" and k2 == "curtain" and p1.vantage == p2.vantage and _curtain_pushes_it(p1, p2):
+            still.setdefault(id(p1.captures[-1]), "the curtain pushes it")
     images = [p for k, p in parts if k in ("series", "curtain")]
+    montages: list[_Montage] = [p for k, p in parts if k == "montage"]
     total_images = sum(len(p.captures) if isinstance(p, _Series) else 1 for p in images)
 
     # Pushes are clamped at the full size (max_upscale is in full-size output px), so a VANTAGE_FAST
     # preview makes the same pushes, beats and captions as the film it previews.
     px = width / film_size(settings, film.aspect, fast=False)[0]
-    b = _Builder(project, film, grid, lay, warnings, paper_dip, px)
+    b = _Builder(
+        project, film, grid, lay, warnings, paper_dip, px, holds=dict(holds or {}), slows=dict(slows or {}),
+        caps=dict(gentle or {}), decided=decided, decisions={} if record is None else record,
+    )  # fmt: skip
     b.tracks = Tracks(fps, enabled=has_tracks(film, settings))
-    for part in images:
+    b.placer = _Placer(project, fonts, lay, seen)
+    for part in [*images, *montages]:
         geo = part.geometry
         if geo.s0 / b.px > film.max_upscale + 1e-9:
             text = (
@@ -905,12 +2043,57 @@ def derive_cut(
                 warnings.append(text)
     first = images[0]
     first_cap = first.captures[0] if isinstance(first, _Series) else first.before
+    provenance = ["simulated" if cfg.simulated else "photo"]
+    honesty = honesty_line(provenance)
+    short = honesty_line(provenance, ride=True)
+    # A run of stats over a picture closes on the last montage's last picture when the film has a
+    # montage (after it, so the middle of the film is not one photograph and the figures land on
+    # the finished site seen anew); else it sits on the main vantage's latest picture, in story order.
+    on_vid, on_cap = main, every[-1]
+    stat_part = next((p for p in parts if p[0] == "stats"), None)
+    if montages and stat_part is not None and not stat_part[1][5]:
+        parts.remove(stat_part)
+        last = max(k for k, p in enumerate(parts) if p[0] == "montage")
+        parts.insert(last + 1, stat_part)
+        on_vid, on_cap = montages[-1].vantage, montages[-1].captures[-1]
+    tagged = cfg.simulated or cfg.draft
+
+    def fits(ride: str) -> bool:
+        """Whether the stat run sets its words at full size, in either place, with `ride` under it."""
+        if stat_part is None:
+            return True
+        from vantage.film.cut import stat_run
+
+        def full() -> bool:
+            t = _stat_type(project, fonts, lay)
+            items = stat_part[1][2]
+            return any(stat_run(t, lay, items, ride, p, tagged).words >= 1 - 1e-6 for p in ("low", "high"))
+
+        return bool(b.decide(f"ride:{ride}", full))  # decided at the full size, like the place
+
+    end = _end_text(b, honesty, short, any(k == "stats" for k, _ in parts), parts[-1], fits)
+
+    def stats_on(vid: str, cap: _Capture) -> _StatsOn:
+        first_file = caps.of(vid)[0].file
+        return _StatsOn(vid, cap, _geometry(project, index, vid, width, height),
+                        _vantage_info(project, caps, vid)[1], _stat_hotspots(project, caps, vid, cap),
+                        None if first_file == cap.file else first_file)  # fmt: skip
+
+    # The run's own picture, then (after a montage) the main vantage's latest, where the run's
+    # second stat and those after it sit (`_backdrops`).
+    ons = [stats_on(on_vid, on_cap)]
+    if on_cap.file != every[-1].file:
+        ons.append(stats_on(main, every[-1]))
     if film.loop:  # from pure night onto the title's image
         rise = b.add(
             {"id": "R1", "kind": "rise", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["rise"]
         )
         rise["key"] = rise["f0"] + B
-    _title(b, first.vantage, first_cap, [c.date for c in every])
+    seq = caps.of(first.vantage)
+    _title(
+        b, first.vantage, first_cap, [c.date for c in every], seq[-1].file if seq else None,
+        first.geometry, b.rest(first),
+    )  # fmt: skip
     cam = b.camera
     cam.hold(0, b.rest(first))
 
@@ -920,7 +2103,7 @@ def derive_cut(
     for kind, part in parts:
         part_f0 = b.f  # the chapter (in the tracks) starts with the card that introduces it
         if kind in ("series", "curtain") and part.vantage != last_vantage:
-            if b.prev is not None and b.prev["kind"] in IMAGES:
+            if is_image(b.prev):
                 cam.until(b.f + b.dip("night"))
             _card(b, part.chapter, part.kicker, part.title, part)
             pushed = None
@@ -933,41 +2116,35 @@ def derive_cut(
             vname = vname or s.masters_name
             heading, heading_facts = b.said(s.title, f"chapter {s.chapter!r} title")
             b.tracks.chapter(part_f0, heading or vname, heading_facts if heading else vname_facts)
+            last_zone: str | None = None  # a series' words keep their zone while it is clear
             for cap in s.captures:
                 n += 1
-                f0 = b.f
-                step, target = _push(b, s, cap, rest, zmax)
-                if id(cap) in still and target is not None:
-                    assert step is not None
-                    step.update(push=False, reason="two captures")
-                    target = None
-                quiet, stepped, pushing = film.beats
-                beats = quiet if step is None else (pushing if target else stepped)
-                if total_images == 1 or id(cap) in still:
-                    beats = max(beats, stepped)
+                sid, f0 = f"S{n:02d}", b.f
+                lead, ease = (1 + b.holds.get(sid, 0)) * B, b.push_ease(sid)
+                step, target, beats, zone = _capture_step(
+                    b, s, cap, rest, zmax, pushed, still, total_images, last_zone, sid
+                )
                 dissolve = None if n == 1 and b.prev and b.prev["kind"] == "title" else b.entry()
-                if b.prev is not None and b.prev["kind"] not in IMAGES:
-                    cam.hold(f0, rest)
-                if pushed is not None and target is None:  # the previous push eases back from the
-                    cam.until(f0)  # dissolve on, as slowly as it went in (b.ease frames)
-                    cam.hold(f0 + b.ease, rest)
-                # (pushed and target: the camera glides from the last subject to this one)
-                if target is not None:
-                    cam.until(f0 + B)
-                    cam.hold(f0 + B + b.ease, target, f0 + beats * B)
+                _capture_camera(b, cam, f0, rest, pushed, target, beats, lead, ease)
+                b.back = ease if target is not None else None
+                if zone is not None:
+                    assert step is not None
+                    step.update(zone)
+                    last_zone = zone["words_zone"]
                 pushed = target
                 facts = list(dict.fromkeys([*cap.label_facts, *(step["facts"] if step else [])]))
                 text = [{"role": "label", "text": cap.label}]
                 if step and step["words"]:
                     text.append({"role": "words", "text": step["words"]})
-                    step["land"] = f0 + B  # on beat 1 (after the title, the picture plays clean first)
+                    # on beat 1 (after the title, the picture plays clean first), or later when held
+                    step["land"] = f0 + lead
                 if step is not None:
                     step.pop("facts")
                     if target is not None:
-                        step["push_f0"], step["push_f1"] = f0 + B, f0 + B + b.ease
+                        step["push_f0"], step["push_f1"] = f0 + lead, f0 + lead + ease
                 shot = b.add(
                     {
-                        "id": f"S{n:02d}",
+                        "id": sid,
                         "kind": "capture",
                         "chapter": s.chapter,
                         "text": text,
@@ -985,9 +2162,9 @@ def derive_cut(
                 )
                 f1 = shot["f1"]
                 if target is not None:
-                    shot["key"] = min(f1 - 1, f0 + 3 * B)
+                    shot["key"] = min(f1 - 1, f0 + lead + ease + B - b.grid.third)
                 elif step is not None:
-                    shot["key"] = f0 + 2 * B
+                    shot["key"] = f0 + lead + B
                 else:
                     shot["key"] = f1 - 1
                 if cap.file not in hashes:
@@ -997,125 +2174,46 @@ def derive_cut(
         elif kind == "curtain":
             pushed = _curtain_shot(b, part, fonts, hashes, part_f0)
             last_vantage = part.vantage
+        elif kind == "montage":
+            series_no += 1
+            n, pushed = _montage_shots(b, part, hashes, n, series_no)
+            last_vantage = part.vantage
         else:
-            cid, surface, items, heading, heading_facts = part
+            cid, tint, items, heading, heading_facts, plain = part
             b.tracks.chapter(part_f0, heading, heading_facts)
-            for item in items:
-                dip = b.dip(surface)
-                if b.prev is not None and b.prev["kind"] in IMAGES:
-                    cam.until(b.f + dip)
-                k = sum(s["kind"] == "stat" for s in b.shots) + 1
-                # The figure lands once the dip is over, on a clean surface; the label and source
-                # fade in on the next beat and stay long enough to read at 17 characters a second.
-                land = dip if b.prev is not None else 0
-                text_in = -(-(land + round(B / 2)) // B) * B
-                read = " ".join(filter(None, (item["label"], item["source"])))  # the figure: at a glance
-                beats = max(4, -(-(text_in + 2 * third + cue_frames(read, fps)) // B))
-                text = [
-                    {"role": role, "text": item[role]}
-                    for role in ("value", "unit", "label", "source")
-                    if item[role]
-                ]
-                shot = b.add(
-                    {
-                        "id": f"N{k}",
-                        "kind": "stat",
-                        "chapter": cid,
-                        "text": text,
-                        "facts": item["facts"],
-                        "value": item["value"],
-                        "unit": item["unit"],
-                        "label": item["label"],
-                        "source": item["source"],
-                        "surface": surface,
-                        "dip": dip,
-                        "land": b.f + land,
-                        "text_in": b.f + text_in,
-                    },
-                    beats,
-                )
-                shot["key"] = min(shot["f1"] - third - 1, shot["text_in"] + third + B)
-                start = shot["f0"] + dip // 2
-                b.tracks.cue(
-                    start, " ".join(filter(None, (item["value"], item["unit"], item["label"]))), item["facts"]
-                )
-                figure = " ".join(filter(None, (item["value"], item["unit"])))
-                source = f" (source: {item['source']})" if item["source"] else ""
-                b.tracks.line(start, f"Figure: {figure} {item['label']}{source}.", item["facts"])
-            pushed = None
+            pushed = _stats(
+                b, cid, tint, items, plain=plain, ons=ons, fonts=fonts, hashes=hashes,
+                honesty=end["ride"], honesty_facts=end["ride_facts"],
+            )  # fmt: skip
 
-    # End cards: the credits (E1), then, except in a loop, the honesty line and fine print (E2).
-    brand = project.brand
-    say = b.say()
-    provenance = ["simulated" if cfg.simulated else "photo"]
-    honesty = honesty_line(provenance)
-    lines: list[dict[str, Any]] = [{"role": "brand", "text": brand.name}]
-    short_url = cfg.output.base_url.split("://")[-1].rstrip("/") if cfg.output.base_url else None
-    if film.loop and short_url:  # a loop's end card: the brand and the URL in large type, nothing else
-        lines.append({"role": "url", "text": short_url})
-    if not film.loop and brand.credit_line and (t := say(brand.credit_line, "brand.yaml credit_line")):
-        lines.append({"role": "credit", "text": t})
-    fine_say = b.say()
-    fine: list[dict[str, Any]] = []
-    if not film.loop:
-        for partner in brand.partners:
-            lines += [{"role": "role", "text": partner.role}, {"role": "partner", "text": partner.name}]
-        if short_url:
-            lines.append({"role": "link", "text": short_url})
-        # The honesty line already says "simulated" when it is: no SIMULATED_NOTE on top of it.
-        fine.append({"role": "honesty", "text": honesty})
-        for text_, where in ((brand.copyright, "copyright"), (brand.disclaimer, "disclaimer")):
-            if text_ and (t := fine_say(text_, f"brand.yaml {where}")):
-                fine.append({"role": "fine", "text": t})
+    # The end card (E1): a dip to night, then the brand, credits and fine print (a loop: the brand
+    # and the short URL), at most END_MAX_S long with its dip (see `_end_text`).
     dip = b.dip("night")
-    if b.prev is not None and b.prev["kind"] in IMAGES:  # a push holds while the image dips out
+    if is_image(b.prev):  # a push holds while the image dips out
         cam.until(b.f + dip)
-
-    def card_beats(d: int, read: str, extra: int) -> int:
-        """Beats for an end card whose `read` text is fully on screen for as long as it takes to
-        read at 17 characters a second (it fades in over B/3 after its dip), plus `extra` frames."""
-        return -(-(d + third + cue_frames(read, fps) + extra) // B)
-
-    credit_read = " ".join(t["text"] for t in lines if t["role"] in ("credit", "link"))
-    end_beats = film.end_beats
-    if not film.loop:  # partners are scanned, the credit line and link read; then a fade
-        end_beats = max(end_beats, card_beats(dip, credit_read, third + (B if brand.partners else 0)))
+    end_beats = end["beats"](dip)
     if film.loop:  # a whole number of GOPs: lengthen the end card
         end_beats += -(b.f // B + end_beats + LOOP_BEATS["dip"]) % GOP_BEATS
-    end = b.add(
+    card = b.add(
         {
             "id": "E1",
             "kind": "end",
             "chapter": None,
-            "text": lines,
-            "facts": list(say.facts),
+            "text": end["text"],
+            "facts": end["facts"],
             "dip": dip,
             "honesty": honesty,
+            "ride": end["ride"] is not None,
         },
         end_beats,
     )
-    end["key"] = min(end["f1"] - 1, end["f0"] + dip + 2 * B)
-    credit, credit_facts = b.said(brand.credit_line, "brand.yaml credit_line")
-    b.tracks.chapter(end["f0"], "Credits")
-    b.tracks.cue(end["f0"] + dip // 2, credit or brand.name, credit_facts)
-    b.tracks.line(end["f0"] + dip // 2, "End card: " + " / ".join(t["text"] for t in lines), say.facts)
-    if fine:  # the honesty line read in full, the fine print shown with it; the film ends on night
-        d2 = b.dip("night")
-        e2 = b.add(
-            {
-                "id": "E2",
-                "kind": "end",
-                "chapter": None,
-                "text": fine,
-                "facts": list(fine_say.facts),
-                "dip": d2,
-                "honesty": honesty,
-            },
-            max(4, card_beats(d2, honesty, B)),
-        )
-        e2["key"] = min(e2["f1"] - B - 1, e2["f0"] + d2 + 2 * B)
-        b.tracks.cue(e2["f0"] + d2 // 2, honesty)
-        b.tracks.line(e2["f0"] + d2 // 2, "End card: " + " / ".join(t["text"] for t in fine), fine_say.facts)
+    card["key"] = min(card["f1"] - 1, card["f0"] + dip + 2 * B)
+    credit, credit_facts = b.said(project.brand.credit_line, "brand.yaml credit_line")
+    b.tracks.chapter(card["f0"], "Credits")
+    b.tracks.cue(card["f0"] + dip // 2, credit or project.brand.name, credit_facts)
+    b.tracks.line(
+        card["f0"] + dip // 2, "End card: " + " / ".join(t["text"] for t in end["text"]), end["facts"]
+    )
     if film.loop:  # back to pure night: frame N is frame 0
         back = b.add({"id": "D1", "kind": "dip", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["dip"])
         back["key"] = back["f0"] + B
@@ -1130,7 +2228,7 @@ def derive_cut(
             if file:
                 mv = index.vantages[shot["vantage"]]
                 masters[file] = {"sha256": hashes[file], "w": mv.width, "h": mv.height}
-    poster = _poster(b, images)
+    poster = _poster(b, [*images, *montages])
     plan: dict[str, Any] = {
         "slug": project.slug,
         "cut": "story",
@@ -1176,8 +2274,156 @@ def derive_cut(
     )
 
 
+def _capture_camera(
+    b: _Builder,
+    cam: _Camera,
+    f0: int,
+    rest: Cam,
+    pushed: Cam | None,
+    target: Cam | None,
+    beats: int,
+    lead: int | None = None,
+    ease: int | None = None,
+) -> None:
+    """A capture's camera from its first frame: back to rest after a card or stat, easing back from
+    the previous push, or pushing in to `target` over `ease` frames from `lead` (beat 1, later when
+    the flash margin holds the capture)."""
+    B = b.grid.fpb
+    lead = B if lead is None else lead
+    ease = b.ease if ease is None else ease
+    if b.prev is not None and not is_image(b.prev):
+        cam.hold(f0, rest)
+    if pushed is not None and target is None:  # the previous push eases back from the
+        cam.until(f0)  # dissolve on, as slowly as it went in
+        cam.hold(f0 + b.easing_back, rest)
+    # (pushed and target: the camera glides from the last subject to this one)
+    if target is not None:
+        cam.until(f0 + lead)
+        cam.hold(f0 + lead + ease, target, f0 + beats * B)
+
+
+def _capture_step(
+    b: _Builder,
+    s: _Series,
+    cap: _Capture,
+    rest: Cam,
+    zmax: float,
+    pushed: Cam | None,
+    still: dict[int, str],
+    total_images: int,
+    default: str | None = None,
+    sid: str = "",
+) -> tuple[dict[str, Any] | None, Cam | None, int, dict[str, Any] | None]:
+    """A capture's step record, push target, beats and (with words) its words zone record. Each
+    zone aims the push with its own subject box; the zone is chosen (`_Placer.choose`, keeping
+    `default`, the series' last words zone, while it is clear) from where the subject is on screen
+    from the words' landing (beat 1) to the shot's end along that camera path. The flash margin
+    (`b.holds`, `b.slows` of `sid`) adds beats before the step lands and to a push."""
+    film, B = b.film, b.grid.fpb
+    held, lead, ease = b.holds.get(sid, 0), (1 + b.holds.get(sid, 0)) * B, b.push_ease(sid)
+
+    def plan(box: Box | None) -> tuple[dict[str, Any] | None, Cam | None, int]:
+        mark = len(b.warnings)
+        step, target = _push(b, s, cap, rest, zmax, box, sid)
+        if id(cap) in still and target is not None:
+            assert step is not None
+            step.update(push=False, reason=still[id(cap)])
+            target = None
+            b.warnings[mark:] = [w for w in b.warnings[mark:] if "soft push" not in w and "clamped" not in w]
+        quiet, stepped, pushing = film.beats
+        beats = quiet if step is None else (pushing if target else stepped)
+        if total_images == 1 or id(cap) in still:
+            beats = max(beats, stepped)
+        beats += held
+        if target is not None:  # a slowed push still lands a third of a beat before the shot ends
+            beats = max(beats, -(-(lead + ease + b.grid.third) // B))
+        return step, target, beats
+
+    placer = b.placer
+    words = cap.step and _push_words(b, s, cap)
+    if placer is None or not words or cap.step is None:
+        return (*plan(None), None)
+    from vantage.film.subject import POINT_WEIGHT, PUSH_WEIGHT, subject_map
+
+    f0 = b.f
+    label = f"{s.chapter} {cap.date}"
+    step_ = cap.step
+
+    def choose() -> dict[str, Any]:
+        keep = b.warnings
+        paths: dict[str, list[Any]] = {}
+        pushed_to: Cam | None = None  # where the first zone's push ends: how wide its subject is
+        for zone in placer.zones:  # dry runs: their warnings are dropped, the chosen zone's kept below
+            b.warnings = []
+            try:
+                _, target, beats = plan(placer.aim_box(words, zone, placer.label_base))
+            finally:
+                b.warnings = keep
+            pushed_to = pushed_to or target
+            scratch = _Camera()
+            scratch.windows = [dict(w) for w in b.camera.windows]
+            _capture_camera(b, scratch, f0, rest, pushed, target, beats, lead, ease)
+            scratch.until(f0 + beats * B)
+            paths[zone] = _path(scratch.windows, s.geometry, f0 + lead, f0 + beats * B, b.grid.third)
+        requested = step_.film.focus if step_.film and step_.film.focus else step_.focus
+        points: list[Point] = [(h.x, h.y) for h in cap.subjects]
+        if requested:
+            points.insert(0, _focus_point(s.geometry, requested, pushed_to))
+        weight = PUSH_WEIGHT if requested and pushed_to is not None else POINT_WEIGHT
+        subject = subject_map(placer.seen, cap.file, cap.before, points, weight)
+        return placer.choose(
+            b, label, words, placer.label_base, subject, [cap.file], paths, default or placer.zones[0]
+        )
+
+    zone = placer.zone(b, label, words, choose)
+    step, target, beats = plan(placer.aim_box(words, zone["words_zone"], placer.label_base))
+    return step, target, beats, zone
+
+
+def _focus_point(geo: Geometry, focus: Sequence[float], pushed_to: Sequence[float] | None) -> Point:
+    """A step's focus as a subject point: as wide as what the push frames when it pushes to
+    `pushed_to` (film/subject.py `focus_sigma`), else a point."""
+    from vantage.film.subject import focus_sigma
+
+    if pushed_to is None:
+        return focus[0], focus[1]
+    return focus[0], focus[1], focus_sigma(_crop(geo, pushed_to), geo.mh / geo.mw)
+
+
+def _push_words(b: _Builder, s: _Series, cap: _Capture) -> str | None:
+    """The words a capture's step prints (as `_push` resolves them), without warnings."""
+    assert cap.step is not None
+    raw, _ = lead_words(cap.step)
+    if not raw:
+        return None
+    keep = b.warnings
+    b.warnings = []
+    try:
+        return b.say()(raw, "words")
+    finally:
+        b.warnings = keep
+
+
+def _curtain_pushes_it(series: _Series, curtain: _Curtain) -> bool:
+    """Whether a series' last step is on the curtain's `after` picture and the curtain pushes within
+    MIN_SHIFT of where that step asks to push."""
+    cap = series.captures[-1]
+    step = cap.step
+    if step is None or cap.date != curtain.after.date:
+        return False
+    mine = step.film.focus if step.film and step.film.focus else step.focus
+    if not mine:
+        return False
+    for _, st, _ in curtain.steps:
+        theirs = (st.film.focus if st.film and st.film.focus else st.focus) if st else None
+        if theirs and math.hypot(theirs[0] - mine[0], theirs[1] - mine[1]) < MIN_SHIFT:
+            return True
+    return False
+
+
 def _poster(b: _Builder, images: Sequence[_Series | _Curtain]) -> int:
-    """The poster frame: the latest capture shown at rest and without its words (the frame before
+    """The poster frame: the latest capture of a series (never a montage's: the thumbnail shows the
+    main story whatever drift a master's size allows) shown at rest and without its words (the frame before
     a step's words land, else its last frame), once its dissolve is over and the camera is back at
     the rest view; else the title's key frame. A push is the most enlarged picture in a film, and
     words over it hide the subject, so neither makes the thumbnail."""
@@ -1188,7 +2434,7 @@ def _poster(b: _Builder, images: Sequence[_Series | _Curtain]) -> int:
     rests = {p.vantage: b.rest(p) for p in images}
     B = b.grid.fpb
     for shot in reversed(b.shots):
-        if shot["kind"] != "capture":
+        if shot["kind"] != "capture" or shot.get("montage"):  # the main story's pictures only
             continue
         f = shot["f0"] + B - 1 if shot.get("step") else shot["f1"] - 1
         d = shot["dissolve"]
@@ -1210,14 +2456,17 @@ def _capture_tracks(
     vname_facts: Sequence[str],
     *,
     first: bool,
+    words_facts: Sequence[str] = (),
 ) -> None:
     """A capture's caption cue ('<label>. <words>', plus its note when that still reads at 17
-    characters per second) and transcript line (the step's full text, else the note)."""
+    characters per second) and transcript line (the step's full text, else the note, after the words
+    on screen when that text does not start with them: `with_words`). `words_facts`: the facts of
+    words that are not a step's (a montage's)."""
     d = shot["dissolve"]
     start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
     step = shot["step"]
     words = step["words"] if step else None
-    words_facts: list[str] = []
+    words_facts = list(words_facts) if words else []
     if words and cap.step is not None:
         raw, _ = lead_words(cap.step)
         _, words_facts = b.said(raw, f"chapter {s.chapter!r} step {cap.step_index} film words")
@@ -1228,10 +2477,13 @@ def _capture_tracks(
     text, text_facts = b.step_text(cap.step, f"chapter {s.chapter!r} step {cap.step_index}")
     body, body_facts = (text, text_facts) if text else (cap.note, cap.note_facts)
     lead = f"Aerial view ({vname}), {cap.label}" if first else f"Same view, {cap.label}"
+    lead += with_words(words, body)
     facts = [*cap.label_facts, *body_facts, *(vname_facts if first else ())]
+    facts += words_facts if with_words(words, body) else []
     line = f"{lead}: {body}" if body else f"{lead}."
-    if step and step["push"]:  # the push carries information: say what it frames
-        named = [b.said(h.label, f"hotspot {h.id} label") for h in cap.subjects if h.id in step["subjects"]]
+    if step and step["push"]:  # the push carries information: say what it frames (and only that)
+        framed = step["subjects"] if (step.get("target") or "").startswith("focus+subject") else []
+        named = [b.said(h.label, f"hotspot {h.id} label") for h in cap.subjects if h.id in framed]
         labels = [plain_markdown(text) for text, _ in named if text]
         facts += [f for text, ids in named if text for f in ids]
         on = f" on {' and '.join(labels)}" if labels else ""
@@ -1239,30 +2491,159 @@ def _capture_tracks(
     b.tracks.line(start, line, facts)
 
 
+def with_words(words: str | None, text: str | None) -> str:
+    """', with the words “<words>”' for a transcript line whose text (`text`, a step's or a note)
+    does not start with the words the film prints, else '' (they are its lead, already said)."""
+    if not words:
+        return ""
+    shown = plain_markdown(words)
+    if text and text.casefold().startswith(shown.rstrip(".!?…").casefold()):
+        return ""
+    return f", with the words “{shown.rstrip('.')}”"
+
+
+MONTAGE_BEATS = 2  # a montage picture's beats (at least the film's quiet capture beats)
+MONTAGE_LAST_BEATS = 3  # its last picture's: the closing look holds, drifting, before what follows
+
+
+def _montage_shots(
+    b: _Builder, m: _Montage, hashes: dict[str, str], n: int, series_no: int
+) -> tuple[int, Cam | None]:
+    """A gallery chapter's montage: one capture shot (`montage: true`) per picture, MONTAGE_BEATS
+    each, every one dissolving in on its first beat, no card (from another vantage the outgoing
+    picture keeps its framing, `_Builder.cross`). The words (film.line, else the kicker, else the
+    title) land on the first picture's beat 1, in the zone clear of what changes over the montage,
+    and it lasts until they read; no push, only a drift in of DRIFT from the rest view over the
+    whole run. Returns the last shot number and the camera the run ends on."""
+    project, film, B, third = b.project, b.film, b.grid.fpb, b.grid.third
+    cam, geo = b.camera, m.geometry
+    rest = b.rest(m)
+    f0 = b.f
+    quiet = max(MONTAGE_BEATS, film.beats[0])
+    words, words_facts = b.said(m.words, f"chapter {m.chapter!r} film words")
+    first = quiet
+    if words:  # the words land on beat 1 and stay until they read at 17 characters a second
+        first = max(quiet, -(-(B + third + cue_frames(words, b.grid.fps)) // B))
+    beats = [first] + [quiet] * (len(m.captures) - 2) + [max(quiet, MONTAGE_LAST_BEATS)]
+    holds = [b.holds.get(f"S{n + 1 + k:02d}", 0) for k in range(len(m.captures))]  # the flash margin's
+    beats = [length + h for length, h in zip(beats, holds, strict=True)]
+    end = f0 + sum(beats) * B
+    dissolve = b.entry()
+    if not b.cross(m.vantage, dissolve, rest):
+        if is_image(b.prev):  # the same vantage: ease back from where it was
+            cam.until(f0)
+            cam.hold(f0 + b.easing_back, rest)
+        else:
+            cam.hold(f0, rest)
+    b.back = None
+    zmax = geo.zmax(film.max_upscale * b.px)
+    drift: Cam = (rest[0], rest[1], min(DRIFT, zmax))
+    if drift[2] > 1.0 + 1e-6 and end - cam.windows[-1]["b"] >= b.ease:
+        cam.drift(end, drift)
+    vname, vname_facts = b.said(m.name, f"vantage {m.vantage} name")
+    vname = vname or m.masters_name
+    # Its chapter is titled by its words, what it shows ("Every flight, …", a title, may claim more
+    # pictures than a montage plays), else the vantage name.
+    b.tracks.chapter(f0, words or vname, words_facts if words else vname_facts)
+    for k, (cap, length) in enumerate(zip(m.captures, beats, strict=True)):
+        n += 1
+        s0 = b.f
+        lead = (1 + holds[k]) * B  # its words land a beat in, later when the margin holds it
+        if k:
+            dissolve = b.entry()
+        step: dict[str, Any] | None = None
+        text = [{"role": "label", "text": cap.label}]
+        if k == 0 and words:
+            step = {
+                "index": None, "words": words, "words_from": m.words_from, "focus_requested": None,
+                "focus": None, "target": None, "subjects": [], "z_eff": None, "upscale": None,
+                "push": False, "reason": "montage", "land": s0 + lead,
+            }  # fmt: skip
+            text.append({"role": "words", "text": words})
+            if b.placer is not None:
+                step.update(_montage_zone(b, m, words, s0 + lead, s0 + length * B))
+        shot = b.add(
+            {
+                "id": f"S{n:02d}",
+                "kind": "capture",
+                "chapter": m.chapter,
+                "text": text,
+                "facts": list(dict.fromkeys([*cap.label_facts, *(words_facts if step else [])])),
+                "vantage": m.vantage,
+                "capture": cap.date,
+                "label": cap.label,
+                "file": cap.file,
+                "dissolve": dissolve,
+                "series": series_no,
+                "rail": k,
+                "step": step,
+                "montage": True,
+            },
+            length,
+        )
+        shot["key"] = s0 + lead + B if step else shot["f1"] - 1
+        if cap.file not in hashes:
+            hashes[cap.file] = _sha256(project.masters_dir / cap.file)
+        _capture_tracks(b, shot, cap, m, vname, vname_facts, first=k == 0, words_facts=words_facts)
+    held = cam.at(b.f - 1)
+    return n, None if held == rest else held
+
+
+def _montage_zone(b: _Builder, m: _Montage, words: str, land: int, f1: int) -> dict[str, Any]:
+    """The montage words' zone (`_Placer.choose`): its subject is what changes from the montage's
+    first picture to its last, seen along the camera from the words' landing to the first shot's
+    end, over the first two pictures (the words fade out over the second's dissolve)."""
+    from vantage.film.subject import subject_map
+
+    placer = b.placer
+    assert placer is not None
+    first, last = m.captures[0], m.captures[-1]
+
+    def choose() -> dict[str, Any]:
+        path = _path(b.camera.windows, m.geometry, land, f1, b.grid.third)
+        subject = subject_map(placer.seen, first.file, last.file, [])
+        return placer.choose(
+            b,
+            f"{m.chapter} montage",
+            words,
+            placer.label_base,
+            subject,
+            [c.file for c in m.captures[:2]],
+            {zone: path for zone in placer.zones},
+            placer.zones[0],
+        )
+
+    return placer.zone(b, f"{m.chapter} montage", words, choose)
+
+
 def _curtain_shot(
     b: _Builder, c: _Curtain, fonts: dict[str, Any], hashes: dict[str, str], part_f0: int | None = None
 ) -> Cam | None:
     """The curtain of a compare chapter: an entry beat at split 0, then 2 beats of sweep and 2 of hold
-    per step with a split. Before is left of the rule, after right of it. Returns the camera target
-    it ends on when that is not the rest camera."""
+    per step with a split. Before is left of the rule, after right of it. The flash margin may hold
+    the entry ("<id>.0") or a step's sweep ("<id>.<k>", k from 1) a beat or two longer (`b.holds`).
+    Returns the camera target it ends on when that is not the rest camera."""
     project, lay, film = b.project, b.layout, b.film
     B = b.grid.fpb
     cam = b.camera
     f0 = b.f
+    cid = f"C{sum(s['kind'] == 'curtain' for s in b.shots) + 1}"
     rest = b.rest(c)
     prev = b.prev
     same = (
         prev is not None
-        and prev["kind"] in ("title", "capture")
+        and prev["kind"] in ("title", "capture", "stat")
         and prev.get("vantage") == c.vantage
         and prev.get("capture") == c.after.date
     )
     dissolve = None if same else b.entry()
-    if prev is not None and prev["kind"] in IMAGES:  # a push before eases back as slowly as it went in
+    entry = (1 + b.holds.get(f"{cid}.0", 0)) * B
+    if is_image(prev):  # a push before eases back as slowly as it went in
         cam.until(f0)
-        cam.hold(f0 + b.ease, rest)
+        cam.hold(f0 + b.easing_back, rest)
     else:
-        cam.hold(f0, rest, f0 + B)
+        cam.hold(f0, rest, f0 + entry)
+    b.back = None
     say = b.say()
     where = f"chapter {c.chapter!r}"
     labels = []
@@ -1275,38 +2656,83 @@ def _curtain_shot(
     before_label, after_label = labels
     label_facts = list(say.facts)
     zmax = c.geometry.zmax(film.max_upscale * b.px)
-    keys: list[dict[str, Any]] = [{"a": f0, "b": f0 + B, "split": 0.0}]
+    keys: list[dict[str, Any]] = [{"a": f0, "b": f0 + entry, "split": 0.0}]
     steps: list[dict[str, Any]] = []
-    t = f0 + B
+    t = f0 + entry
     target = rest
-    for j, step, split in c.steps:
+    tagged = project.config.simulated or project.config.draft
+    scale, label_top, (wb, wa) = _curtain_labels(project, fonts, lay, [before_label, after_label], tagged)
+    placer = b.placer
+    zone = placer.zones[0] if placer is not None else None  # each line keeps the last line's zone if clear
+    lines: list[tuple[str | None, str | None]] = []
+    lines_facts: list[list[str]] = []  # each line's facts (tracks only)
+    for j, step, _ in c.steps:
+        line, line_from = (
+            curtain_words(step, lambda t: len(FactNotes(project.facts.facts).plain(t) or ""))
+            if step is not None
+            else (None, None)
+        )
+        words, ids = b.said(line, f"{where} step {j} film words")
+        say.add(ids)
+        lines.append((words, line_from if words else None))
+        lines_facts.append(ids if words else [])
+    # Every line of the curtain at one size, on at most two balanced lines (`cut.words_scale`).
+    words_scale = None
+    if placer is not None and any(w for w, _ in lines):
+        from vantage.film.cut import words_scale as one_size
+
+        words_scale = one_size(placer.t, lay, [w for w, _ in lines if w])
+    for k, (j, step, split) in enumerate(c.steps):
         record: dict[str, Any] = {"index": j, "split": split, "f0": t, "words": None, "words_from": None}
         target = rest
+        slot = f"{cid}.{len(steps) + 1}"
+        words, line_from = lines[k]
+        slow = b.slows.get(slot, 0) * B  # the flash margin's slower move, then its sweep
+        # Words land on the beat nearest the sweep's midpoint, with the picture they name, and stay
+        # until the next line lands (or the curtain ends): the step holds 2 beats after its sweep,
+        # longer when its words need it to be read at 17 characters a second.
+        land = t + B + (slow // (2 * B)) * B
+        hold = 2
+        if words:
+            record.update(words=words, words_from=line_from, land=land)
+            # Fully in B/3 after landing, until B/3 before the next line lands (a beat into the next
+            # sweep), as the next sweep starts when that has no line, or to the curtain's end.
+            third = b.grid.third
+            after = B - 2 * third if k + 1 < len(lines) and lines[k + 1][0] else 0
+            need = cue_frames(words, b.grid.fps) + third + (land - t) - (2 * B + slow) - after
+            hold = max(2, -(-need // B))
         if step is not None:
-            line, line_from = curtain_words(
-                step, lambda t: len(FactNotes(project.facts.facts).plain(t) or "")
-            )
-            words = say(line, f"{where} step {j} film words") if line else None
-            if words:
-                record.update(words=words, words_from=line_from, land=t)
             requested = step.film.focus if step.film and step.film.focus else step.focus
             record["focus_requested"] = list(requested) if requested else None
             if requested:
                 aimed_cam, aimed = _aim_step(
                     b, c.geometry, requested, bool(step.film and step.film.focus), [], rest, zmax,
-                    f"{c.chapter} step {j}",
+                    f"{c.chapter} step {j}", key=slot,
                 )  # fmt: skip
                 record.update(aimed)
                 if aimed["push"]:
                     target = aimed_cam
+        now = cam.windows[-1]
+        start = max(t, now["b"])  # after an ease back that is still going
+        end = max(t + 2 * B + slow, start + b.ease)
+        if (now["x"], now["y"], now["zoom"]) != target:
+            record["move"] = [start, end]
+        span = (2 + hold) * B + slow
         cam.until(t)
-        cam.hold(t + 2 * B, target, t + 4 * B)
-        keys.append({"a": t + 2 * B, "b": t + 4 * B, "split": split})
+        cam.hold(end, target, max(end, t + span))
+        if placer is not None and zone is not None and record["words"]:
+            record.update(
+                _curtain_zone(
+                    b, c, f"{c.chapter} step {j}", step, record["words"], placer, (scale, label_top), land,
+                    zone, t + span + B - land, words_scale,
+                )
+            )  # fmt: skip
+            zone = record["words_zone"]
+        held = b.holds.get(slot, 0) * B
+        keys.append({"a": t + 2 * B + slow, "b": t + span + held, "split": split})
         steps.append(record)
-        t += 4 * B
+        t += span + held
     # Labels show only while the rule (3 units wide) is at least 8 px clear of their ink.
-    tagged = project.config.simulated or project.config.draft
-    scale, label_top, (wb, wa) = _curtain_labels(project, fonts, lay, [before_label, after_label], tagged)
     ink = [lay.margin + wb, lay.right - wa]
     half = 1.5 * lay.unit
     from vantage.film.beat import Window, keyed, lerp
@@ -1318,12 +2744,11 @@ def _curtain_shot(
         _intervals([x - half >= ink[0] + 8 for x in xs], f0),
         _intervals([x + half <= ink[1] - 8 for x in xs], f0),
     ]
-    k = sum(s["kind"] == "curtain" for s in b.shots) + 1
     text = [{"role": "before", "text": before_label}, {"role": "after", "text": after_label}]
     text += [{"role": "words", "text": s["words"]} for s in steps if s["words"]]
     shot = b.add(
         {
-            "id": f"C{k}",
+            "id": cid,
             "kind": "curtain",
             "chapter": c.chapter,
             "text": text,
@@ -1342,24 +2767,69 @@ def _curtain_shot(
             "from_after": same,
             "keys": keys,
             "steps": steps,
+            **({"words_scale": words_scale} if words_scale is not None else {}),
         },
-        1 + 4 * len(steps),
+        (t - f0) // B,
     )
     best = min(range(len(steps)), key=lambda s: abs(steps[s]["split"] - 0.5))
     shot["key"] = keys[best + 1]["a"] + B
-    _curtain_tracks(b, c, shot, label_facts, f0 if part_f0 is None else part_f0)
+    _curtain_tracks(b, c, shot, label_facts, lines_facts, f0 if part_f0 is None else part_f0)
     for file in (c.before.file, c.after.file):
         if file not in hashes:
             hashes[file] = _sha256(project.masters_dir / file)
     return None if target == rest else target
 
 
+def _curtain_zone(
+    b: _Builder,
+    c: _Curtain,
+    label: str,
+    step: Step | None,
+    words: str,
+    placer: _Placer,
+    labels: tuple[float, float],
+    t: int,
+    default: str,
+    span: int | None = None,
+    words_scale: float | None = None,
+) -> dict[str, Any]:
+    """The zone of a curtain step's line, from its landing `t` for 4 beats (or `span` frames: to the
+    next line's landing), over the camera's path; its subject is the step's focus and what changed
+    from before to after (a curtain shows both: the contrast is the least over either picture);
+    `words_scale`: the curtain's one size for its lines."""
+    from vantage.film.subject import subject_map
+
+    B = b.grid.fpb
+
+    def choose() -> dict[str, Any]:
+        base = placer.curtain_base(labels[1], labels[0])
+        path = _path(b.camera.windows, c.geometry, t, t + (4 * B if span is None else span), b.grid.third)
+        requested = (step.film.focus if step.film and step.film.focus else step.focus) if step else None
+        points = [(requested[0], requested[1])] if requested else []
+        subject = subject_map(placer.seen, c.after.file, c.before.file, points)
+        paths = dict.fromkeys(placer.zones, path)  # a curtain's push has no subjects: one path for all
+        return placer.choose(
+            b, label, words, base, subject, [c.before.file, c.after.file], paths, default, words_scale
+        )
+
+    return placer.zone(b, label, words, choose)
+
+
 def _curtain_tracks(
-    b: _Builder, c: _Curtain, shot: dict[str, Any], label_facts: Sequence[str], part_f0: int
+    b: _Builder,
+    c: _Curtain,
+    shot: dict[str, Any],
+    label_facts: Sequence[str],
+    lines_facts: Sequence[Sequence[str]],
+    part_f0: int,
 ) -> None:
-    """A curtain's chapter (the compare title), one caption cue per step ('<before> / <after>: <step
-    text>' when that reads at 17 characters per second, else '<before> / <after>') and one
-    transcript line describing the split and where the line moves."""
+    """A curtain's chapter (the compare title), one caption cue per step and one transcript line
+    describing the split and where the line moves. A step with words on screen: its cue is
+    '<before> / <after>: <words>' from when its words land, the words alone when that does not read
+    at 17 characters per second (the first step's: '<before> / <after>' from the entry, then its
+    words alone from when they land); the transcript gives the
+    words, then the step's text. A step without: '<before> / <after>: <step text>' when that reads,
+    else '<before> / <after>'."""
     before, after = shot["labels"]
     d = shot["dissolve"]
     start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
@@ -1373,16 +2843,30 @@ def _curtain_tracks(
     facts = [*vname_facts, *label_facts]
     for k, ((j, step, split), record) in enumerate(zip(c.steps, shot["steps"], strict=True)):
         text, text_facts = b.step_text(step, f"{where} step {j}")
-        more = (f"{pair}: {text}", [*label_facts, *text_facts]) if text else None
-        b.tracks.cue(start if k == 0 else record["f0"], pair, label_facts, more)
+        words, words_facts = record["words"], list(lines_facts[k])
+        if words:
+            shown = f"{pair}: {plain_markdown(words)}"
+            both = [*label_facts, *words_facts]
+            if k == 0 and record["land"] > start:  # the labels come in first, the words when they land
+                b.tracks.cue(start, pair, label_facts)
+                b.tracks.cue(record["land"], plain_markdown(words), words_facts)
+            elif k == 0:
+                b.tracks.cue(start, shown, both)
+            else:
+                b.tracks.cue(record["land"], plain_markdown(words), words_facts, (shown, both))
+        else:
+            more = (f"{pair}: {text}", [*label_facts, *text_facts]) if text else None
+            b.tracks.cue(start if k == 0 else record["f0"], pair, label_facts, more)
         moves = "The line moves to" if k == 0 else "Then to"
-        describe += f" {moves} {round(split * 100)}%" + (f": {text}" if text else ".")
-        facts += text_facts
+        quoted = with_words(words, text)
+        describe += f" {moves} {round(split * 100)}%{quoted}" + (f": {text}" if text else ".")
+        facts += [*text_facts, *(words_facts if quoted else ())]
     b.tracks.line(start, describe, facts)
 
 
 __all__ = [
     "HONESTY",
+    "HONESTY_RIDE",
     "Geometry",
     "aim",
     "derive_cut",

@@ -82,13 +82,14 @@ def cue_frames(text: str, fps: int) -> int:
 
 def _readable(captions: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
     """Give every cue its `cue_frames`: a run of short date-only cues (`span`, quiet captures)
-    becomes one '<first> – <last>' cue; any other short cue is held into the next cue's time (which
+    becomes one '<first>, <next>, …' cue (each date it shows: never a range); any other short cue is held into the next cue's time (which
     then starts later but ends where it did)."""
     out: list[dict[str, Any]] = []
     i = 0
     while i < len(captions):
         c, j = dict(captions[i]), i
         first = c.get("span")
+        dates = [first]
         while (
             first
             and c["f1"] - c["f0"] < cue_frames(c["text"], fps)
@@ -99,7 +100,8 @@ def _readable(captions: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
             j += 1
             nxt = captions[j]
             facts = list(dict.fromkeys([*c["facts"], *nxt["facts"]]))
-            c = {**c, "f1": nxt["f1"], "text": f"{first} – {nxt['span']}", "facts": facts}
+            dates.append(nxt["span"])
+            c = {**c, "f1": nxt["f1"], "text": ", ".join(dates), "facts": facts}
         c.pop("span", None)
         out.append(c)
         i = j + 1
@@ -122,7 +124,9 @@ class Tracks:
 
     A cue runs from its start to the next cue's start (the last to the film's end). `more` is the
     longer text a cue takes only when it still fits CPS characters per second (a capture's note, a
-    curtain step's text)."""
+    curtain step's text); `under` is a second line the cue carries (`lasting` in plan.json): its part
+    of a line printed under text that changes meanwhile, such as the honesty line riding along under
+    the stats, whose sentences the stat run shares out over its cues so it is captioned once."""
 
     fps: int
     enabled: bool = True
@@ -138,11 +142,14 @@ class Tracks:
         more: tuple[str, Sequence[str]] | None = None,
         *,
         span: str | None = None,
+        under: tuple[str, Sequence[str]] | None = None,
     ) -> None:
         """A cue from f0; `span` (a quiet capture's date label) lets a run of short cues become one
-        '<first> – <last>' cue."""
+        '<first>, <next>' cue; `under` (text, facts) is its second line."""
         if self.enabled and text:
-            self.cues.append({"f0": f0, "text": text, "facts": list(facts), "more": more, "span": span})
+            self.cues.append(
+                {"f0": f0, "text": text, "facts": list(facts), "more": more, "span": span, "under": under}
+            )
 
     def chapter(self, f0: int, title: str | None, facts: Sequence[str] = ()) -> None:
         if self.enabled and title:
@@ -157,8 +164,8 @@ class Tracks:
     ) -> dict[str, Any]:
         """plan.json `captions`, `chapters` and `transcript` (hashed). The first chapter starts at
         frame 0 (the title belongs to it); a chapter or cue that would last no frames is dropped,
-        consecutive cues with the same text become one, and short cues are made readable
-        (`_readable`)."""
+        consecutive cues with the same text become one, short cues are made readable (`_readable`),
+        and a cue's `under` line becomes its second line (`lasting` names it)."""
         if not self.enabled:
             return {"captions": [], "chapters": [], "transcript": None}
         cues = sorted(self.cues, key=lambda c: c["f0"])
@@ -168,7 +175,8 @@ class Tracks:
             if f1 <= cue["f0"]:
                 continue
             text, used, span = cue["text"], cue["facts"], cue.get("span")
-            if cue["more"] is not None and fits(cue["more"][0], cue["f0"], f1, self.fps):
+            below = f"\n{cue['under'][0]}" if cue["under"] and cue["under"][0] else ""
+            if cue["more"] is not None and fits(cue["more"][0] + below, cue["f0"], f1, self.fps):
                 text, used, span = cue["more"][0], list(cue["more"][1]), None
             text = one_line(text)
             if captions and captions[-1]["text"] == text and captions[-1]["f1"] == cue["f0"]:
@@ -178,7 +186,15 @@ class Tracks:
             captions.append(
                 {"f0": cue["f0"], "f1": f1, "text": text, "facts": list(dict.fromkeys(used)), "span": span}
             )
+            if cue["under"] is not None and one_line(cue["under"][0]):
+                captions[-1]["under"] = cue["under"]
         captions = _readable(captions, self.fps)
+        for c in captions:
+            if (under := c.pop("under", None)) is not None:
+                part = one_line(under[0])
+                c["text"] = f"{c['text']}\n{part}"
+                c["facts"] = list(dict.fromkeys([*c["facts"], *under[1]]))
+                c["lasting"] = part
         marks = sorted(self.marks, key=lambda m: m["f0"])
         if marks:
             marks[0] = {**marks[0], "f0": 0}
@@ -304,8 +320,10 @@ def to_transcript(plan: FilmPlan) -> str:
     """The timed transcript: title and subtitle, '<m:ss> film, no sound. <honesty line>', the
     on-screen tag ('On screen throughout: Simulated imagery · Preview.') and, for a draft or a plan
     that prints unverified facts, 'Preview, not for release.', then one '[m:ss] …' line per shot
-    ('[unverified]' before a line that prints a fact that is not releasable). It reads only the
-    plan, whose text was printed through the facts, and its fact snapshot."""
+    ('[unverified]' before a line that prints a fact that is not releasable), and last a 'Sources'
+    block: each fact the transcript prints, with its facts.yaml sources (a stat prints only the
+    story's short source). It reads only the plan, whose text was printed through the facts, and
+    its fact snapshot."""
     p = plan.plan
     t = p.get("transcript") or {}
     fps = p["fps"]
@@ -324,6 +342,14 @@ def to_transcript(plan: FilmPlan) -> str:
     for line in t.get("lines", []):
         mark = "[unverified] " if unverified.intersection(line.get("facts", [])) else ""
         out.append(f"[{minutes(line['f0'], fps)}] {mark}{line['text']}")
+    printed = [*t.get("facts", []), *(f for line in t.get("lines", []) for f in line.get("facts", []))]
+    sourced = [plan.facts[f] for f in dict.fromkeys(printed) if "sources" in plan.facts.get(f, {})]
+    if sourced:
+        out += ["", "Sources:"]
+        for snap in sourced:
+            where = "; ".join(snap["sources"]) or "no source recorded"
+            by = f" (reported by {snap['attribution']})" if snap.get("attribution") else ""
+            out.append(f"{snap['text']}: {where}{by}".rstrip(".") + ".")
     return "\n".join(out) + "\n"
 
 
