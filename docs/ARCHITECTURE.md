@@ -732,7 +732,10 @@ small masters leave little to push, they are 77 and 77 beats.
   - Placement (`place`): `low` (the stats' bottoms on one line above the riding honesty line, which
     rests on the safe bottom, or above the tag in 9:16) or `high` (the figures' cap tops on the
     label line, or under a top-right tag; the honesty line under the tallest stat), whichever lets
-    more of the run's pushes frame their hotspot clear of the panel (ties: low). Everything shrinks
+    more of the run's pushes frame their hotspot clear of the panel; between places that frame as
+    many, the one whose panel (its ink box padded by 44 units) covers the smaller share of the
+    picture's subject at the rest view (`place_subject`; film/subject.py: what changed since the
+    vantage's first picture, and the stats' hotspots; ties: low). Everything shrinks
     together until the run fits in the safe zone (`cut.stat_run`, shared by story.py and the
     renderer).
   - Camera (`move`: `{how, subjects, focus, upscale, f0, f1}`, plus `gentled`, the share of its log
@@ -1128,9 +1131,10 @@ Story shots (`chapter` is the chapter id, or `<type>-<n>` for a chapter without 
   `words_contrast`}]. Text roles `before`, `after`, `words`.
 - `stat` (`N1…`): `value`, `unit`, `label`, `source`, `surface` (night | paper: the panel's tint, or
   the plain card's surface), `backdrop` (picture | plain), with a picture `vantage`, `capture`,
-  `file`; `place` (low | high), `dissolve` (as a capture's: the first of a run over a picture, else
+  `file`; `place` (low | high), `place_subject` (over a picture: `{low, high}`, the share of the
+  picture's subject under each place's panel), `dissolve` (as a capture's: the first of a run over a picture, else
   null; with `cam` after another vantage's image), `dip` (frames; plain cards), `land` (the frame the figure starts to slide in), `text_in`
-  (the frame unit, label and source fade in), `honesty` (the riding honesty line, or null), `move`
+  (the frame label and source fade in), `honesty` (the riding honesty line, or null), `move`
   (null on a plain card, else `{how: focus+subject:<id> | drift | hold[, subject off-frame:<id>],
   subjects, focus [x, y, zoom] | null, upscale, f0, f1}`). Text roles `value`, `unit`, `label`,
   `source`, `honesty`.

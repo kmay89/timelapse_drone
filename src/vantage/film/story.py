@@ -1139,13 +1139,16 @@ END_MAX_S = 6.0  # the end card, its dip included, is at most this long when its
 @dataclass(frozen=True)
 class _StatsOn:
     """The picture a run of stats sits on: the main vantage's latest capture (the picture the
-    curtain ends on), its geometry and portrait focus, and its hotspots that print a fact."""
+    curtain ends on) or the last montage's last picture, its geometry and portrait focus, its
+    hotspots that print a fact, and the vantage's first picture (`first`: what the site was, so
+    what changed since is what the picture shows; None when it is the same picture)."""
 
     vantage: str
     capture: _Capture
     geometry: Geometry
     portrait_focus: tuple[float, float]
     hotspots: list[tuple[Hotspot, frozenset[str]]]
+    first: str | None = None
 
 
 def _stat_hotspots(
@@ -1196,15 +1199,26 @@ def _place_stats(
     rest: Cam,
     t: Any,
     tagged: bool,
-) -> tuple[int, str, list[tuple[Cam | None, str] | None]]:
-    """(score, place, aims) of a stat run: 'low' or 'high', whichever frames more of its stats'
-    hotspots clear of the panel; each aim is (target, how) or None for a stat with no hotspot."""
-    from vantage.film.cut import stat_run, stat_subject_box
+    subject: Any = None,
+) -> tuple[str, list[tuple[Cam | None, str] | None], dict[str, float]]:
+    """(place, aims, covered) of a stat run: 'low' or 'high', whichever frames more of its stats'
+    hotspots clear of the panel; between places that frame as many, the one whose panel covers
+    less of the picture's `subject` (film/subject.py: what changed since the vantage's first
+    picture, and the stats' hotspots) at the rest view (ties: low). Each aim is (target, how), or
+    None for a stat with no hotspot; `covered` is the share of the subject under each place's panel."""
+    from vantage.film.cut import stat_panel_box, stat_run, stat_subject_box
+    from vantage.film.subject import under
 
     lay = b.layout
-    best: tuple[int, str, list[tuple[Cam | None, str] | None]] | None = None
+    crop = _crop(geo, rest)
+    best: tuple[tuple[int, float], str, list[tuple[Cam | None, str] | None]] | None = None
+    covered: dict[str, float] = {}
     for place in ("low", "high"):
-        box = stat_subject_box(lay, stat_run(t, lay, items, honesty, place, tagged))
+        run = stat_run(t, lay, items, honesty, place, tagged)
+        x0, y0, x1, y1 = panel = stat_panel_box(lay, run)
+        area = max(0.0, min(x1, 1.0) - max(x0, 0.0)) * max(0.0, min(y1, 1.0) - max(y0, 0.0))
+        covered[place] = round(under(subject, [crop], panel) * area, 3)
+        box = stat_subject_box(lay, run)
         aims: list[tuple[Cam | None, str] | None] = []
         first = sum(s["kind"] == "stat" for s in b.shots) + 1
         for k, h in enumerate(subjects):
@@ -1217,11 +1231,11 @@ def _place_stats(
             moves = not (target[2] < MIN_ZOOM and math.hypot(c[0] - a[0], c[1] - a[1]) < MIN_SHIFT)
             framed = how.startswith("focus+subject") and moves
             aims.append((target, how) if framed else (None, f"drift, subject off-frame:{h.id}"))
-        score = sum(1 for x in aims if x is not None and x[0] is not None)
+        score = (sum(1 for x in aims if x is not None and x[0] is not None), -covered[place])
         if best is None or score > best[0]:
             best = (score, place, aims)
     assert best is not None
-    return best
+    return best[1], best[2], covered
 
 
 def _stats(
@@ -1255,11 +1269,17 @@ def _stats(
     tagged = project.config.simulated or project.config.draft
     t = _stat_type(project, fonts, lay)
 
-    def placed() -> tuple[str, list[Any]]:
-        best = _place_stats(b, items, honesty, subjects, geo, zmax, rest, t, tagged)
-        return best[1], [None if x is None else [list(x[0]) if x[0] else None, x[1]] for x in best[2]]
+    def placed() -> tuple[str, list[Any], dict[str, float]]:
+        subject = None
+        if not plain and b.placer is not None:
+            from vantage.film.subject import subject_map
 
-    place, kept = b.decide(f"stats:{cid}", placed)
+            points = list({h.id: (h.x, h.y) for h in subjects if h is not None}.values())
+            subject = subject_map(b.placer.seen, on.capture.file, on.first, points)
+        place, aims, covered = _place_stats(b, items, honesty, subjects, geo, zmax, rest, t, tagged, subject)
+        return place, [None if x is None else [list(x[0]) if x[0] else None, x[1]] for x in aims], covered
+
+    place, kept, covered = b.decide(f"stats:{cid}", placed)
     aims: list[tuple[Cam | None, str] | None] = [
         None if x is None else ((tuple(x[0]) if x[0] else None), x[1])  # type: ignore[misc]
         for x in kept
@@ -1360,6 +1380,7 @@ def _stats(
                     else {"vantage": on.vantage, "capture": on.capture.date, "file": on.capture.file}
                 ),
                 "place": place,
+                **({} if plain else {"place_subject": covered}),
                 "dissolve": dissolve,
                 "dip": dip,
                 "land": land,
@@ -1722,8 +1743,10 @@ def _derive_cut(
         parts.insert(last + 1, stat_part)
         on_vid, on_cap = montages[-1].vantage, montages[-1].captures[-1]
     end = _end_text(b, honesty, any(k == "stats" for k, _ in parts), parts[-1])
+    first_file = caps.of(on_vid)[0].file
     stats_on = _StatsOn(on_vid, on_cap, _geometry(project, index, on_vid, width, height),
-                        _vantage_info(project, caps, on_vid)[1], _stat_hotspots(project, caps, on_vid, on_cap))  # fmt: skip
+                        _vantage_info(project, caps, on_vid)[1], _stat_hotspots(project, caps, on_vid, on_cap),
+                        None if first_file == on_cap.file else first_file)  # fmt: skip
     if film.loop:  # from pure night onto the title's image
         rise = b.add(
             {"id": "R1", "kind": "rise", "chapter": None, "text": [], "facts": []}, LOOP_BEATS["rise"]

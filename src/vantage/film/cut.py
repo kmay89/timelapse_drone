@@ -424,6 +424,15 @@ def stat_subject_box(lay: Layout, run: StatRun) -> tuple[float, float, float, fl
     return u0, u1, (run.box[3] + pad) / H, lay.bottom / H - 0.01
 
 
+def stat_panel_box(lay: Layout, run: StatRun) -> tuple[float, float, float, float]:
+    """The run's panel at full opacity (its ink box padded by PANEL_PAD), as frame fractions."""
+    pad = PANEL_PAD * lay.unit
+    x0, y0, x1, y1 = run.box
+    return (
+        (x0 - pad) / lay.width, (y0 - pad) / lay.height, (x1 + pad) / lay.width, (y1 + pad) / lay.height
+    )  # fmt: skip
+
+
 def _bar(frame: np.ndarray, x0: float, y0: float, x1: float, y1: float, color: Sequence[int], opacity=1.0):
     """Anti-aliased, sub-pixel rectangle."""
     if x1 - x0 < 0.25 or opacity <= 0.002:

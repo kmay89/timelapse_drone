@@ -856,8 +856,8 @@ def _lum(px: np.ndarray) -> np.ndarray:
 @pytest.mark.parametrize("surface", [None, "night"])
 @pytest.mark.parametrize("fid", ["16x9", "9x16"])
 def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
-    """A run of stats sits over the main vantage's latest picture (the one the curtain ends on): the
-    first dissolves in from the curtain, the next starts on the beat with no dip and only the text
+    """A run of stats sits over the main vantage's latest picture (the one the curtain ends on), placed
+    where its panel hides the least of what changed: the first dissolves in from the curtain, the next starts on the beat with no dip and only the text
     crossfades. The stat whose fact the pool hotspot prints pushes toward it and frames it clear of
     the panel (16:9); the other drifts or holds. Every frame from a stat's text_in to its end shows
     its words, every frame of the run from the first landing shows a figure (no blank frame), and
@@ -880,6 +880,10 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
     assert n2["dissolve"] is None and n2["f0"] == n1["f1"] and n2["land"] == n2["f0"]
     assert n1["text_in"] == n1["land"] + round(B / 2) and n2["text_in"] == n2["land"] + round(B / 2)
     assert n1["move"]["subjects"] == [] and n1["move"]["how"] in ("drift", "hold")
+    # Both places frame the pool; the run takes the one whose panel hides less of what changed (the
+    # pool, low on the picture): high, in both aspects.
+    covered = n1["place_subject"]
+    assert n1["place"] == n2["place"] == "high" and covered["high"] < covered["low"], covered
     if fid == "16x9":
         move = n2["move"]
         assert move["subjects"] == ["pool"] and move["how"] == "focus+subject:pool", move
