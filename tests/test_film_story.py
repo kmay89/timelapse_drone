@@ -1479,11 +1479,11 @@ def test_cross_vantage_dissolve_may_cut_the_camera(tmp_path):
 
 @pytest.mark.slow
 def test_demo_story_cut(tmp_path):
-    """The fictional demo end to end (fast footage → masters → plans): the 16:9 story cut is 85 beats,
-    the 9:16 73 (two figures and three montage pictures, story.yaml films.9x16, and what its flash
-    margin holds or softens), both closing on a montage of the shoreline gallery, both within
+    """The fictional demo end to end (fast footage → masters → plans): both story cuts are 77 beats
+    (two figures, two or three montage pictures: story.yaml films, and what the flash margin holds
+    or softens), both close on their stats over the shoreline montage's last picture, both within
     the flash margin, the Demolition push frames the slide tower in 16:9 and keeps its reach in
-    9:16, the stats print exactly the figures the cut chooses, and "The beach." sits clear of the
+    9:16, the stats print exactly the figures the films name, and "The beach." sits clear of the
     beach."""
     import shutil
 
@@ -1513,7 +1513,7 @@ def test_demo_story_cut(tmp_path):
     assert tower.id == "slide-tower"
     for fid, plan in plans.items():
         p = plan.plan
-        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 85, "9x16": 73}[fid], (fid, p["grid"])
+        assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 77, "9x16": 77}[fid], (fid, p["grid"])
         check_plan(p)
         assert p["flash"]["limit"] == 2 and plan.checks["flash"]["estimate"] <= 2, (fid, plan.checks)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
@@ -1527,29 +1527,24 @@ def test_demo_story_cut(tmp_path):
             assert cx - hw <= tower.x <= cx + hw and cy - hh <= tower.y <= cy + hh, fid
         else:  # far outside the portrait crop at rest: no whip across the master to reach it
             assert step["target"] == "focus, subject off-frame:slide-tower", (fid, step)
-        stats = [s for s in p["shots"] if s["kind"] == "stat"]
-        figures = ["flights", "stalls-to-meadow", "wave-pool-area"][: {"16x9": 3, "9x16": 2}[fid]]
-        assert [f for s in stats for f in s["facts"]] == figures
-        assert fid == "9x16" or stats[2]["value"] == "13,100", stats
-        # Over the curtain's last picture; in 16:9 the beach figure pushes toward the hotspot that
-        # prints it. The fast masters leave the 9:16 cut no zoom to spare, and the meadow sits on the
-        # master's bottom edge (only the full-size 16:9 film zooms in far enough to lift it clear of
-        # the panel), so those figures drift or hold, saying which hotspot they could not frame.
-        curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
-        assert {s["file"] for s in stats} == {curtain["after_file"]}
-        hows = [s["move"]["how"] for s in stats]
-        assert hows[1].endswith("off-frame:meadow"), hows
-        assert fid == "9x16" or hows[2] == "focus+subject:beach", hows
-        end = p["shots"][-1]
-        assert end["ride"] and end["f1"] - end["f0"] <= 6 * p["fps"] and end["f1"] == p["frames"]
-        # The shoreline gallery closes the film as a montage after the stats, with no card.
+        # The shoreline gallery plays as a montage with no card, then the two figures the demo's
+        # films name close each film over its last picture, then the end card.
         run = [s for s in p["shots"] if s.get("montage")]
-        assert [s["capture"] for s in run] == {
-            "16x9": ["2025-04-12", "2025-09-05", "2026-01-31", "2026-05-09", "2026-09-20"],
-            "9x16": ["2025-04-12", "2026-01-31", "2026-09-20"],
-        }[fid], run
-        assert {s["vantage"] for s in run} == {"shoreline"} and p["shots"][-2] is run[-1]
+        captures = [s["capture"] for s in run]  # spread from the gallery's first flight to its last
+        assert len(captures) == {"16x9": 2, "9x16": 3}[fid], captures
+        assert captures[0] == "2025-04-12" and captures[-1] == "2026-09-20", captures
+        assert {s["vantage"] for s in run} == {"shoreline"}
         assert run[0]["step"]["words"] == "From the water" and "card" not in [s["kind"] for s in p["shots"]]
+        stats = [s for s in p["shots"] if s["kind"] == "stat"]
+        assert [f for s in stats for f in s["facts"]] == ["flights", "wave-pool-area"]
+        assert stats[1]["value"] == "13,100", stats
+        assert p["shots"].index(stats[0]) == p["shots"].index(run[-1]) + 1
+        assert {s["file"] for s in stats} == {run[-1]["file"]} and stats[0]["dissolve"] is None
+        # The CI-sized masters leave the stats no zoom to push with: they drift or hold.
+        assert all(s["move"]["how"] in ("drift", "hold") for s in stats), [s["move"] for s in stats]
+        end = p["shots"][-1]
+        assert end["kind"] == "end" and p["shots"][-2] is stats[-1]
+        assert end["ride"] and end["f1"] - end["f0"] <= 6 * p["fps"] and end["f1"] == p["frames"]
         # "The beach." leaves the beach and splash pad it names: in 9:16 it goes up over the water.
         beach = next(s["step"] for s in p["shots"] if s.get("step") and s["step"]["words"] == "The beach.")
         assert beach["words_subject"][beach["words_zone"]] <= 0.5, beach

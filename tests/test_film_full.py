@@ -125,6 +125,9 @@ def test_full_size_steps_really_push_onto_their_subject(full, fid):
             if step.get("reason") == "subject off-frame":  # this aspect cannot frame what it names
                 assert not step["push"] and "push_f0" not in step, (fid, shot["id"], step)
                 continue
+            if step.get("reason") == "the curtain pushes it":  # the curtain right after makes the push
+                assert not step["push"] and "push_f0" not in step, (fid, shot["id"], step)
+                continue
             pushes.append(shot["id"])
             assert step["push"] and step["focus"][2] >= 1.2, (fid, shot["id"], step)
             mv = index.vantages[shot["vantage"]]
@@ -135,7 +138,9 @@ def test_full_size_steps_really_push_onto_their_subject(full, fid):
             if step.get("words"):
                 bx, by, bw, bh = _words_box(plan, shot["id"], k if shot["kind"] == "curtain" else 0)
                 assert not (bx <= u <= bx + bw and by <= v <= by + bh), (fid, shot["id"], name, (u, v))
-    assert len(pushes) >= 4, (fid, pushes)
+    # The scrub's "Plan" and "Demolition" (out of reach in 9:16) and the curtain's beach, which also
+    # makes the push of the step before it (`the curtain pushes it`).
+    assert len(pushes) >= {"9x16": 2}.get(fid, 3), (fid, pushes)
 
 
 @pytest.mark.parametrize("fid", FILMS)
