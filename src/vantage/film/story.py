@@ -781,9 +781,12 @@ def _title(b: _Builder, vantage: str, cap: _Capture, dates: Sequence[str]) -> di
         "file": cap.file,
         "groups": [f0 + B, f0 + B + third, f0 + B + 2 * third],
     }
-    # All in by 2B; held until kicker and title read at 17 characters a second; out over the last beat.
-    read = sentence(kicker, title)
-    b.add(shot, max(b.film.title_beats, -(-(2 * B + cue_frames(read, b.grid.fps) + B) // B)))
+    # All in by 2B; held until kicker and title read at 17 characters a second, the kicker first (it
+    # is in from B/3, while the title rises), then the title once it is in; out over the last beat.
+    fps = b.grid.fps
+    read_kicker = third + cue_frames(kicker, fps) if kicker else 0
+    need = max(2 * B, read_kicker) + (cue_frames(title, fps) if title else 0) + B
+    b.add(shot, max(b.film.title_beats, -(-need // B)))
     shot["key"] = min(shot["f1"] - third - 1, f0 + 2 * B + third)
     b.tracks.cue(f0, title or kicker, title_facts if title else kicker_facts)
     b.tracks.line(

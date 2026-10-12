@@ -613,9 +613,10 @@ small masters leave little to push, they are 85 and 73 beats.
   scrim. The kicker (hero, else project.yaml, else "<place> · <years>") tracks out 0.10 → 0.22 em
   across beat 0; the title's word groups (up to three, split by word count) rise on frames B, B + B/3
   and B + 2B/3 (`groups`), all in by 2B. Text and scrim fade out over the last beat (B frames, so
-  the scrim's removal never pops). The shot is lengthened until "<kicker>. <title>" is fully on
-  screen for as long as it takes to read at 17 characters a second (the demo: 8 beats). Frame 0
-  is the image.
+  the scrim's removal never pops). The shot is lengthened until the kicker (on from B/3) and then
+  the title (all in at 2B, or once the kicker is read) are on screen for as long as they take to
+  read at 17 characters a second, plus the beat they leave over (the demo: 6 beats). Frame 0 is the
+  image.
 - **capture** (one per capture of each series: `from`..`to` minus `exclude`d captures): 1 beat with
   no step, 3 with a step, 4 with a push (at least 3 when the film has a single image).
   - Every capture except the film's first image starts with a dissolve on its first frame: `_mix` in
