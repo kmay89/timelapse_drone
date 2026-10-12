@@ -174,6 +174,8 @@ Vantage ids name folders and pick dates name files that `vantage process` writes
 `config.py` accepts only ids matching `[a-z0-9][a-z0-9_-]*` and `picks` keys that are real
 `YYYY-MM-DD` dates (quoted or not); `make_masters` re-checks both against `selection.json`.
 A capture's `file` must be a relative path inside `masters/` (no `..`, no absolute path).
+Masters are progressive JPEGs with an sRGB profile whose creation date is fixed (2000-01-01), so the
+same frames make the same master bytes on any day (and the films' plan hashes stay put).
 
 ## StoryJSON (the runtime contract)
 

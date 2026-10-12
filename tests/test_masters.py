@@ -224,3 +224,17 @@ def test_index_json_files_stay_inside_masters(file):
         MastersIndex.model_validate(index)
     capture["file"] = "overview/2025-06-14.jpg"
     assert MastersIndex.model_validate(index).vantages["overview"].captures[0].file == capture["file"]
+
+
+def test_master_profile_is_dated_the_same_every_day():
+    """LittleCMS stamps a new profile with the wall clock; the masters' sRGB profile carries a fixed
+    date instead, so masters made from the same frames on another day are the same bytes."""
+    import subprocess
+    import sys
+
+    from vantage.process.masters import _SRGB_ICC, ICC_DATE, _srgb_icc
+
+    assert _SRGB_ICC[24:36] == ICC_DATE == _srgb_icc()[24:36]
+    code = "from vantage.process.masters import _SRGB_ICC; import sys; sys.stdout.buffer.write(_SRGB_ICC)"
+    again = subprocess.run([sys.executable, "-c", code], capture_output=True, check=True).stdout
+    assert again == _SRGB_ICC
