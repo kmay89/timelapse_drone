@@ -1068,7 +1068,7 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
                 "text": {…}, "numeric": {…}},          // "pillow:default" (sha256 null) when a brand has no font file
       "colors": {"night": "#…", "paper": "#…", "ink": "#…", "accent": "#…"} },
     "camera": [],                                      // story: [{"a": 0, "b": 162, "x": 0.5, "y": 0.5, "zoom": 1.0}, …]
-    "captions": [{"f0": 36, "f1": 90, "text": "April 2025. Before.", "facts": []}],   // see "Tracks"; [] for loop films
+    "captions": [{"f0": 36, "f1": 90, "text": "April 2025. Before.", "facts": []}],   // see "Tracks" (+ "lasting": a line lasting under several cues); [] for loop films
     "chapters": [{"f0": 0, "title": "Every flight, one frame", "facts": []}],
     "transcript": {"title": "…", "subtitle": "…", "honesty": "…", "facts": [],
                    "lines": [{"f0": 0, "text": "Title over the April 2025 view: …", "facts": []}]} | null,
@@ -1207,19 +1207,26 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   1 s (`MIN_CUE_S`) and its length at 17 characters a second. A run of short cues that are only a
   quiet capture's date label becomes one "<first> – <last>" cue ("June 2026 – August 2026"); any
   other short cue is held into the next cue, which starts later but ends where it did. Only the
-  last cue can stay short (the film ends).
+  last cue can stay short (the film ends). A line printed under text that changes meanwhile (the
+  honesty line riding along under the stats, `Tracks.lasting`) becomes the second line of every cue
+  whose middle falls in its time (`lasting` names it in each; mov_text cannot overlap cues); the
+  readability rule then measures each cue without it, and the line over all of them.
   - title → the title (else the kicker); card → the chapter title;
   - capture → "<label>. <words>" ("April 2025. Before."); its note is appended only when the whole
     cue stays at or under 17 characters per second of the cue's length (`tracks.CPS`);
-  - curtain → one cue per step, from the entry (first step) or the sweep start: "<before> / <after>:
-    <step text, plain>" under the same 17 characters/s rule, else "<before> / <after>";
+  - curtain → one cue per step. A step that prints a line (film.line, its lead, its short first
+    sentence): "<before> / <after>: <line>", from the entry for the first step, else from when its
+    line lands and only the line when the whole does not read at 17 characters/s. A step without:
+    "<before> / <after>: <step text, plain>" from the entry or the sweep start under the same rule,
+    else "<before> / <after>";
   - stat → "<value> <unit> <label>" (from the middle of the first stat's entry, then each stat's
-    first frame); E1 → the credit line (else the brand name). The honesty line is in the
-    transcript's header.
+    first frame), with the riding honesty line (and disclaimer) under each when it rides; E1 → the
+    credit line (else the brand name). The honesty line is also in the transcript's header.
   - Classic cuts: the title, each capture's label (+ note under the same rule) from the middle of
     its incoming crossfade, each section card's name and the credit line.
-- **Chapters**: each series (the scrub title, else the vantage name), each curtain (the compare
-  title, else "<before> / <after>"), the stats (the stats title, else its kicker, else "Figures") and
+- **Chapters**: each series (the scrub title, else the vantage name), each montage (its words, which
+  say what it shows where a gallery title such as "Every flight, …" claims more pictures than it
+  plays; else the vantage name), each curtain (the compare title, else "<before> / <after>"), the stats (the stats title, else its kicker, else "Figures") and
   "Credits"; a chapter starts with the card that introduces it. The title shot belongs to the first
   chapter, which starts at frame 0. Classic: one chapter per section, then "Credits".
 - **Transcript** (`.txt`): the project title and subtitle, then "<m:ss> film, no sound. <honesty
@@ -1231,13 +1238,17 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   fact snapshot):
   - title: "Title over the <label> view: <kicker>. <title>";
   - capture: "Aerial view (<vantage name>), <label>: <step text, plain, else the note>" for a series'
-    first capture, "Same view, <label>: …" after it; a pushed step adds "The camera moves in on
+    first capture, "Same view, <label>: …" after it; words on screen that the text does not start
+    with (a montage's, a step's film.line) are quoted first: "…, <label>, with the words “From the
+    water”: <note>"; a pushed step adds "The camera moves in on
     <subject hotspot labels joined by ' and '>." ("The camera moves in." without subjects);
   - card: "Chapter card: <kicker>. <title>";
   - curtain: "Split screen (<vantage name>), <before> left and <after> right. The line moves to
-    <split>%: <step text>. Then to <split>%: …";
+    <split>%: <step text>. Then to <split>%: …", each printed line the step text does not start with
+    quoted after its split ("The line moves to 50%, with the words “The pool became the beach”: …");
   - stat: "Figure: <value> <unit> <label> (source: <source>)." and, when it pushes toward a
-    hotspot, "The camera moves in on <hotspot label>.";
+    hotspot, "The camera moves in on <hotspot label>."; when the honesty line rides along, "Under the
+    figures: <riding text>" from when it comes in;
   - end: "End card: " and the end card's lines joined by " / ".
   It reads only the plan (`to_transcript(plan)`), so it never prints a fact the gate has not seen.
 - **Formats**: WebVTT `WEBVTT` with `hh:mm:ss.mmm` (cue text escapes `&`, `<`, `>`); SRT numbered

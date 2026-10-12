@@ -129,6 +129,7 @@ class Tracks:
     cues: list[dict[str, Any]] = field(default_factory=list)
     marks: list[dict[str, Any]] = field(default_factory=list)
     lines: list[dict[str, Any]] = field(default_factory=list)
+    lasts: list[dict[str, Any]] = field(default_factory=list)
 
     def cue(
         self,
@@ -144,6 +145,13 @@ class Tracks:
         if self.enabled and text:
             self.cues.append({"f0": f0, "text": text, "facts": list(facts), "more": more, "span": span})
 
+    def lasting(self, f0: int, f1: int, text: str | None, facts: Sequence[str] = ()) -> None:
+        """A line printed from f0 to f1 under other text that changes meanwhile (the honesty line that
+        rides along under the stats): it becomes the second line of every cue whose middle falls in
+        that time, so the captions stay one cue at a time (mov_text cannot overlap cues)."""
+        if self.enabled and text and f1 > f0:
+            self.lasts.append({"f0": f0, "f1": f1, "text": one_line(text), "facts": list(facts)})
+
     def chapter(self, f0: int, title: str | None, facts: Sequence[str] = ()) -> None:
         if self.enabled and title:
             self.marks.append({"f0": f0, "title": one_line(title), "facts": list(dict.fromkeys(facts))})
@@ -157,8 +165,8 @@ class Tracks:
     ) -> dict[str, Any]:
         """plan.json `captions`, `chapters` and `transcript` (hashed). The first chapter starts at
         frame 0 (the title belongs to it); a chapter or cue that would last no frames is dropped,
-        consecutive cues with the same text become one, and short cues are made readable
-        (`_readable`)."""
+        consecutive cues with the same text become one, short cues are made readable (`_readable`),
+        and a `lasting` line is added under the cues it lasts through (`lasting` names it in each)."""
         if not self.enabled:
             return {"captions": [], "chapters": [], "transcript": None}
         cues = sorted(self.cues, key=lambda c: c["f0"])
@@ -179,6 +187,16 @@ class Tracks:
                 {"f0": cue["f0"], "f1": f1, "text": text, "facts": list(dict.fromkeys(used)), "span": span}
             )
         captions = _readable(captions, self.fps)
+        for last in self.lasts:
+            under = [c for c in captions if last["f0"] <= (c["f0"] + c["f1"]) / 2 < last["f1"]]
+            for c in under or [  # else the cue it overlaps most, if any
+                max(captions, key=lambda c: min(c["f1"], last["f1"]) - max(c["f0"], last["f0"]), default=None)
+            ]:
+                if c is None or min(c["f1"], last["f1"]) <= max(c["f0"], last["f0"]):
+                    continue
+                c["text"] = f"{c['text']}\n{last['text']}"
+                c["facts"] = list(dict.fromkeys([*c["facts"], *last["facts"]]))
+                c["lasting"] = last["text"]
         marks = sorted(self.marks, key=lambda m: m["f0"])
         if marks:
             marks[0] = {**marks[0], "f0": 0}

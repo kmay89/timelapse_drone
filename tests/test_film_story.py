@@ -1489,11 +1489,12 @@ def test_montage_shows_the_other_vantage(tmp_path):
         check_plan(p)
         # Captions, chapters and transcript include it.
         heads = [c for c in p["chapters"] if c["f0"] == first["f0"]]
-        assert heads and heads[0]["title"] == "Every flight, seen from the lake", p["chapters"]
+        # Titled by what it shows, not by its chapter title ("Every flight, …": it plays a few).
+        assert heads and heads[0]["title"] == "From the water", p["chapters"]
         said = " ".join(c["text"] for c in p["captions"])
         assert "From the water" in said and all(s["label"] in said for s in run)
         lines = [ln["text"] for ln in p["transcript"]["lines"] if ln["f0"] >= first["f0"]]
-        assert lines[0].startswith("Aerial view (Water)"), lines
+        assert lines[0].startswith(f"Aerial view (Water), {first['label']}, with the words “From the water”")
     # The storyboard names the montage's tiles.
     from vantage.film.storyboard import tiles
 

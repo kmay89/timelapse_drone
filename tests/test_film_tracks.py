@@ -105,7 +105,7 @@ def test_vtt_srt_format(tmp_path):
     blocks = srt.strip().split("\n\n")
     assert [b.splitlines()[0] for b in blocks] == [str(k) for k in range(1, len(blocks) + 1)]
     assert [tuple(map(_ms, SRT_STAMP.match(b.splitlines()[1]).groups())) for b in blocks] == spans  # type: ignore[union-attr]
-    assert [b.splitlines()[2] for b in blocks] == [c["text"] for c in p["captions"]]
+    assert ["\n".join(b.splitlines()[2:]) for b in blocks] == [c["text"] for c in p["captions"]]
     assert "{fact:" not in srt
 
     stem = tmp_path / "out" / "tiny-site-16x9"
@@ -171,7 +171,18 @@ def test_chapters_and_transcript(tmp_path):
     assert lines[1] == f"{seconds // 60}:{seconds % 60:02d} film, no sound. {HONESTY['simulated']}"
     assert lines[2:4] == ["On screen throughout: Simulated imagery.", ""]  # the tag; not a draft
     timed = [line for line in lines if re.match(r"^\[\d+:\d{2}\] ", line)]
-    assert len(timed) == len(p["shots"])  # one line per shot
+    # One line per shot, and one for the honesty line that rides along under the figures.
+    assert end["ride"] and stat["honesty"] == HONESTY["simulated"]
+    ride = [line for line in timed if "] Under the figures: " in line]
+    assert ride and ride[0].endswith(f"Under the figures: {HONESTY['simulated']}")
+    assert len(timed) == len(p["shots"]) + 1
+    # The riding line is captioned too: the second line of every cue over the stats, read in full.
+    under = [c for c in p["captions"] if c.get("lasting")]
+    assert under and all(c["text"].endswith(f"\n{HONESTY['simulated']}") for c in under)
+    stats = [s for s in p["shots"] if s["kind"] == "stat"]
+    assert all(stats[0]["f0"] <= (c["f0"] + c["f1"]) / 2 < stats[-1]["f1"] for c in under)
+    assert len(under) == len(stats)
+    assert under[-1]["f1"] - under[0]["f0"] >= tracks.cue_frames(HONESTY["simulated"], FPS)
     assert "The site" in text  # the vantage name
     for shot in p["shots"]:
         if shot["kind"] == "capture":
@@ -325,8 +336,9 @@ def test_every_cue_is_readable(tmp_path):
     quiet = [s["label"] for s in p["shots"] if s["kind"] == "capture" and not s["step"]]
     assert len(quiet) >= 2
     assert any(" – " in c["text"] for c in p["captions"])  # the quiet captures as one span
-    for c in p["captions"][:-1]:
-        assert c["f1"] - c["f0"] >= tracks.cue_frames(c["text"], FPS), c
+    for c in p["captions"][:-1]:  # a line lasting through several cues is read over all of them
+        own = c["text"].removesuffix(f"\n{c['lasting']}") if c.get("lasting") else c["text"]
+        assert c["f1"] - c["f0"] >= tracks.cue_frames(own, FPS), c
     starts = [c["f0"] for c in p["captions"]]
     assert starts == sorted(set(starts)) and all(c["f0"] < c["f1"] for c in p["captions"])
     # A bare collector: two 0.4 s date cues become one span; a short worded cue is held.
@@ -339,3 +351,23 @@ def test_every_cue_is_readable(tmp_path):
     assert [(c["f0"], c["f1"], c["text"]) for c in caps] == [
         (0, 10, "May – June"), (10, 20, "Hi."), (20, 60, "A longer cue that ends the film here."),
     ]  # fmt: skip
+
+
+def test_tracks_say_the_curtain_lines_on_screen(tmp_path):
+    """A curtain's captions give the line it prints at each step (with the labels on the first), from
+    when it lands; its transcript line quotes each printed line before the step's longer text."""
+    steps = [
+        {"text": "Half and half: the old lot meets the new beach.", "split": 0.5, "film": {"line": "Old meets new."}},
+        {"text": "Mostly new.", "split": 0.2, "film": {"line": "The new park."}},
+    ]  # fmt: skip
+    project = tiny(tmp_path / "p", steps=[STEPS[0]], chapters=[{**COMPARE, "steps": steps}], simulated=True)
+    p = _plan(project).plan
+    curtain = next(s for s in p["shots"] if s["kind"] == "curtain")
+    inside = [c for c in p["captions"] if curtain["f0"] <= c["f0"] < curtain["f1"]]
+    assert [c["text"] for c in inside] == ["Then / Now: Old meets new.", "Then / Now: The new park."]
+    assert inside[1]["f0"] == curtain["steps"][1]["land"]  # from when the line lands
+    line = next(ln["text"] for ln in p["transcript"]["lines"] if ln["text"].startswith("Split screen"))
+    assert line.endswith(
+        "The line moves to 50%, with the words “Old meets new”: Half and half: the old lot meets the new"
+        " beach. Then to 20%, with the words “The new park”: Mostly new."
+    ), line

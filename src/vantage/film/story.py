@@ -1261,13 +1261,16 @@ def _stats(
     fonts: dict[str, Any],
     hashes: dict[str, str],
     honesty: str | None,
+    honesty_facts: Sequence[str] = (),
 ) -> Cam | None:
     """A run of stat shots. Over a picture (`on`) unless `plain`: the first dissolves in from the
     image before it, and the run is placed low (default) or high, whichever frames more of its
     stats' hotspots clear of the panel. A stat whose facts a hotspot prints pushes slowly toward it
     (`aim`, clamped like a step's push); any other stat drifts in by DRIFT, or holds. Consecutive
-    stats start on the beat with no dip and only the text crossfades. Returns the camera the run
-    ends on when that is not the rest view (what follows eases back from it)."""
+    stats start on the beat with no dip and only the text crossfades. The riding `honesty` line
+    (with its `honesty_facts`) is captioned under every stat's cue and has its own transcript line.
+    Returns the camera the run ends on when that is not the rest view (what follows eases back from
+    it)."""
     project, film, lay = b.project, b.film, b.layout
     B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
     cam = b.camera
@@ -1420,6 +1423,9 @@ def _stats(
                 line = sentence(line, f"The camera moves in on {plain_markdown(label)}.")
                 facts += label_facts
         b.tracks.line(start_cue, line, facts)
+    if honesty:  # printed under the figures from the panel's entry to the run's end
+        b.tracks.lasting(ride_in, b.f, honesty, honesty_facts)
+        b.tracks.line(ride_in, f"Under the figures: {honesty}", honesty_facts)
     last = cam.windows[-1]
     held = (last["x"], last["y"], last["zoom"])
     b.back = None
@@ -1436,7 +1442,7 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
     line rides along under the stats instead (`ride`), then the disclaimer too; a card still over
     END_MAX_S leaves the partners out (a warning), and one over it even so is a warning too (a film
     without stats has nothing for its honesty line to ride along with).
-    Returns {text, facts, ride, beats(dip)}."""
+    Returns {text, facts, ride, ride_facts, beats(dip)}."""
     project, film = b.project, b.film
     brand, cfg = project.brand, project.config
     B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
@@ -1446,7 +1452,10 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
     if film.loop:  # a loop's end card: the brand and the URL in large type, nothing else
         if short_url:
             lines.append({"role": "url", "text": short_url})
-        return {"text": lines, "facts": list(say.facts), "ride": None, "beats": lambda dip: film.end_beats}
+        return {
+            "text": lines, "facts": list(say.facts), "ride": None, "ride_facts": [],
+            "beats": lambda dip: film.end_beats,
+        }  # fmt: skip
     credit = say(brand.credit_line, "brand.yaml credit_line") if brand.credit_line else None
     if credit:
         lines.append({"role": "credit", "text": credit})
@@ -1491,10 +1500,12 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
         )
     roles = {honesty: "honesty", disclaimer: "disclaimer"}
     text = [*lines, *partners, *link, *({"role": roles[t], "text": t} for t in card), *fine]
+    ride_facts = b.said(brand.disclaimer, "brand.yaml disclaimer")[1] if disclaimer in riding else []
     return {
         "text": text,
         "facts": list(say.facts),
         "ride": " ".join(riding) or None,
+        "ride_facts": ride_facts,
         "beats": lambda dip: need(read(), scan, dip),
     }
 
@@ -1854,7 +1865,7 @@ def _derive_cut(
             b.tracks.chapter(part_f0, heading, heading_facts)
             pushed = _stats(
                 b, cid, tint, items, plain=plain, on=stats_on, fonts=fonts, hashes=hashes,
-                honesty=end["ride"],
+                honesty=end["ride"], honesty_facts=end["ride_facts"],
             )  # fmt: skip
 
     # The end card (E1): a dip to night, then the brand, credits and fine print (a loop: the brand
@@ -2130,8 +2141,9 @@ def _capture_tracks(
     words_facts: Sequence[str] = (),
 ) -> None:
     """A capture's caption cue ('<label>. <words>', plus its note when that still reads at 17
-    characters per second) and transcript line (the step's full text, else the note). `words_facts`:
-    the facts of words that are not a step's (a montage's)."""
+    characters per second) and transcript line (the step's full text, else the note, after the words
+    on screen when that text does not start with them: `with_words`). `words_facts`: the facts of
+    words that are not a step's (a montage's)."""
     d = shot["dissolve"]
     start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
     step = shot["step"]
@@ -2147,7 +2159,9 @@ def _capture_tracks(
     text, text_facts = b.step_text(cap.step, f"chapter {s.chapter!r} step {cap.step_index}")
     body, body_facts = (text, text_facts) if text else (cap.note, cap.note_facts)
     lead = f"Aerial view ({vname}), {cap.label}" if first else f"Same view, {cap.label}"
+    lead += with_words(words, body)
     facts = [*cap.label_facts, *body_facts, *(vname_facts if first else ())]
+    facts += words_facts if with_words(words, body) else []
     line = f"{lead}: {body}" if body else f"{lead}."
     if step and step["push"]:  # the push carries information: say what it frames (and only that)
         framed = step["subjects"] if (step.get("target") or "").startswith("focus+subject") else []
@@ -2157,6 +2171,17 @@ def _capture_tracks(
         on = f" on {' and '.join(labels)}" if labels else ""
         line = sentence(line, f"The camera moves in{on}.")
     b.tracks.line(start, line, facts)
+
+
+def with_words(words: str | None, text: str | None) -> str:
+    """', with the words “<words>”' for a transcript line whose text (`text`, a step's or a note)
+    does not start with the words the film prints, else '' (they are its lead, already said)."""
+    if not words:
+        return ""
+    shown = plain_markdown(words)
+    if text and text.casefold().startswith(shown.rstrip(".!?…").casefold()):
+        return ""
+    return f", with the words “{shown.rstrip('.')}”"
 
 
 MONTAGE_BEATS = 2  # a montage picture's beats (at least the film's quiet capture beats)
@@ -2199,8 +2224,9 @@ def _montage_shots(
         cam.hold(end, drift)
     vname, vname_facts = b.said(m.name, f"vantage {m.vantage} name")
     vname = vname or m.masters_name
-    heading, heading_facts = b.said(m.title, f"chapter {m.chapter!r} title")
-    b.tracks.chapter(f0, heading or vname, heading_facts if heading else vname_facts)
+    # Its chapter is titled by its words, what it shows ("Every flight, …", a title, may claim more
+    # pictures than a montage plays), else the vantage name.
+    b.tracks.chapter(f0, words or vname, words_facts if words else vname_facts)
     for k, (cap, length) in enumerate(zip(m.captures, beats, strict=True)):
         n += 1
         s0 = b.f
@@ -2321,14 +2347,17 @@ def _curtain_shot(
     placer = b.placer
     zone = placer.zones[0] if placer is not None else None  # each line keeps the last line's zone if clear
     lines: list[tuple[str | None, str | None]] = []
+    lines_facts: list[list[str]] = []  # each line's facts (tracks only)
     for j, step, _ in c.steps:
         line, line_from = (
             curtain_words(step, lambda t: len(FactNotes(project.facts.facts).plain(t) or ""))
             if step is not None
             else (None, None)
         )
-        words = say(line, f"{where} step {j} film words") if line else None
+        words, ids = b.said(line, f"{where} step {j} film words")
+        say.add(ids)
         lines.append((words, line_from if words else None))
+        lines_facts.append(ids if words else [])
     # Every line of the curtain at one size, on at most two balanced lines (`cut.words_scale`).
     words_scale = None
     if placer is not None and any(w for w, _ in lines):
@@ -2426,7 +2455,7 @@ def _curtain_shot(
     )
     best = min(range(len(steps)), key=lambda s: abs(steps[s]["split"] - 0.5))
     shot["key"] = keys[best + 1]["a"] + B
-    _curtain_tracks(b, c, shot, label_facts, f0 if part_f0 is None else part_f0)
+    _curtain_tracks(b, c, shot, label_facts, lines_facts, f0 if part_f0 is None else part_f0)
     for file in (c.before.file, c.after.file):
         if file not in hashes:
             hashes[file] = _sha256(project.masters_dir / file)
@@ -2469,11 +2498,19 @@ def _curtain_zone(
 
 
 def _curtain_tracks(
-    b: _Builder, c: _Curtain, shot: dict[str, Any], label_facts: Sequence[str], part_f0: int
+    b: _Builder,
+    c: _Curtain,
+    shot: dict[str, Any],
+    label_facts: Sequence[str],
+    lines_facts: Sequence[Sequence[str]],
+    part_f0: int,
 ) -> None:
-    """A curtain's chapter (the compare title), one caption cue per step ('<before> / <after>: <step
-    text>' when that reads at 17 characters per second, else '<before> / <after>') and one
-    transcript line describing the split and where the line moves."""
+    """A curtain's chapter (the compare title), one caption cue per step and one transcript line
+    describing the split and where the line moves. A step with words on screen: its cue is
+    '<before> / <after>: <words>' from the entry for the first step, else from when its words land,
+    the words alone when that does not read at 17 characters per second; the transcript gives the
+    words, then the step's text. A step without: '<before> / <after>: <step text>' when that reads,
+    else '<before> / <after>'."""
     before, after = shot["labels"]
     d = shot["dissolve"]
     start = shot["f0"] if d is None else d["f0"] + (d["f1"] - d["f0"]) // 2
@@ -2487,11 +2524,21 @@ def _curtain_tracks(
     facts = [*vname_facts, *label_facts]
     for k, ((j, step, split), record) in enumerate(zip(c.steps, shot["steps"], strict=True)):
         text, text_facts = b.step_text(step, f"{where} step {j}")
-        more = (f"{pair}: {text}", [*label_facts, *text_facts]) if text else None
-        b.tracks.cue(start if k == 0 else record["f0"], pair, label_facts, more)
+        words, words_facts = record["words"], list(lines_facts[k])
+        if words:
+            shown = f"{pair}: {plain_markdown(words)}"
+            both = [*label_facts, *words_facts]
+            if k == 0:  # the labels and the first words come in together
+                b.tracks.cue(start, shown, both)
+            else:
+                b.tracks.cue(record["land"], plain_markdown(words), words_facts, (shown, both))
+        else:
+            more = (f"{pair}: {text}", [*label_facts, *text_facts]) if text else None
+            b.tracks.cue(start if k == 0 else record["f0"], pair, label_facts, more)
         moves = "The line moves to" if k == 0 else "Then to"
-        describe += f" {moves} {round(split * 100)}%" + (f": {text}" if text else ".")
-        facts += text_facts
+        quoted = with_words(words, text)
+        describe += f" {moves} {round(split * 100)}%{quoted}" + (f": {text}" if text else ".")
+        facts += [*text_facts, *(words_facts if quoted else ())]
     b.tracks.line(start, describe, facts)
 
 
