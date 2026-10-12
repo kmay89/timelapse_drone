@@ -434,10 +434,12 @@ def _check_timing(project: Project) -> None:
 
 
 def plan_films(
-    project: Project, *, only: Sequence[str] | None = None, fast: bool | None = None
+    project: Project, *, only: Sequence[str] | None = None, fast: bool | None = None, margin: bool = True
 ) -> dict[str, FilmPlan]:
-    """One FilmPlan per film (the `auto` films, or the ids in `only`, in that order). Pure: reads
-    the YAML already loaded, masters/index.json and the master and font files; renders nothing."""
+    """One FilmPlan per film (the `auto` films, or the ids in `only`, in that order). Reads the YAML
+    already loaded, masters/index.json and the master and font files; renders nothing but the story
+    cuts' flash proxies (film/margin.py, cached in work/film/flash/). `margin=False` skips those: the
+    plans then carry no flash fixes (for `vantage validate`, which reads only their warnings)."""
     films = resolve_films(project)
     ids = [f for f, film in films.items() if film.auto] if only is None else list(dict.fromkeys(only))
     unknown = [fid for fid in ids if fid not in films]
@@ -466,7 +468,9 @@ def plan_films(
         if films[fid].cut == "story":
             from vantage.film.story import derive_cut
 
-            plans[fid] = derive_cut(project, films[fid], index, fonts, hashes, warnings, fast=fast)
+            plans[fid] = derive_cut(
+                project, films[fid], index, fonts, hashes, warnings, fast=fast, margin_on=margin
+            )
             continue
         sections = _sections(project, index, warnings)
         plans[fid] = _classic(project, films[fid], sections, index, fonts, hashes, warnings, fast=fast)
@@ -885,8 +889,14 @@ def film_records(project: Project, film_dir: Path) -> tuple[dict[str, dict[str, 
                     )
                 elif key == "web":
                     web_ok = True
-            if not (plan.render.get("flash") or {}).get("pass", False):
+            flash = plan.render.get("flash") or {}
+            if not flash.get("pass", False):
                 own.append(f"film/{name}.mp4 failed the flash check")
+            elif flash.get("max_transitions_per_s", 0) > flash.get("limit", 3):
+                own.append(
+                    f"film/{name}.mp4 measured {flash['max_transitions_per_s']} flash transitions in a "
+                    f"second, over its margin of {flash['limit']} (output.film.flash_limit)"
+                )
         if web_mp4.is_file() and not (
             web_ok and plan.encode.get("web") and (fresh or plan).encode.get("web")
         ):

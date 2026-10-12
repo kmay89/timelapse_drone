@@ -76,7 +76,7 @@ def test_full_size_flashes_keep_the_margin(full, fid):
     assert plan.render is not None
     measured = plan.render["flash"]
     assert measured["pass"] and measured["max_transitions_per_s"] <= 2, (fid, measured, plan.plan["flash"])
-    assert plan.plan["flash"]["estimate"] <= 2, plan.plan["flash"]
+    assert plan.checks["flash"]["estimate"] <= 2, plan.checks["flash"]
     assert not [w for w in plan.warnings if "flash" in w], plan.warnings
 
 

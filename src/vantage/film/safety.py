@@ -311,11 +311,13 @@ class LumaMeter:
     flash (WCAG 2.3.1); a film fails when any region holds more than LIMIT transitions (of either
     kind) within `fps` frames, which is stricter than 3 flashes a second. `size`: the downscaled size
     frames are measured at (default 1/8 of each frame, see `regions`); `log`: when a list, every
-    transition is appended to it as (frame, kind, region), for film/margin.py."""
+    transition is appended to it as (frame, kind, region), for film/margin.py, whose proxies count
+    luminance runs from a lower `threshold`."""
 
     fps: int
     size: tuple[int, int] | None = None
     log: list[tuple[int, str, int]] | None = None
+    threshold: float = THRESHOLD  # a luminance run's size to be a transition (film/margin.py: lower)
     frames: int = 0
     worst: int = 0  # most transitions of one region in any window of fps frames
     worst_frame: int = 0  # last frame of that window
@@ -325,6 +327,10 @@ class LumaMeter:
     _luma: _Runs = field(default_factory=lambda: _Runs(THRESHOLD))
     _red: _Runs = field(default_factory=lambda: _Runs(RED_THRESHOLD))
     _windows: dict[tuple[str, int], deque[int]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.threshold != THRESHOLD:
+            self._luma = _Runs(self.threshold)
 
     def add(self, frame: np.ndarray) -> None:
         self.push(*regions(frame, size=self.size))

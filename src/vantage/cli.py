@@ -590,7 +590,7 @@ def _check_films(project: Project, warnings: list[str]) -> None:
     if not story or not (project.masters_dir / "index.json").is_file():
         return
     try:
-        plans = plan_films(project, only=story)
+        plans = plan_films(project, only=story, margin=False)  # warnings only: no flash proxies
     except (OSError, ValueError) as exc:
         warnings.append(f"films: cannot plan them ({exc})")
         return

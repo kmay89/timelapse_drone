@@ -741,7 +741,7 @@ def check_ink(plan: FilmPlan, film: Renderable) -> list[str]:
     leaves the safe zone (more than INK_TOLERANCE px). Each is also a plan warning."""
     rect = list(film.lay.rect)
     bad = [k for k, item in enumerate(film.ink) if outside(item["box"], rect, INK_TOLERANCE)]
-    plan.checks = {"safe": rect, "ink": film.ink, "outside": bad}
+    plan.checks = {**plan.checks, "safe": rect, "ink": film.ink, "outside": bad}
     if scrims := getattr(film, "scrims", None):  # story cuts: the measured panels behind stat runs
         plan.checks["scrims"] = scrims
     problems = []
@@ -755,6 +755,25 @@ def check_ink(plan: FilmPlan, film: Renderable) -> list[str]:
         if problem not in plan.warnings:
             plan.warnings.append(problem)
     return problems
+
+
+def _flash_limit(project: Project, plan: FilmPlan) -> int:
+    return (plan.plan.get("flash") or {}).get("limit", project.config.output.film.flash_limit)
+
+
+def _flash_over(project: Project, plan: FilmPlan, measured: dict[str, Any]) -> str | None:
+    """A warning (added to the plan once) when the film's measured flash transitions exceed the
+    plan's margin (output.film.flash_limit), else None."""
+    limit, worst = _flash_limit(project, plan), measured.get("max_transitions_per_s", 0)
+    if worst <= limit:
+        return None
+    text = (
+        f"measured {worst} flash transitions in one region within a second around frame "
+        f"{measured.get('frame')}, over the margin of {limit} (output.film.flash_limit; WCAG 2.3.1 allows 3)"
+    )
+    if text not in plan.warnings:
+        plan.warnings.append(text)
+    return text
 
 
 def _sha256(path: Path) -> str:
@@ -796,6 +815,8 @@ def _render_parts(
                     plan.render = old.render if old.hash == plan.hash else None
                 except (OSError, ValueError):
                     pass
+            if plan.render is not None:  # the film it keeps: its measured flash still warns
+                _flash_over(project, plan, plan.render.get("flash") or {})
         else:
             meter = LumaMeter(plan.plan["fps"])
             web = plan.encode.get("web")
@@ -805,13 +826,10 @@ def _render_parts(
                 threads=plan.encode.get("threads", ENCODER_THREADS),
             )  # fmt: skip
             meter.check(f"film {plan.id}")  # refuses more than 3 transitions a second
-            limit = (plan.plan.get("flash") or {}).get("limit", project.config.output.film.flash_limit)
-            if meter.worst > limit:
-                plan.warnings.append(
-                    f"measured {meter.worst} flash transitions in one region within a second around frame "
-                    f"{meter.worst_frame}, over the margin of {limit} (output.film.flash_limit; WCAG 2.3.1 "
-                    "allows 3)"
-                )
+            limit = _flash_limit(project, plan)
+            over = _flash_over(project, plan, {**meter.result(), "frame": meter.worst_frame})
+            if release and over:
+                raise ReleaseError(f"release film {plan.id} blocked: {over}")
             if plan.encode.get("tracks"):  # captions and chapters, by stream copy (video unchanged)
                 embed(parts[mp4], plan)
                 if web:

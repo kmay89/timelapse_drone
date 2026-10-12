@@ -8,7 +8,9 @@ already rendered. The planner keeps a margin below that (output.film.flash_limit
 of the full-size film, metered at the 1/8 size the meter measures a full-size frame at; both from
 the full size, so a VANTAGE_FAST preview gets the same margin and beats as the film it previews),
 renders that proxy with the real renderer (film/cut.py `_Cut`:
-the masters, the camera, the dissolves, the text and its scrims) and meters every frame. For each
+the masters, the camera, the dissolves, the text and its scrims) and meters every frame, at the full
+film's 1/8 and at the VANTAGE_FAST film's 1/8, counting luminance runs from PROXY_THRESHOLD (0.09,
+below the meter's 0.10: a proxy misjudges a near run by a few per cent). For each
 run of more than the limit in one region within `fps` frames, earliest first (`fixes`):
 
     soften  when they all come from one push (a capture's push in and its ease back, a curtain
@@ -32,17 +34,19 @@ Each fix shifts the measured transitions as it would (a hold moves what follows 
 slow stretches its move; a softened push is assumed to keep the limit until measured), so one render
 finds most fixes; the film is then planned and metered again, at most PASSES times, each pass
 rendering only from the shot before the first change (`Measured.snaps`). The plan records `flash`
-({limit, estimate, frame, proxy, held, slowed, softened, passes}); when the estimate stays above the
-limit (nothing left to lengthen) a warning says so. The render meter remains the final check: it
-refuses a film above LIMIT and warns above the limit. Estimates are memoised by the proxy plan's
-hash, and proxy masters decoded once (at a JPEG reduction), within a process.
+({limit, held, slowed, softened}: what decides frames) and checks `flash` ({estimate, frame, proxy,
+measures, passes}: not hashed); when the estimate stays above the limit (nothing left to lengthen) a
+warning says so. The render meter remains the final check: it refuses a film above LIMIT, warns
+above the limit, and a release refuses that too. A proxy's transitions are memoised by its plan's
+hash within a process and on disk (work/film/flash/), and proxy masters decoded once (at a JPEG
+reduction) within a process.
 """
 
 from __future__ import annotations
 
 import math
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,13 +56,16 @@ import numpy as np
 from vantage.film.safety import CELLS, LumaMeter
 
 PROXY_EDGE = 480  # px: the long edge of the proxy (text set smaller misjudges where its ink falls)
+# A proxy counts a luminance run from this size (the meter: 0.10): its frames are smaller, its type
+# hinted at other sizes, so a run measured at 0.098 on the proxy can be 0.102 in the film.
+PROXY_THRESHOLD = 0.09
 PASSES = 6  # proxy renders per film at most
 MAX_HOLD = 2  # beats one slot may be held
 MAX_SLOW = 4  # beats one push may be slowed
 SOFTEST = 1.25  # the margin never softens a push below this zoom
 PAN_SOFTEST = 0.34  # nor a pan (a push under PAN_ZOOM) below this share of its way
 PAN_ZOOM = 1.08  # a push zooming less than this is a pan (story.MIN_ZOOM)
-_MEMO: dict[tuple[str, tuple[int, int], tuple[int, int]], Any] = {}  # → Measured
+_MEMO: dict[Any, Any] = {}  # → Measured
 _MEMO_SIZE = 64
 
 Event = tuple[int, str, int]  # (frame, kind, region) of a transition
@@ -97,12 +104,14 @@ def _decoded(path: str, scale: float) -> np.ndarray:
 
 @dataclass
 class Measured:
-    """A proxy's transitions, and the meter's state at each shot's first frame (`snaps`: frame →
-    (meter, transitions so far)), so the next pass meters only from where its plan changed."""
+    """A proxy's transitions, and the meters' state at each shot's first frame (`snaps`: frame →
+    (meters, transitions so far of each)), so the next pass meters only from where its plan changed
+    (none when the transitions came from the disk cache: the next pass then meters from frame 0)."""
 
     plan: dict[str, Any]
     events: list[Event]
-    snaps: dict[int, tuple[LumaMeter, int]] = field(default_factory=dict)
+    snaps: dict[int, tuple[list[LumaMeter], list[int]]] = field(default_factory=dict)
+    logs: list[list[Event]] = field(default_factory=list)  # each measure's own transitions
 
 
 _FRAMELESS = frozenset(
@@ -132,12 +141,71 @@ def first_change(a: dict[str, Any], b: dict[str, Any]) -> int:
     return max(0, d - 1)
 
 
+def _code_digest() -> str:
+    """sha256 of the renderer's and meter's sources: a cached estimate is only reused by the code that
+    made it."""
+    global _CODE
+    if _CODE is None:
+        import hashlib
+        from pathlib import Path
+
+        h = hashlib.sha256()
+        here = Path(__file__).parent
+        for name in ("beat.py", "cut.py", "layout.py", "margin.py", "plan.py", "render.py", "safety.py"):
+            h.update(name.encode() + b"\0" + (here / name).read_bytes())
+        _CODE = h.hexdigest()
+    return _CODE
+
+
+_CODE: str | None = None
+
+
+def _cache_path(project: Any, plan: Any, measures: Sequence[tuple[int, int]]) -> Any:
+    import hashlib
+    import json
+
+    p = plan.plan
+    key = json.dumps([plan.hash, p["width"], p["height"], [list(m) for m in measures], _code_digest()])
+    return project.work_dir / "film" / "flash" / f"{hashlib.sha256(key.encode()).hexdigest()[:32]}.json"
+
+
+def _cached(project: Any, plan: Any, measures: Sequence[tuple[int, int]]) -> list[Event] | None:
+    import json
+
+    path = _cache_path(project, plan, measures)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [(int(f), str(kind), int(r)) for f, kind, r in data["events"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _store(project: Any, plan: Any, measures: Sequence[tuple[int, int]], events: list[Event]) -> None:
+    """Keep a proxy's transitions in work/film/flash/ (a cache: deleting it only costs time)."""
+    import json
+
+    path = _cache_path(project, plan, measures)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + f".{os.getpid()}.part")
+        part.write_text(json.dumps({"events": [list(e) for e in events]}), encoding="utf-8")
+        part.replace(path)
+    except OSError:
+        pass  # a read-only project still plans; it only meters again next time
+
+
 def meter_proxy(
-    project: Any, plan: Any, measure: tuple[int, int], before: Measured | None = None
+    project: Any,
+    plan: Any,
+    measures: Sequence[tuple[int, int]],
+    before: Measured | None = None,
 ) -> Measured:
-    """Every flash transition of a (proxy) story plan as rendered by film/cut.py, metered at
-    `measure` (memoised by the plan's hash; with `before`, the previous pass, only the frames from
-    where the plans differ are rendered again). The proxy's masters are decoded once at a JPEG
+    """Every flash transition of a (proxy) story plan as rendered by film/cut.py, metered at each
+    size in `measures` (the full-size film's 1/8, and a VANTAGE_FAST film's 1/8: a transition
+    metered at measures[k], k > 0, is logged with kind "<kind>@<k>", so each size is judged on its
+    own). Memoised by the plan's hash within a process and on disk in work/film/flash/ (keyed by the
+    plan hash, the sizes and the renderer's code); with `before`, the previous pass, only the frames
+    from where the plans differ are rendered again. The proxy's masters are decoded once at a JPEG
     reduction and shared (`_decoded`); everything else is the renderer's own."""
     import copy
 
@@ -160,33 +228,51 @@ def meter_proxy(
             return levels
 
     p = plan.plan
-    key = (plan.hash, (p["width"], p["height"]), measure)
+    measures = [tuple(m) for m in measures]
+    key = (plan.hash, (p["width"], p["height"]), tuple(measures))
     if key in _MEMO:
         return _MEMO[key]
+    stored = _cached(project, plan, measures)
+    if stored is not None:
+        out = Measured(p, stored)
+        _remember(key, out)
+        return out
     log: list[Event] = []
-    meter = LumaMeter(p["fps"], size=measure)
+    logs: list[list[Event]] = [[] for _ in measures]
+    meters = [LumaMeter(p["fps"], size=m, threshold=PROXY_THRESHOLD) for m in measures]
     start = 0
-    snaps: dict[int, tuple[LumaMeter, int]] = {}
+    snaps: dict[int, tuple[list[LumaMeter], list[int]]] = {}
     if before is not None and (before.plan["width"], before.plan["height"]) == (p["width"], p["height"]):
         d = first_change(before.plan, p)
         k = max((f for f in before.snaps if f <= d), default=None)
         if k is not None:
-            state, n = before.snaps[k]
-            meter, log, start = copy.deepcopy(state), before.events[:n], k
+            state, counts = before.snaps[k]
+            meters, start = copy.deepcopy(state), k
+            logs = [list(old[:n]) for old, n in zip(before.logs, counts, strict=True)]
             snaps = {f: s for f, s in before.snaps.items() if f <= k}
     starts = {s["f0"] for s in p["shots"]}
     cut = _Proxy(project, plan)
     for f in range(start, p["frames"]):
         if f in starts and f not in snaps:
-            snaps[f] = (copy.deepcopy(meter), len(log))
-        meter.log = log
-        meter.add(cut.frame_at(f))
-        meter.log = None
-    out = Measured(p, log, snaps)
+            snaps[f] = (copy.deepcopy(meters), [len(x) for x in logs])
+        frame = cut.frame_at(f)
+        for meter, out_log in zip(meters, logs, strict=True):
+            meter.log = out_log
+            meter.add(frame)
+            meter.log = None
+    for k, out_log in enumerate(logs):
+        log += out_log if k == 0 else [(f, f"{kind}@{k}", r) for f, kind, r in out_log]
+    log.sort()
+    out = Measured(p, log, snaps, logs)
+    _store(project, plan, measures, log)
+    _remember(key, out)
+    return out
+
+
+def _remember(key: Any, out: Measured) -> None:
     if len(_MEMO) >= _MEMO_SIZE:
         del _MEMO[next(iter(_MEMO))]
     _MEMO[key] = out
-    return out
 
 
 def violation(events: Iterable[Event], fps: int, limit: int, *, region: bool = False) -> Any:
@@ -429,6 +515,7 @@ __all__ = [
     "MAX_SLOW",
     "PASSES",
     "PROXY_EDGE",
+    "PROXY_THRESHOLD",
     "SOFTEST",
     "Fixes",
     "fixes",

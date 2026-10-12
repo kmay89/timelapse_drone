@@ -631,6 +631,22 @@ class _Builder:
     slows: dict[str, int] = field(default_factory=dict)
     caps: dict[str, float] = field(default_factory=dict)
     back: int | None = None  # frames the next ease back from a push takes (None: `ease`)
+    # What depends on where text sets, decided at the full size (`decide`): fixed inputs, and this
+    # plan's own decisions (recorded for the proxy and a VANTAGE_FAST plan).
+    decided: dict[str, Any] | None = None
+    decisions: dict[str, Any] = field(default_factory=dict)
+
+    def decide(self, key: str, compute: Callable[[], Any]) -> Any:
+        """The decision `key` (a words zone, a stat run's place and aims, a push target): as decided
+        at the full size when given (`decided`), else computed here; recorded either way."""
+        import copy
+
+        if self.decided is not None and key in self.decided:
+            value = copy.deepcopy(self.decided[key])
+        else:
+            value = compute()
+        self.decisions[key] = copy.deepcopy(value)
+        return value
 
     @property
     def strict(self) -> bool:
@@ -789,10 +805,15 @@ def _aim_step(
             requested[1],
             math.exp(amount * math.log(min(max(requested[2], 1.0), zmax))),
         )
-    cam, target = aim(
-        geo, requested, zmax, [] if explicit else subjects, explicit=explicit, rest=rest,
-        box=subject_box(b.layout) if box is None else box,
-    )  # fmt: skip
+    if b.decided is not None and f"aim:{label}" in b.decided:  # aimed at the full size
+        cam, target = b.decide(f"aim:{label}", lambda: None)
+        cam = (cam[0], cam[1], cam[2])
+    else:
+        cam, target = aim(
+            geo, requested, zmax, [] if explicit else subjects, explicit=explicit, rest=rest,
+            box=subject_box(b.layout) if box is None else box,
+        )  # fmt: skip
+        b.decisions[f"aim:{label}"] = [list(cam), target]
     if amount < 1.0 and cam[2] < MIN_ZOOM:
         cam = (rest[0] + amount * (cam[0] - rest[0]), rest[1] + amount * (cam[1] - rest[1]), cam[2])
     if target.startswith("focus, subject off-frame"):
@@ -989,6 +1010,14 @@ class _Placer:
                 zone, reason = default, "near least subject"
             else:
                 zone, reason = best, "least subject"
+        out = {"words_zone": zone, "words_reason": reason, "words_subject": on, "words_contrast": ratio}
+        self.warn(b, label, words, out)
+        return out
+
+    @staticmethod
+    def warn(b: _Builder, label: str, words: str, record: dict[str, Any]) -> None:
+        """Warn when a zone record's words sit on the subject or miss WORDS_CONTRAST."""
+        zone, on, ratio = record["words_zone"], record["words_subject"], record["words_contrast"]
         if on[zone] > WORDS_ON:
             b.warnings.append(
                 f"{label}: the words {words!r} sit on the subject in every zone ({b.film.id}; "
@@ -999,7 +1028,17 @@ class _Placer:
                 f"{label}: the words {words!r} keep {ratio[zone]:.1f}:1 over the picture "
                 f"({b.film.id}; WCAG 1.4.3 asks {WORDS_CONTRAST:g}:1 of large text)"
             )
-        return {"words_zone": zone, "words_reason": reason, "words_subject": on, "words_contrast": ratio}
+
+    def zone(
+        self, b: _Builder, label: str, words: str, choose: Callable[[], dict[str, Any]]
+    ) -> dict[str, Any]:
+        """The zone record of `label`'s words: decided at the full size (warned again here), or chosen."""
+        key = f"zone:{label}"
+        if b.decided is not None and key in b.decided:
+            record = b.decide(key, choose)
+            self.warn(b, label, words, record)
+            return record
+        return b.decide(key, choose)
 
 
 def _card(b: _Builder, chapter: str | None, kicker: str | None, title: str | None, part: _Series | _Curtain):
@@ -1118,38 +1157,22 @@ def _stat_type(project: Project, fonts: dict[str, Any], lay: Layout) -> Any:
     return _Type(files, {"paper": c.paper, "accent": c.accent, "ink": c.ink}, lay.unit)  # type: ignore[arg-type]
 
 
-def _stats(
+def _place_stats(
     b: _Builder,
-    cid: str,
-    tint: str,
     items: list[dict[str, Any]],
-    *,
-    plain: bool,
-    on: _StatsOn,
-    fonts: dict[str, Any],
-    hashes: dict[str, str],
     honesty: str | None,
-) -> Cam | None:
-    """A run of stat shots. Over a picture (`on`) unless `plain`: the first dissolves in from the
-    image before it, and the run is placed low (default) or high, whichever frames more of its
-    stats' hotspots clear of the panel. A stat whose facts a hotspot prints pushes slowly toward it
-    (`aim`, clamped like a step's push); any other stat drifts in by DRIFT, or holds. Consecutive
-    stats start on the beat with no dip and only the text crossfades. Returns the camera the run
-    ends on when that is not the rest view (what follows eases back from it)."""
+    subjects: Sequence[Hotspot | None],
+    geo: Geometry,
+    zmax: float,
+    rest: Cam,
+    t: Any,
+    tagged: bool,
+) -> tuple[int, str, list[tuple[Cam | None, str] | None]]:
+    """(score, place, aims) of a stat run: 'low' or 'high', whichever frames more of its stats'
+    hotspots clear of the panel; each aim is (target, how) or None for a stat with no hotspot."""
     from vantage.film.cut import stat_run, stat_subject_box
 
-    project, film, lay = b.project, b.film, b.layout
-    B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
-    cam = b.camera
-    geo = on.geometry
-    rest: Cam = (*on.portrait_focus, 1.0) if lay.width < lay.height else (0.5, 0.5, 1.0)
-    zmax = geo.zmax(film.max_upscale * b.px)
-    subjects = [
-        None if plain else next((h for h, ids in on.hotspots if ids & set(item["facts"])), None)
-        for item in items
-    ]
-    tagged = project.config.simulated or project.config.draft
-    t = _stat_type(project, fonts, lay)
+    lay = b.layout
     best: tuple[int, str, list[tuple[Cam | None, str] | None]] | None = None
     for place in ("low", "high"):
         box = stat_subject_box(lay, stat_run(t, lay, items, honesty, place, tagged))
@@ -1169,7 +1192,49 @@ def _stats(
         if best is None or score > best[0]:
             best = (score, place, aims)
     assert best is not None
-    _, place, aims = best
+    return best
+
+
+def _stats(
+    b: _Builder,
+    cid: str,
+    tint: str,
+    items: list[dict[str, Any]],
+    *,
+    plain: bool,
+    on: _StatsOn,
+    fonts: dict[str, Any],
+    hashes: dict[str, str],
+    honesty: str | None,
+) -> Cam | None:
+    """A run of stat shots. Over a picture (`on`) unless `plain`: the first dissolves in from the
+    image before it, and the run is placed low (default) or high, whichever frames more of its
+    stats' hotspots clear of the panel. A stat whose facts a hotspot prints pushes slowly toward it
+    (`aim`, clamped like a step's push); any other stat drifts in by DRIFT, or holds. Consecutive
+    stats start on the beat with no dip and only the text crossfades. Returns the camera the run
+    ends on when that is not the rest view (what follows eases back from it)."""
+    project, film, lay = b.project, b.film, b.layout
+    B, third, fps = b.grid.fpb, b.grid.third, b.grid.fps
+    cam = b.camera
+    geo = on.geometry
+    rest: Cam = (*on.portrait_focus, 1.0) if lay.width < lay.height else (0.5, 0.5, 1.0)
+    zmax = geo.zmax(film.max_upscale * b.px)
+    subjects = [
+        None if plain else next((h for h, ids in on.hotspots if ids & set(item["facts"])), None)
+        for item in items
+    ]
+    tagged = project.config.simulated or project.config.draft
+    t = _stat_type(project, fonts, lay)
+
+    def placed() -> tuple[str, list[Any]]:
+        best = _place_stats(b, items, honesty, subjects, geo, zmax, rest, t, tagged)
+        return best[1], [None if x is None else [list(x[0]) if x[0] else None, x[1]] for x in best[2]]
+
+    place, kept = b.decide(f"stats:{cid}", placed)
+    aims: list[tuple[Cam | None, str] | None] = [
+        None if x is None else ((tuple(x[0]) if x[0] else None), x[1])  # type: ignore[misc]
+        for x in kept
+    ]
     first_text_in = 0
     for k, item in enumerate(items):
         f0 = b.f
@@ -1363,11 +1428,17 @@ def derive_cut(
     warnings: list[str],
     *,
     fast: bool,
+    margin_on: bool = True,
 ) -> FilmPlan:
     """The story cut of `film` as a FilmPlan (raises ValueError when there is nothing to film), held,
     softened and slowed where needed to keep its flash margin (film/margin.py): planned and metered
     at a proxy size until the estimate keeps `output.film.flash_limit`, then planned at its own size
-    with the same fixes (and so the same beats), recorded as plan `flash`."""
+    with the same fixes (and so the same beats), recorded as plan `flash` (the estimate itself in
+    checks `flash`). What depends on where text sets (words zones, the stats' place, every push
+    target) is decided once per pass at the full size and passed to the proxy and to a VANTAGE_FAST
+    plan as fixed inputs, so all three frame the same film. The proxy is metered at the 1/8 sizes of
+    both the full-size film and the VANTAGE_FAST one, and the margin keeps both. `margin_on=False`
+    (vantage validate) plans without metering: no fixes, no estimate."""
     from vantage.film import margin
     from vantage.film.subject import Seen
 
@@ -1376,40 +1447,52 @@ def derive_cut(
     limit = settings.flash_limit
     full = film_size(settings, film.aspect, fast=False)
     proxy, measure = margin.proxy_size(*full)
+    _, fast_measure = margin.proxy_size(*film_size(settings, film.aspect, fast=True))
+    measures = [measure] if fast_measure == measure else [measure, fast_measure]
     fixes = margin.Fixes()
     measured: margin.Measured | None = None
     estimate, frame, passes = 0, 0, 0
-    while True:
+    small: FilmPlan | None = None
+
+    def decide() -> dict[str, Any]:
+        decided: dict[str, Any] = {}
+        _derive_cut(
+            project, film, index, fonts, hashes, [], fast=False, size=full,
+            holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen, record=decided,
+        )  # fmt: skip
+        return decided
+
+    decided = decide()
+    while margin_on:
         passes += 1
         small = _derive_cut(
             project, film, index, fonts, hashes, [], fast=fast, size=proxy,
-            holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen,
+            holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen, decided=decided,
         )  # fmt: skip
-        measured = margin.meter_proxy(project, small, measure, measured)
+        measured = margin.meter_proxy(project, small, measures, measured)
         estimate, frame = margin.worst(measured.events, small.plan["fps"])
         if estimate <= limit or passes >= margin.PASSES:
             break
         fixes, added = margin.fixes(measured.events, small.plan, limit, fixes)
         if not added:
             break
+        decided = decide()
     plan = _derive_cut(
         project, film, index, fonts, hashes, warnings, fast=fast,
-        holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen,
+        holds=fixes.holds, slows=fixes.slows, gentle=fixes.caps, seen=seen, decided=decided,
     )  # fmt: skip
     p = plan.plan
-    p["flash"] = {
-        "limit": limit,
-        "estimate": estimate,
-        "frame": frame,
-        "proxy": list(proxy),
-        **fixes.record(),
+    p["flash"] = {"limit": limit, **fixes.record()}
+    if not margin_on:
+        return plan
+    plan.checks["flash"] = {
+        "estimate": estimate, "frame": frame, "proxy": list(proxy), "measures": [list(m) for m in measures],
         "passes": passes,
-    }
-    if [(s["id"], s["f0"], s["f1"]) for s in p["shots"]] != [
-        (s["id"], s["f0"], s["f1"]) for s in small.plan["shots"]
-    ]:
+    }  # fmt: skip
+    assert small is not None
+    if (differs := _proxy_differs(p, small.plan)) is not None:
         plan.warnings.append(
-            f"flash margin: the {proxy[0]}×{proxy[1]} proxy plans other beats than the film ({film.id}); "
+            f"flash margin: the {proxy[0]}×{proxy[1]} proxy plans other {differs} than the film ({film.id}); "
             "the estimate may not hold"
         )
     if estimate > limit:
@@ -1419,6 +1502,32 @@ def derive_cut(
             "there (the render meter refuses more than 3)"
         )
     return plan
+
+
+def _proxy_differs(a: dict[str, Any], b: dict[str, Any]) -> str | None:
+    """What a film's plan and its proxy's frame differently ('beats', 'words zones', 'stat places',
+    'camera moves'), or None: every shot's beats, every zone and place, and every camera window
+    (within 1e-6 of the master) must match for the proxy's estimate to hold for the film."""
+    if [(s["id"], s["f0"], s["f1"]) for s in a["shots"]] != [(s["id"], s["f0"], s["f1"]) for s in b["shots"]]:
+        return "beats"
+
+    def zones(p: dict[str, Any]) -> list[Any]:
+        out = []
+        for s in p["shots"]:
+            steps = s.get("steps") or ([s["step"]] if s.get("step") else [])
+            out += [st.get("words_zone") for st in steps]
+            out.append(s.get("place"))
+        return out
+
+    if zones(a) != zones(b):
+        return "words zones or stat places"
+    ca, cb = a["camera"], b["camera"]
+    if len(ca) != len(cb) or any(
+        x["a"] != y["a"] or x["b"] != y["b"] or any(abs(x[k] - y[k]) > 1e-6 for k in ("x", "y", "zoom"))
+        for x, y in zip(ca, cb, strict=True)
+    ):
+        return "camera moves"
+    return None
 
 
 def _derive_cut(
@@ -1435,10 +1544,13 @@ def _derive_cut(
     slows: dict[str, int] | None = None,
     gentle: dict[str, float] | None = None,
     seen: Any = None,
+    decided: dict[str, Any] | None = None,
+    record: dict[str, Any] | None = None,
 ) -> FilmPlan:
     """The story cut of `film` at its size (or `size`, a flash proxy), with the margin's holds,
     slows and zoom caps (`gentle`, `_Builder.caps`); `seen`: the masters as film/subject.py reads
-    them, shared by the plans of one `derive_cut`."""
+    them, shared by the plans of one `derive_cut`. `decided`: words zones, stat places and push
+    targets decided at the full size (`_Builder.decide`); `record`: filled with this plan's."""
     cfg, settings = project.config, project.config.output.film
     fps = settings.fps
     if fps <= 0:
@@ -1529,7 +1641,7 @@ def _derive_cut(
     px = width / film_size(settings, film.aspect, fast=False)[0]
     b = _Builder(
         project, film, grid, lay, warnings, paper_dip, px, holds=dict(holds or {}), slows=dict(slows or {}),
-        caps=dict(gentle or {}),
+        caps=dict(gentle or {}), decided=decided, decisions={} if record is None else record,
     )  # fmt: skip
     b.tracks = Tracks(fps, enabled=has_tracks(film, settings))
     b.placer = _Placer(project, fonts, lay, seen)
@@ -1805,34 +1917,33 @@ def _capture_step(
     from vantage.film.subject import subject_map
 
     f0 = b.f
-    keep = b.warnings
-    paths: dict[str, list[Any]] = {}
-    for zone in placer.zones:  # dry runs: their warnings are dropped, the chosen zone's kept below
-        b.warnings = []
-        try:
-            _, target, beats = plan(placer.aim_box(words, zone, placer.label_base))
-        finally:
-            b.warnings = keep
-        scratch = _Camera()
-        scratch.windows = [dict(w) for w in b.camera.windows]
-        _capture_camera(b, scratch, f0, rest, pushed, target, beats, lead, ease)
-        scratch.until(f0 + beats * B)
-        paths[zone] = _path(scratch.windows, s.geometry, f0 + lead, f0 + beats * B, b.grid.third)
-    requested = cap.step.film.focus if cap.step.film and cap.step.film.focus else cap.step.focus
-    points = [(h.x, h.y) for h in cap.subjects]
-    if requested:
-        points.insert(0, (requested[0], requested[1]))
-    subject = subject_map(placer.seen, cap.file, cap.before, points)
-    zone = placer.choose(
-        b,
-        f"{s.chapter} {cap.date}",
-        words,
-        placer.label_base,
-        subject,
-        [cap.file],
-        paths,
-        default or placer.zones[0],
-    )
+    label = f"{s.chapter} {cap.date}"
+    step_ = cap.step
+
+    def choose() -> dict[str, Any]:
+        keep = b.warnings
+        paths: dict[str, list[Any]] = {}
+        for zone in placer.zones:  # dry runs: their warnings are dropped, the chosen zone's kept below
+            b.warnings = []
+            try:
+                _, target, beats = plan(placer.aim_box(words, zone, placer.label_base))
+            finally:
+                b.warnings = keep
+            scratch = _Camera()
+            scratch.windows = [dict(w) for w in b.camera.windows]
+            _capture_camera(b, scratch, f0, rest, pushed, target, beats, lead, ease)
+            scratch.until(f0 + beats * B)
+            paths[zone] = _path(scratch.windows, s.geometry, f0 + lead, f0 + beats * B, b.grid.third)
+        requested = step_.film.focus if step_.film and step_.film.focus else step_.focus
+        points = [(h.x, h.y) for h in cap.subjects]
+        if requested:
+            points.insert(0, (requested[0], requested[1]))
+        subject = subject_map(placer.seen, cap.file, cap.before, points)
+        return placer.choose(
+            b, label, words, placer.label_base, subject, [cap.file], paths, default or placer.zones[0]
+        )
+
+    zone = placer.zone(b, label, words, choose)
     step, target, beats = plan(placer.aim_box(words, zone["words_zone"], placer.label_base))
     return step, target, beats, zone
 
@@ -2010,18 +2121,22 @@ def _montage_zone(b: _Builder, m: _Montage, words: str, land: int, f1: int) -> d
     placer = b.placer
     assert placer is not None
     first, last = m.captures[0], m.captures[-1]
-    path = _path(b.camera.windows, m.geometry, land, f1, b.grid.third)
-    subject = subject_map(placer.seen, first.file, last.file, [])
-    return placer.choose(
-        b,
-        f"{m.chapter} montage",
-        words,
-        placer.label_base,
-        subject,
-        [c.file for c in m.captures[:2]],
-        {zone: path for zone in placer.zones},
-        placer.zones[0],
-    )
+
+    def choose() -> dict[str, Any]:
+        path = _path(b.camera.windows, m.geometry, land, f1, b.grid.third)
+        subject = subject_map(placer.seen, first.file, last.file, [])
+        return placer.choose(
+            b,
+            f"{m.chapter} montage",
+            words,
+            placer.label_base,
+            subject,
+            [c.file for c in m.captures[:2]],
+            {zone: path for zone in placer.zones},
+            placer.zones[0],
+        )
+
+    return placer.zone(b, f"{m.chapter} montage", words, choose)
 
 
 def _curtain_shot(
@@ -2178,13 +2293,17 @@ def _curtain_zone(
     from vantage.film.subject import subject_map
 
     B = b.grid.fpb
-    base = placer.curtain_base(labels[1], labels[0])
-    path = _path(b.camera.windows, c.geometry, t, t + (4 * B if span is None else span), b.grid.third)
-    requested = (step.film.focus if step.film and step.film.focus else step.focus) if step else None
-    points = [(requested[0], requested[1])] if requested else []
-    subject = subject_map(placer.seen, c.after.file, c.before.file, points)
-    paths = dict.fromkeys(placer.zones, path)  # a curtain's push has no subjects: one path for all zones
-    return placer.choose(b, label, words, base, subject, [c.before.file, c.after.file], paths, default)
+
+    def choose() -> dict[str, Any]:
+        base = placer.curtain_base(labels[1], labels[0])
+        path = _path(b.camera.windows, c.geometry, t, t + (4 * B if span is None else span), b.grid.third)
+        requested = (step.film.focus if step.film and step.film.focus else step.focus) if step else None
+        points = [(requested[0], requested[1])] if requested else []
+        subject = subject_map(placer.seen, c.after.file, c.before.file, points)
+        paths = dict.fromkeys(placer.zones, path)  # a curtain's push has no subjects: one path for all
+        return placer.choose(b, label, words, base, subject, [c.before.file, c.after.file], paths, default)
+
+    return placer.zone(b, label, words, choose)
 
 
 def _curtain_tracks(

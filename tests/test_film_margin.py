@@ -28,8 +28,8 @@ from vantage.film.safety import check_plan
 from vantage.models import FilmPlan
 
 
-def _flashing(root: Path, **film: Any) -> Project:
-    tiny(root, steps=[], film={"bpm": 144, **film})
+def _flashing(root: Path, steps: list[dict[str, Any]] | None = None, **film: Any) -> Project:
+    tiny(root, steps=steps or [], film={"bpm": 144, **film})
     for i, date in enumerate(DATES):
         level = 20 if i % 2 == 0 else 235
         img = np.full((SIZE[1], SIZE[0], 3), level, np.uint8)
@@ -54,7 +54,8 @@ def test_margin_holds_quiet_captures_until_the_film_keeps_its_limit(tmp_path):
     p = plan.plan
     check_plan(p)
     flash = p["flash"]
-    assert flash["limit"] == 2 and flash["estimate"] <= 2, flash
+    assert flash["limit"] == 2 and plan.checks["flash"]["estimate"] <= 2, (flash, plan.checks)
+    assert set(flash) == {"limit", "held", "slowed", "softened"}  # what decides frames, and nothing else
     assert flash["held"] and set(flash["held"]) <= {"S02", "S03", "S04", "S05"}, flash
     assert not flash["slowed"] and not flash["softened"]
     B = p["grid"]["fpb"]
@@ -73,8 +74,9 @@ def test_margin_holds_quiet_captures_until_the_film_keeps_its_limit(tmp_path):
     assert not [w for w in rendered.warnings if "measured" in w]
 
     loose = _flashing(tmp_path / "q", flash_limit=3)
-    p3 = plan_films(loose, only=["16x9"], fast=False)["16x9"].plan
-    assert p3["flash"]["held"] == {} and p3["flash"]["estimate"] == 3 and p3["frames"] < p["frames"]
+    plan3 = plan_films(loose, only=["16x9"], fast=False)["16x9"]
+    p3 = plan3.plan
+    assert p3["flash"]["held"] == {} and plan3.checks["flash"]["estimate"] == 3 and p3["frames"] < p["frames"]
     render_film(loose, tmp_path / "out3", only=["16x9"])
     measured = FilmPlan.load(tmp_path / "out3" / "tiny-site-16x9.plan.json").render["flash"]  # type: ignore[index]
     assert measured["pass"] and measured["max_transitions_per_s"] == 3 and measured["limit"] == 3
@@ -82,18 +84,31 @@ def test_margin_holds_quiet_captures_until_the_film_keeps_its_limit(tmp_path):
 
 def test_margin_plans_are_reproducible_and_fast_previews_match(tmp_path):
     """The margin is part of the plan: the same inputs give the same plan hash, and a VANTAGE_FAST
-    plan (a smaller film) gets the same holds and beats, since both meter the same proxy."""
-    project = _flashing(tmp_path / "p")
+    plan (a smaller film: 960×540 for this 1280×720 one) gets the same holds, beats, words zones and
+    camera, since words zones and pushes are decided at the full size and the proxy is metered at
+    the 1/8 sizes of both films. A second planning reuses the proxy's transitions from work/."""
+    from test_film_story import STEPS
+    from vantage.film.story import _proxy_differs
+
+    steps = [dict(st, focus=[0.5, 0.5, 1.3]) if st["capture"] == DATES[4] else st for st in STEPS]
+    project = _flashing(tmp_path / "p", steps, width=1280, height=720)
     a = plan_films(project, only=["16x9"], fast=False)["16x9"]
+    assert a.checks["flash"]["measures"] == [[160, 90], [120, 67]], a.checks
+    cache = list((project.work_dir / "film" / "flash").glob("*.json"))
+    assert cache
     margin._MEMO.clear()
     margin._DECODED.clear()
     b = plan_films(project, only=["16x9"], fast=False)["16x9"]
     fast = plan_films(project, only=["16x9"], fast=True)["16x9"]
-    assert a.hash == b.hash
-    assert fast.plan["flash"] == a.plan["flash"]
-    assert [(s["id"], s["f0"], s["f1"]) for s in fast.plan["shots"]] == [
-        (s["id"], s["f0"], s["f1"]) for s in a.plan["shots"]
-    ]
+    assert a.hash == b.hash and a.checks["flash"] == b.checks["flash"]
+    assert fast.plan["width"] == 960 and fast.plan["flash"] == a.plan["flash"]
+    assert _proxy_differs(fast.plan, a.plan) is None
+    zones = [s["step"]["words_zone"] for s in a.plan["shots"] if (s.get("step") or {}).get("words")]
+    assert len(zones) == 3
+    for path in cache:  # without the cache the proxies are metered again, to the same plan
+        path.unlink()
+    margin._MEMO.clear()
+    assert plan_films(project, only=["16x9"], fast=False)["16x9"].hash == a.hash
 
 
 def _plan(
@@ -153,3 +168,30 @@ def test_proxy_size_matches_what_the_meter_measures():
     assert margin.proxy_size(1080, 1920) == ((270, 480), (135, 240))
     assert margin.proxy_size(320, 180) == ((320, 180), (40, 22))
     assert margin.proxy_size(64, 36) == ((64, 36), (16, 16))
+
+
+def test_a_film_measured_over_its_margin_warns_and_cannot_ship(tmp_path, monkeypatch):
+    """Planned without the margin, the flashing film measures 3 transitions a second against its
+    limit of 2: the render warns, a plan-only run that keeps that film warns again, check_films
+    reports it, and a release render refuses it."""
+    import functools
+
+    from vantage.film import render
+    from vantage.film.plan import check_films
+    from vantage.site.build import ReleaseError
+
+    project = _flashing(tmp_path / "p")
+    monkeypatch.setattr(render, "plan_films", functools.partial(plan_films, margin=False))
+    out = tmp_path / "out"
+    render_film(project, out, only=["16x9"])
+    plan = FilmPlan.load(out / "tiny-site-16x9.plan.json")
+    assert plan.render is not None and plan.render["flash"]["max_transitions_per_s"] == 3
+    over = [w for w in plan.warnings if "over the margin of 2" in w]
+    assert over, plan.warnings
+    assert "flash" not in plan.checks and not (project.work_dir / "film" / "flash").exists()  # no proxy
+    render_film(project, out, only=["16x9"], plan_only=True)
+    again = FilmPlan.load(out / "tiny-site-16x9.plan.json")
+    assert again.render == plan.render and over[0] in again.warnings
+    assert any("over its margin of 2" in p for p in check_films(project, out))
+    with pytest.raises(ReleaseError, match="flash"):
+        render_film(project, tmp_path / "rel", only=["16x9"], release=True)

@@ -597,8 +597,8 @@ chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's wor
 ### Derived story cut (film/story.py derive_cut)
 
 Shots come from the chapters in scope, in story order: the first hero → title; each scrub chapter →
-a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots; then
-the end card; each gallery chapter on a drone vantage other than the main one → a montage. Explore,
+a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots;
+each gallery chapter on a drone vantage other than the main one → a montage; then the end card. Explore,
 text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
 plays the main vantage's captures as one quiet series. For the demo at full size the 16:9 cut is
 87 beats (52.2 s) and the 9:16 78 (46.8 s: two figures and three montage pictures, story.yaml
@@ -636,7 +636,7 @@ small masters leave little to push, they are 85 and 73 beats.
     B + B/3 swept a bright path through one meter region 4 times in a second.
   - The flash margin (see Safety) may hold a capture: its picture plays `held` beats longer before
     its words land and its push starts (`land` and `push_f0` move on by as many beats); soften its
-    push (`step.gentled`: the zoom it asked for); or slow it by a beat per level (it then eases
+    push (`step.gentled`: the share of the log zoom it keeps, z_eff = z^gentled); or slow it by a beat per level (it then eases
     back as slowly, and the capture lasts until the push lands B/3 before its end).
   - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
 - **montage** (capture shots with `montage: true`, numbered on from the series; one run per gallery
@@ -713,7 +713,8 @@ small masters leave little to push, they are 85 and 73 beats.
     more of the run's pushes frame their hotspot clear of the panel (ties: low). Everything shrinks
     together until the run fits in the safe zone (`cut.stat_run`, shared by story.py and the
     renderer).
-  - Camera (`move`: `{how, subjects, focus, upscale, f0, f1}`): a stat whose facts are printed in
+  - Camera (`move`: `{how, subjects, focus, upscale, f0, f1}`, plus `gentled`, the share of its log
+    zoom kept, when the flash margin softened its push): a stat whose facts are printed in
     the label or body of a hotspot of a scrub or compare chapter on that vantage, shown at that
     capture, pushes toward it from its landing to B/3 before its end (at least B + B/3 frames):
     `aim` asks for zoom 1.6 (`STAT_ZOOM`), clamped by `max_upscale` and lowered until the hotspot
@@ -923,23 +924,31 @@ of the right edge.
   largest one-frame change of any region). For a loop film it also reads frame N (= frame 0), so the
   seam is measured like any other transition. Above 3 the film is refused; above the plan's
   `flash.limit` (story cuts; `output.film.flash_limit` for classic ones) the render adds a plan warning
-  ("measured N flash transitions … over the margin of L"). `render.flash` also records that `limit`.
+  ("measured N flash transitions … over the margin of L"; `--plan-only`, keeping a film rendered from
+  the same plan, adds it again), and `vantage film --release` refuses the film. `render.flash` also
+  records that `limit`, and `check_films` reports a film measured over it.
 - **Flash margin** (film/margin.py, at plan time, story cuts): the meter only reads what is
   rendered, so the planner estimates it first and keeps every film at most `output.film.flash_limit`
   (default 2) transitions per region in any second. `derive_cut` plans the film again at a proxy
   size (`margin.proxy_size`: 480 px on the long edge, a quarter of the full-size film; at 240 px its
   type, set at whole pixel sizes, moved a line's ink into the next region), renders the proxy with
   `_Cut` (masters decoded at a JPEG reduction and shared between passes; the camera, dissolves, text
-  and scrims are the renderer's own) and meters every frame (`LumaMeter(size=…, log=…)`) at the 1/8
-  size the meter measures a full-size frame at. Both come from the full size, so a VANTAGE_FAST plan
-  gets the same margin, beats and hash inputs as the film it previews (its own meter, at 1/8 of its
-  smaller frames, can still tip a near transition the other way: the demo's 9:16 preview measures 3
-  once, a warning). For each run of more than the limit in one region within `fps` frames, earliest
-  first (`margin.fixes`):
+  and scrims are the renderer's own) and meters every frame (`LumaMeter(size=…, log=…)`) twice: at the 1/8
+  size the meter measures a full-size frame at, and at 1/8 of the VANTAGE_FAST film (`measures`; its
+  transitions are kept apart as kind `luma@1`, `red@1`), counting a luminance run from 0.09
+  (`PROXY_THRESHOLD`; the meter: 0.10) since the proxy's smaller frames and type misjudge a near run
+  by a few per cent, so the margin holds for both and a
+  VANTAGE_FAST plan gets the same margin, beats and hash inputs as the film it previews. What depends
+  on where text sets is decided once per pass by planning at the full size (`_Builder.decide`: each
+  step's words zone `zone:<label>`, each push target `aim:<label>`, the stat run's place and aims
+  `stats:<chapter>`) and passed to the proxy and to a VANTAGE_FAST plan as fixed inputs: a word box
+  set at 480 px is wider than at 1920 and flipped zones near the margin. `derive_cut` warns when the
+  proxy's beats, zones, stat places or camera windows still differ from the film's. For each run of
+  more than the limit in one region within `fps` frames, earliest first (`margin.fixes`):
   - when they all come from one push (a capture's push in and its ease back, a curtain step's move,
     a stat's push to its hotspot), that push is **softened**: its log zoom scaled by limit / count ×
-    0.9, never below 1.25 (`flash.softened`: push key → zoom; the step records `gentled`, the zoom it
-    asked for);
+    0.9, never below 1.25 (`flash.softened`: push key → the share of its log zoom the push keeps, so
+    its zoom is z_full^share; the step, and a stat's `move`, record that share as `gentled`);
   - else a slot between them is **held** a beat (`flash.held`: slot → beats, at most 2): a capture
     (`S07`: a quiet capture plays a beat longer, a step's picture a beat before its words land and
     its push starts), a montage picture, a curtain after its entry (`C1.0`) or after step k's sweep
@@ -953,10 +962,15 @@ of the right edge.
   Each fix shifts the measured transitions as it would (a hold moves what follows a beat later, a
   slow stretches its move), so one render finds most fixes; the film is then planned and metered
   again (at most 6 passes; a pass re-renders only from the shot before the first change). Every
-  shot, sweep and landing stays on the beat grid. The plan records `flash` (hashed: `{limit,
-  estimate, frame, proxy, held, slowed, softened, passes}`); when the estimate stays above the limit
-  a warning says so ("flash margin: the planner estimates …"), and the render meter remains the
-  final check. Estimates are memoised by the proxy plan's hash within a process. The demo films
+  shot, sweep and landing stays on the beat grid. The plan records what decides frames as `flash`
+  (hashed: `{limit, held, slowed, softened}`) and the measurement as `checks.flash` (not hashed:
+  `{estimate, frame, proxy, measures, passes}`); when the estimate stays above the limit a warning
+  says so ("flash margin: the planner estimates …"), and the render meter remains the final check.
+  A proxy's transitions are memoised by its plan hash within a process and cached on disk in
+  `work/film/flash/<key>.json` (keyed by the proxy plan's hash, its sizes and a digest of the
+  renderer's sources), so re-planning an unchanged film (`--plan-only`, the package stale check)
+  renders no proxy. `vantage validate` plans without the margin (`plan_films(margin=False)`): it
+  reads only the plans' warnings. The demo films
   measure at most 2 transitions a second at full size (tests/test_film_full.py, slow).
 
 ### plan.json
@@ -1002,14 +1016,16 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
     // story instead: "poster": <frame>: the latest capture at rest without its words (the frame
     // before a step's words land, else its last frame; its dissolve over and the camera back at
     // the rest view), else the title's key frame; never a push, never words over the picture
-    // story also: "flash": {"limit": 2, "estimate": 2, "frame": 434, "proxy": [270, 480],
-    //   "held": {"S07": 1, "C1.0": 1}, "slowed": {}, "softened": {"S12": 1.25}, "passes": 3}
-    //   (the flash margin, see Safety; held/slowed in beats, softened as the zoom a push keeps)
+    // story also: "flash": {"limit": 2, "held": {"S07": 1, "C1.0": 1}, "slowed": {}, "softened": {"S12": 0.38}}
+    //   (the flash margin, see Safety; held/slowed in beats, softened as the share of its log zoom a
+    //   push keeps: z = z_full^share)
   "facts": {"stalls-to-meadow": {"status": "verified", "releasable": true}},  // snapshot at plan time, NOT hashed;
                                                        // every fact the shots and the tracks print
   "warnings": ["captures 2025-06-14 note: left out of the films (it uses a do-not-print fact)"],  // NOT hashed
   "checks": {"safe": [96, 54, 1824, 1026], "ink": [{"shot": "T1", "layer": "stack", "box": [598, 330, 724, 420]}],
-             "outside": []},                           // NOT hashed: written by the renderer (see Layout presets)
+             "outside": [],                            // NOT hashed: written by the renderer (see Layout presets)
+             "flash": {"estimate": 2, "frame": 434, "proxy": [270, 480], "measures": [[135, 240], [67, 120]],
+                       "passes": 3}},                  // story: the flash margin's measurement (see Safety)
   "encode": {"crf": 18, "preset": "slow", "threads": 4, "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
              "bufsize": 8030000, "threads": 4} | null, "gop": null | 48, "tracks": true, "lang": "eng"},  // NOT hashed: bytes, not frames
                                                        // tracks: embed captions and chapters; lang: ISO 639-2
@@ -1222,7 +1238,8 @@ that is not `auto` (such as `screen`).
    facts.yaml. Every film text comes from YAML that `check_release` already scans, so in
    `package --release` this is a second line behind it; `check_films` and build.json
    `films.<id>.unreleasable` report it on their own.
-7. `render.flash.pass` is false (every cut is metered; a failing film is never written).
+7. `render.flash.pass` is false (every cut is metered; a failing film is never written), or
+   `render.flash.max_transitions_per_s` is over its `limit` (the film's flash margin).
 8. `require_approval` is on and neither the hash nor its first 12 characters is listed in any
    `approvals.yaml` `approvals[].films`.
 9. Text outside the safe zone: `checks.outside` is not empty, or the plan has no `checks`. (`vantage
@@ -1263,7 +1280,8 @@ it is never pointed to.
 ```python
 vantage.models.FilmPlan                     # .load(path) / .save(path) / .hash; models.canonical_json
 vantage.film.plan.plan_films(project: Project, *, only: Sequence[str] | None = None,
-                             fast: bool | None = None) -> dict[str, FilmPlan]   # pure; hashes inputs
+                             fast: bool | None = None, margin: bool = True) -> dict[str, FilmPlan]
+    # hashes inputs; renders only flash proxies (cached in work/film/flash/); margin=False: none
 vantage.film.plan.check_films(project: Project, film_dir: Path) -> list[str]    # release problems
 vantage.film.plan.film_records(project: Project, film_dir: Path) -> tuple[dict, list[str]]  # build.json films + problems
 vantage.film.render.render_film(project, out_dir, *, only=None, release=False, plan_only=False,

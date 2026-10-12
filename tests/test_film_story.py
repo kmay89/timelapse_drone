@@ -1452,7 +1452,7 @@ def test_demo_story_cut(tmp_path):
         p = plan.plan
         assert p["cut"] == "story" and p["grid"]["beats"] == {"16x9": 85, "9x16": 73}[fid], (fid, p["grid"])
         check_plan(p)
-        assert p["flash"]["limit"] == 2 and p["flash"]["estimate"] <= 2, (fid, p["flash"])
+        assert p["flash"]["limit"] == 2 and plan.checks["flash"]["estimate"] <= 2, (fid, plan.checks)
         shot = next(s for s in p["shots"] if s.get("step") and s["step"]["words"] == "Demolition.")
         step = shot["step"]
         mv = MastersIndex.load(root / "masters" / "index.json").vantages["overview"]
