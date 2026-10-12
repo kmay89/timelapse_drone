@@ -26,7 +26,7 @@ from test_film import FILM, SIZE, make_project
 from vantage.cli import check_project
 from vantage.config import Project, load_project
 from vantage.film import beat
-from vantage.film.cut import CURTAIN_LABEL, RISE, SMALL_CONTRAST, _Cut, words_set
+from vantage.film.cut import CURTAIN_LABEL, RISE, SMALL_CONTRAST, _Cut, panel_from, words_set
 from vantage.film.layout import Layout
 from vantage.film.plan import SIMULATED_NOTE, check_films, plan_films, resolve_films
 from vantage.film.render import _render_one, film_jobs, render_film
@@ -963,7 +963,7 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
     panel = cut.stat_runs["N1"]["panel"]
     ys, xs = np.nonzero(panel.alpha[..., 0] > 0.5 * panel.alpha.max())
     ys, xs = ys + panel.y, xs + panel.x
-    for f in range(n1["f0"], n1["land"] - third):  # before the panel's B/3: the bare picture
+    for f in range(n1["f0"], panel_from(n1, B)):  # before the panel rises: the bare picture
         frame = cut.frame_at(f).astype(np.int16)
         saved = cut.stat_runs["N1"]["panel"]
         cut.stat_runs["N1"]["panel"] = None
@@ -1473,13 +1473,21 @@ def test_montage_shows_the_other_vantage(tmp_path):
         assert first["dissolve"]["from"] == prev["capture"] and prev["kind"] == "capture"
         assert prev["vantage"] == "site"
         # The scrub's picture keeps its own camera through the dissolve; the camera cuts to the
-        # montage's rest view on its first frame and then drifts in by at most 4 %.
+        # montage's rest view on its first frame and then drifts in by 4 % over the montage, and
+        # on through the stat on its last picture as one move: it never stops on the way (no
+        # held window between the montage's first frame and the drift's end).
         cut = _Cut(project, FilmPlan(id=fid, plan=p))
         assert first["dissolve"]["cam"] == list(cut.camera(first["f0"] - 1))
         assert cut.camera(first["f0"]) == (0.5, 0.5, 1.0)  # the water vantage's rest view
         zooms = [cut.camera(f)[2] for f in range(first["f0"], run[-1]["f1"])]
-        assert all(b >= a for a, b in itertools.pairwise(zooms)) and zooms[-1] <= 1.04 + 1e-9
+        assert all(b >= a for a, b in itertools.pairwise(zooms)) and zooms[-1] <= 1.04**2 + 1e-9
         assert zooms[-1] > 1.0 or fid == "9x16"  # the tiny 9:16 masters are at max_upscale at rest
+        if zooms[-1] > 1.0:
+            move = stat["move"]
+            assert move["how"] == "drift" and move["f1"] > stat["land"], move
+            zooms = [cut.camera(f)[2] for f in range(first["f0"], move["f1"] + 1)]
+            assert all(b > a for a, b in itertools.pairwise(zooms[1:])), "the drift stops on the way"
+            assert zooms[-1] == pytest.approx(1.04**2) and move["focus"][2] == pytest.approx(1.04**2)
         step = first["step"]
         assert first["text"][1] == {"role": "words", "text": "From the water"}
         assert step["words"] == "From the water" and step["words_from"] == "kicker" and not step["push"]
@@ -1499,6 +1507,73 @@ def test_montage_shows_the_other_vantage(tmp_path):
     from vantage.film.storyboard import tiles
 
     assert [t.kind for t in tiles(_plan(project)) if t.shot == run[0]["id"]] == ["montage"]
+
+
+def test_stats_after_a_montage_close_on_two_pictures(tmp_path):
+    """After a montage the run's first stat sits on its last picture and the next on the main
+    vantage's latest, dissolving to it under the panel, so the close is not one photograph. The
+    montage's drift carries on through the first stat as one move that never stops, and keeps what
+    changed on the picture (a bright block near its right edge) in frame as it closes in, where a
+    drift about the centre would cut it."""
+    project = tiny(
+        tmp_path / "p", chapters=[RUN, GALLERY], extra={"water": list(WATER)}, film={"vertical": True},
+        simulated=True,
+    )  # fmt: skip
+    project = _facts(project.root, area=AREA, trees=TREES)
+    rng = np.random.default_rng(3)
+    base = np.empty((SIZE[1], SIZE[0], 3), np.float32)
+    base[:] = (90, 80, 60)
+    base += rng.normal(0, 6, base.shape).astype(np.float32)
+    block = (0.86, 0.45, 0.98, 0.55)  # x0, y0, x1, y1: what the last flight shows that the first did not
+    for date in WATER:
+        img = base.copy()
+        if date == WATER[-1]:
+            img[
+                round(block[1] * SIZE[1]) : round(block[3] * SIZE[1]),
+                round(block[0] * SIZE[0]) : round(block[2] * SIZE[0]),
+            ] = 240
+        cv2.imwrite(str(project.masters_dir / "water" / f"{date}.jpg"), np.clip(img, 0, 255).astype(np.uint8))
+    plan = _plan(project)
+    p = plan.plan
+    check_plan(p)
+    run = [s for s in p["shots"] if s.get("montage")]
+    n1, n2 = (s for s in p["shots"] if s["kind"] == "stat")
+    latest = MastersIndex.load(project.masters_dir / "index.json").vantages["site"].captures[-1]
+    assert n1["file"] == run[-1]["file"] and n1["dissolve"] is None
+    assert (n2["vantage"], n2["file"]) == ("site", latest.file), n2
+    d = n2["dissolve"]
+    assert (d["from"], d["f0"], d["f1"]) == ("N1", n2["f0"], n2["f0"] + D) and n2["land"] == n2["f0"] + B
+    # One drift from the montage's first frame to the end of N1's: it never stops on the way.
+    cut = _Cut(project, plan)
+    move = n1["move"]
+    assert move["how"] == "drift", move
+    zooms = [cut.camera(f)[2] for f in range(run[0]["f0"], move["f1"] + 1)]
+    assert all(b > a for a, b in itertools.pairwise(zooms[1:])), "the drift stops on the way"
+    # Its end view still holds the block whole; zooming in about the rest view's centre would not.
+    mv = MastersIndex.load(project.masters_dir / "index.json").vantages["water"]
+    geo = Geometry(p["width"], p["height"], mv.width, mv.height)
+    x, y, z = cut.camera(move["f1"])
+    cx, cy = geo.centre(x, y, z)
+    hw, hh = geo.half(z)
+    assert cx - hw <= block[0] and block[2] <= cx + hw and cy - hh <= block[1] and block[3] <= cy + hh
+    assert 0.5 + geo.half(z)[0] < block[2]
+    # Under the panel: half way through the dissolve the panel is up, N1's text gone, N2's not in.
+    f = n2["f0"] + D // 2
+    frame = cut.frame_at(f).astype(np.int16)
+    panel = cut.stat_runs["N2"]["panel"]
+    assert panel is cut.stat_runs["N1"]["panel"]
+    cut.stat_runs["N1"]["panel"] = None
+    try:
+        without = cut.frame_at(f).astype(np.int16)
+    finally:
+        cut.stat_runs["N1"]["panel"] = panel
+    assert np.abs(frame - without).max() > 20, "no panel under the change of picture"
+    with _NoText(cut):
+        bare = cut.frame_at(f).astype(np.int16)
+    for sid in ("N1", "N2"):
+        for layers in (cut.layers[sid]["glyphs"], cut.layers[sid]["rest"]):
+            c = _cores(layers, cut.width, cut.height)
+            assert np.abs(frame[c] - bare[c]).max(axis=1).mean() < 3, (sid, f)
 
 
 def test_montage_frames(tmp_path):
@@ -1585,7 +1660,8 @@ def test_cross_vantage_dissolve_may_cut_the_camera(tmp_path):
 def test_demo_story_cut(tmp_path):
     """The fictional demo end to end (fast footage → masters → plans): both story cuts are 77 beats
     (two figures, two or three montage pictures: story.yaml films, and what the flash margin holds
-    or softens), both close on their stats over the shoreline montage's last picture, both within
+    or softens), both close on their stats (the first over the shoreline montage's last picture, the
+    second over the overview's latest), both within
     the flash margin, the Demolition push frames the slide tower in 16:9 and keeps its reach in
     9:16, the stats print exactly the figures the films name, and "The beach." sits clear of the
     beach."""
@@ -1640,10 +1716,13 @@ def test_demo_story_cut(tmp_path):
         assert {s["vantage"] for s in run} == {"shoreline"}
         assert run[0]["step"]["words"] == "From the water" and "card" not in [s["kind"] for s in p["shots"]]
         stats = [s for s in p["shots"] if s["kind"] == "stat"]
-        assert [f for s in stats for f in s["facts"]] == ["flights", "wave-pool-area"]
-        assert stats[1]["value"] == "13,100", stats
+        assert [f for s in stats for f in s["facts"]] == ["wave-pool-area", "flights"]
+        assert stats[0]["value"] == "13,100", stats
         assert p["shots"].index(stats[0]) == p["shots"].index(run[-1]) + 1
-        assert {s["file"] for s in stats} == {run[-1]["file"]} and stats[0]["dissolve"] is None
+        assert stats[0]["file"] == run[-1]["file"] and stats[0]["dissolve"] is None
+        # The second figure closes over the whole site: the overview's latest, dissolved to under the panel.
+        assert stats[1]["vantage"] == "overview" and stats[1]["capture"] == "2026-09-20", stats[1]
+        assert stats[1]["dissolve"]["from"] == stats[0]["id"]
         # The CI-sized masters leave the stats no zoom to push with: they drift or hold.
         assert all(s["move"]["how"] in ("drift", "hold") for s in stats), [s["move"] for s in stats]
         end = p["shots"][-1]

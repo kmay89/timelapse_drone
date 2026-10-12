@@ -16,8 +16,9 @@ accent rule and grip; their labels are clipped to their own side and shown only 
 reveal intervals. A run of stats is set once (`stat_run`, shared with film/story.py): each figure on
 a fixed digit advance, the figure and its unit sliding into a mask as one block, over a picture
 under one panel in the run's tint whose opacity is measured so the text keeps the contrast WCAG 1.4.3
-asks of its size (`panel_contrast`) over the picture along the camera path; the panel comes in with the first figure, and one stat's text fades
-out before the next figure lands (never two figures, and never a partial one, on screen). The tag's
+asks of its size (`panel_contrast`) over each stat's picture along the camera path; the panel rises
+over the beat before the first figure lands and stays while a stat on another picture dissolves in
+under it, and one stat's text fades out before the next figure lands (never two figures, and never a partial one, on screen). The tag's
 and each date label's scrim are measured too, so their small type keeps 4.5:1 over every picture
 (`scrims`, for plan.json `checks`). Cards,
 plain stat cards and the end card dip to and from their surface in display gamma, like the classic
@@ -412,6 +413,19 @@ def _words_lines(t: _Type, lay: Layout, words: str, zone: str, label_base: float
         x + max(bx[2] for bx in boxes), bases[-1] + boxes[-1][3],
     )  # fmt: skip
     return WordsSet(zone, style, x, first, box, tuple(rows), bases)
+
+
+def panel_from(shot: dict[str, Any], fpb: int) -> int:
+    """The frame a stat run's panel (and its riding line) starts to come in, from the run's first
+    stat: a beat before its figure lands, so the panel rises with the picture rather than popping in,
+    but not before its shot starts or its dissolve is half way (the image before it is leaving), and
+    at least B/3 before the figure lands."""
+    land = shot.get("land", shot["f0"])
+    floor = shot["f0"]
+    d = shot.get("dissolve")
+    if d is not None:
+        floor = max(floor, d["f0"] + (d["f1"] - d["f0"]) // 2)
+    return min(land - max(1, round(fpb / 3)), max(land - fpb, floor))
 
 
 def stat_subject_box(lay: Layout, run: StatRun) -> tuple[float, float, float, float]:
@@ -982,17 +996,16 @@ class _Cut:
     ) -> tuple[float, float]:
         """(alpha, contrast): the least panel opacity (0.30 to 0.95) at which the text colour keeps
         `target` over the 99.5th-worst percentile of the picture under the run's ink, sampled on
-        every beat of the run along its camera path (the luminance of what the panel leaves showing,
-        in display gamma as `_put` mixes it); and the contrast it gives."""
+        every beat of each stat over its own picture along the camera path (the luminance of what
+        the panel leaves showing, in display gamma as `_put` mixes it); and the contrast it gives."""
         from vantage.film.safety import _BGR_WEIGHTS, _SRGB_TO_LINEAR
 
         x0, y0 = max(0, math.floor(box[0])), max(0, math.floor(box[1]))
         x1, y1 = min(self.width, math.ceil(box[2])), min(self.height, math.ceil(box[3]))
-        file = run[0]["file"]
-        f0, f1 = run[0]["f0"], run[-1]["f1"]
         samples = [
-            self._warp(file, self.camera(f))[y0:y1:2, x0:x1:2].reshape(-1, 3)
-            for f in [*range(f0, f1, self.fpb), f1 - 1]
+            self._warp(shot["file"], self.camera(f))[y0:y1:2, x0:x1:2].reshape(-1, 3)
+            for shot in run
+            for f in [*range(shot["f0"], shot["f1"], self.fpb), shot["f1"] - 1]
         ]
         px = np.concatenate(samples).astype(np.float32)
         weights = _BGR_WEIGHTS.astype(np.float64)
@@ -1379,7 +1392,8 @@ class _Cut:
         _put(frame, run["panel"], 1.0 if within else intro if panel is None else panel)
         self._stat_text(frame, i, f, intro)
         if run["ride"] is not None:
-            seen = 1.0 if within else ramp(f, shot.get("land", shot["f0"]) - self.third, self.third)
+            a, land = panel_from(shot, self.fpb), shot.get("land", shot["f0"])
+            seen = 1.0 if within else ramp(f, a, land - a)
             _put(frame, run["ride"], seen * intro)
 
     def _stat(self, i: int, f: int) -> np.ndarray:
@@ -1411,21 +1425,23 @@ class _Cut:
         d = shot.get("dissolve")
         w = ramp(f, d["f0"], d["f1"] - d["f0"]) if d else 1.0
         mixed = d is not None and d["from"] not in SURFACES
+        within = prev is not None and prev["kind"] == "stat"  # a stat of the run on another picture
         intro = 1.0
         if mixed and d is not None:
             if w < 1:
                 frame = _mix(self._bare(i - 1, f, d.get("cam")), frame, w)
-            half = max(1, (d["f1"] - d["f0"]) // 2)
-            if prev is not None and prev["kind"] in ("capture", "curtain", "stat"):
-                self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
-            intro = ramp(f, d["f0"] + half, d["f1"] - d["f0"] - half)
+            if not within:  # into the run: the image before leaves with its overlays
+                half = max(1, (d["f1"] - d["f0"]) // 2)
+                if prev is not None and prev["kind"] in ("capture", "curtain"):
+                    self._ghost(frame, i - 1, 1 - ramp(f, d["f0"], half))
+                intro = ramp(f, d["f0"] + half, d["f1"] - d["f0"] - half)
         elif d is None and prev is not None and prev["kind"] == "capture":  # on the picture as it was
             self._ghost(frame, i - 1, 1 - ramp(f, f0, max(1, self.fpb // 2)))  # its overlays leave
-        # The panel comes in with the text: over the B/3 before the figure lands, whole as it
-        # lands (a held entry, "N1.0", shows the bare picture until then).
+        # The panel rises over the beat before the first figure lands (`panel_from`), whole as it
+        # lands (a held entry, "N1.0", shows the bare picture until then); within the run it stays.
         land = shot.get("land", f0)
-        a = max(land - self.third, d["f0"] + (d["f1"] - d["f0"]) // 2 if mixed and d is not None else f0)
-        panel = ramp(f, a, max(1, land - a)) if land > a else intro
+        a = panel_from(shot, self.fpb)
+        panel = ramp(f, a, land - a)
         self._stat_overlays(frame, i, f, intro, panel)
         self._put_tag(frame)
         if d is not None and not mixed and w < 1:

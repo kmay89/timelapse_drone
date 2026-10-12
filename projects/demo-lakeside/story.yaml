@@ -14,7 +14,7 @@ vantages:
   - id: shoreline
     name: From over the water, looking back at the beach
     kind: drone
-    portrait_focus: [0.44, 0.40]
+    portrait_focus: [0.54, 0.40]
     reference: { source: "2026-09-20/DJI_20260920172744_0002.JPG" }
     hint: { lat: 40.950086, lon: -82.044208, alt_m: 74, heading_deg: -164, gimbal_pitch_deg: -45 }
 
@@ -253,9 +253,10 @@ chapters:
 # loop (75 bpm, large type, overscan-safe), rendered only on request:
 #   uv run vantage film demo-lakeside --film screen [--hours 1]
 films:
-  # Two figures (by their facts: the flights, and the pool that became the beach the shoreline shows)
-  # and two or three looks from the water; the stats close each film over the montage's last picture.
+  # Two figures (by their facts: the pool that became the beach the shoreline shows, then the
+  # flights) and two or three looks from the water. The first figure lands over the montage's last
+  # picture, the beach and splash pad it names; the second over the whole site, the overview's latest.
   # The loop shows the same two: a meadow the shoreline picture does not show is not its figure.
-  16x9: { stats: [flights, wave-pool-area], montage: 2 }
-  9x16: { stats: [flights, wave-pool-area], montage: 3 }
-  screen: { preset: screen, stats: [flights, wave-pool-area] }
+  16x9: { stats: [wave-pool-area, flights], montage: 2 }
+  9x16: { stats: [wave-pool-area, flights], montage: 3 }
+  screen: { preset: screen, stats: [wave-pool-area, flights] }

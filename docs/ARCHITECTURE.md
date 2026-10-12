@@ -599,13 +599,15 @@ chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's wor
 Shots come from the chapters in scope, in story order: the first hero → title; each scrub chapter →
 a series of captures; each compare chapter → a curtain; the first stats chapter → stat shots;
 each gallery chapter on a drone vantage other than the main one → a montage; then the end card. One
-exception: when the film has a montage, its stat run (over a picture) moves after the last montage
-and sits on its last picture, so the middle of the film is not one photograph and the film closes
-on its figures over the site seen anew. Explore, text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
+exception: when the film has a montage, its stat run (over a picture) moves after the last montage:
+its first figure sits on the montage's last picture and the next on the main vantage's latest, so
+neither the middle of the film nor its close is one photograph, and the film closes on its figures
+over the site seen anew. Explore, text, timeline and video chapters are not used. A film with no scrub or compare chapter in scope
 plays the main vantage's captures as one quiet series. For the demo at full size the 16:9 cut is
 80 beats (48.0 s: two figures and two montage pictures, story.yaml `films.16x9`) and the 9:16 79
 (47.4 s: two figures and three montage pictures, `films.9x16`), each with 5.4 s on night (the end
-card) after the stats over the shoreline montage's last picture, and with the
+card) after the stats (the first over the shoreline montage's last picture, the second over the
+overview's latest), and with the
 holds and softened pushes of its flash margin (see Safety); from the CI-sized demo footage, whose
 small masters leave little to push, they are 77 and 77 beats.
 
@@ -663,7 +665,8 @@ small masters leave little to push, they are 77 and 77 beats.
   contrast is measured over the first two pictures), and the first picture lasts until they read
   at 17 characters a second (3 beats for "From the water"); they fade out with the next dissolve. No
   push: the camera cuts to the vantage's rest view on the run's first frame and drifts in by 4 %
-  (`DRIFT`, within `max_upscale`) to its last frame, held through the dip into what follows.
+  (`DRIFT`, within `max_upscale`) to its last frame, held through the dip into what follows; a stat
+  that drifts on its last picture carries that drift on as the same move (see **stat**).
 - **Vantage change without a card** (a montage, or a stat run over the main vantage's picture after
   another vantage's image): the outgoing picture keeps the framing of its last frame through the
   dissolve (`dissolve.cam` [x, y, zoom]) and the camera cuts to the new shot's rest view on the
@@ -710,13 +713,19 @@ small masters leave little to push, they are 77 and 77 beats.
   scope, in order, whose value contains a `{fact:}` token. Any other item, and any item whose value,
   unit, label or source uses a do-not-print fact, is left out with a plan warning. The stats of a
   chapter form a **run**.
-  - Picture (`backdrop: picture`, the default): the last montage's last picture when the film has a
-    montage (the run follows it with no dissolve: the montage's label and rail leave over half a
-    beat, and the first figure lands a beat in), else the main vantage's latest capture (`vantage`,
-    `capture`, `file`), the picture the curtain ends on, so the cut flows on without a dip. Over the
-    main vantage's picture the run's first stat opens with a D-frame `dissolve` from the image before it (from the curtain: only
-    the strip still showing `before` changes) whose overlays leave over its first half; the next
-    stats have no dissolve and no dip: the picture and the camera carry on and only the text
+  - Picture (`backdrop: picture`, the default; `vantage`, `capture`, `file`): when the film has a
+    montage, the run's first stat sits on the last montage's last picture (no dissolve: the
+    montage's label and rail leave over half a beat, and the first figure lands a beat in) and the
+    next ones on the main vantage's latest capture (`story._backdrops`), so the close is never one
+    photograph held under every figure (the order is the film's `stats` order); else every stat sits
+    on the main vantage's latest capture, the picture the curtain ends on, so the cut flows on
+    without a dip. Over the main vantage's picture the run's first stat opens with a D-frame
+    `dissolve` from the image before it (from the curtain: only the strip still showing `before`
+    changes) whose overlays leave over its first half. A stat on another picture than the stat
+    before it dissolves to it (D frames, `from: <stat id>`; from another vantage the outgoing
+    picture keeps its framing) under the panel, which stays with the riding line; its figure lands
+    on the first beat after the dissolve (the flash margin may hold it, `N<n>.0`). The next stats on
+    one picture have no dissolve and no dip: the picture and the camera carry on and only the text
     changes, in sequence (the previous stat's text out over its last B/3 frames, then the new
     figure slides in on the beat, then its label and source fade in). After a card the first stat
     dips in from night.
@@ -726,17 +735,19 @@ small masters leave little to push, they are 77 and 77 beats.
     at which the text colour keeps what WCAG 1.4.3 asks of the smallest text on it
     (`cut.panel_contrast`: 3:1 when every figure, unit, label, source and riding line is large, at
     least 18 pt seen on a phone, `LARGE_TEXT` = 66 px at a 1080 px short edge; else 4.5:1) over
-    the 99.5th-worst percentile of the picture under the run's ink box, sampled on every beat along
-    the camera path. It comes in with the text, over the B/3 frames before the first figure lands
-    (a held entry, `N1.0`, shows the bare picture until then, never an empty panel), and stays
-    through the run. Recorded in plan.json `checks.scrims`.
+    the 99.5th-worst percentile of the picture under the run's ink box, sampled on every beat of each
+    stat over its own picture along the camera path. It rises with the riding line over the beat
+    before the first figure lands (`cut.panel_from`: from the shot's first frame, or half way
+    through its dissolve, and at least B/3; a held entry, `N1.0`, shows the bare picture until
+    then), so it never pops in, and stays through the run. Recorded in plan.json `checks.scrims`.
   - Placement (`place`): `low` (the stats' bottoms on one line above the riding honesty line, which
     rests on the safe bottom, or above the tag in 9:16) or `high` (the figures' cap tops on the
     label line, or under a top-right tag; the honesty line under the tallest stat), whichever lets
     more of the run's pushes frame their hotspot clear of the panel; between places that frame as
-    many, the one whose panel (its ink box padded by 44 units) covers the smaller share of the
-    picture's subject at the rest view (`place_subject`; film/subject.py: what changed since the
-    vantage's first picture, and the stats' hotspots; ties: low). Everything shrinks
+    many, the one whose panel (its ink box padded by 44 units) covers the smaller share of its
+    pictures' subjects, averaged over the run's stats in the view each ends on (its push target,
+    else the rest view) (`place_subject`; film/subject.py: what changed since the vantage's first
+    picture, and the stats' hotspots; ties: low). Everything shrinks
     together until the run fits in the safe zone (`cut.stat_run`, shared by story.py and the
     renderer).
   - Camera (`move`: `{how, subjects, focus, upscale, f0, f1}`, plus `gentled`, the share of its log
@@ -745,9 +756,15 @@ small masters leave little to push, they are 77 and 77 beats.
     capture, pushes toward it from its landing to B/3 before its end (at least B + B/3 frames):
     `aim` asks for zoom 1.6 (`STAT_ZOOM`), clamped by `max_upscale` and lowered until the hotspot
     sits in the safe zone clear of the panel, within `MAX_TRAVEL` of the rest view (`how:
-    focus+subject:<id>`). Any other stat drifts in by 4 % over the same span (`drift`), or holds
+    focus+subject:<id>`). Any other stat drifts in by 4 % (`drift`) to B/3 before its end, or holds
     (`hold`) when there is no zoom to spare; a hotspot that cannot be framed adds `, subject
-    off-frame:<id>`. A push before the run eases back to the rest view over its first B + B/3 frames.
+    off-frame:<id>`. A drift closes in about the middle 80 % of what changed on its picture
+    (`DRIFT_EXTENT`, `story._subject_extent`: the subject map's mass inside the rest view), moved as
+    little as it takes to keep all of it in frame (`_drift_to`). A drift that follows a drift on the
+    same picture (the montage's, a stat's) carries it on as one move from where it began
+    (`_Camera.drift`), so the picture never stops on a stat's beat; the stats it carries share its
+    `focus` and `f1`. A push before a stat's picture eases back to the rest view over its first
+    B + B/3 frames.
     A push of more than 1.25 output px per master px is a "soft push" warning, as for steps.
   - Value: the numeric face at 220 units, every digit on a fixed advance equal to the widest digit
     (tabular figures without raqm; other glyphs keep their own advance), shifted so the first
@@ -767,7 +784,7 @@ small masters leave little to push, they are 77 and 77 beats.
     B/3 before another stat of the run), so label and source are fully on screen for as long as
     they take to read at 17 characters a second (the figure itself is read at a glance); the last
     stat of a run carrying the honesty line (and the disclaimer after it) is lengthened until that
-    text, fully on from the first stat's `land` (it comes in with the panel over the B/3 before),
+    text, fully on from the first stat's `land` (it comes in with the panel over the beat before),
     reads too.
   - The last stat's text holds to the shot's last frame: what follows dissolves (an image) or dips
     (a card, the end card) from the stat as it is, panel and text included.
@@ -790,13 +807,13 @@ small masters leave little to push, they are 77 and 77 beats.
   dip (`END_MAX_S`) and the film has stats, the honesty line **rides along** under the stat run
   instead (`ride: true` here; the stats' `honesty`: 30 units in 16:9 (at least 36 px at a 1080 px short
   edge), 38 in 9:16, in with the
-  panel over the B/3 before the first figure lands and held to the run's end, which lasts until it
+  panel over the beat before the first figure lands and held to the run's end, which lasts until it
   reads), then the disclaimer too (after the honesty line, one riding text). A card still over 6 s
   leaves the partners out (a warning), and one over 6 s even so is a warning too: with no stats the
   card carries the honesty line and disclaimer however long they take. The
   honesty line says "simulated" when it is, so no SIMULATED_NOTE is added (classic cuts keep it).
   For the demo the card is 9 beats (5.4 s) and the honesty line and disclaimer ride along the
-  stats for 9.2 s in the 9:16 cut.
+  stats for 9.6 s in the 9:16 cut.
   The honesty line comes from `provenance`:
   - `photo`: "Every frame is made from real aerial photographs. No in-between images are invented."
   - `simulated`: "Every frame is made from the simulated flights. No in-between images are invented."
