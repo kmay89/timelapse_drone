@@ -745,9 +745,10 @@ def test_stats_are_facts_only(tmp_path):
     assert any("'42' is not a {fact:} token" in w for w in plan.warnings), plan.warnings
     assert any("stat 1" in w and "do-not-print" in w for w in plan.warnings), plan.warnings
     assert "secret" not in plan.facts
-    # The renderer sets one layer per glyph of the plan's value: it never draws another number.
+    # The renderer sets one layer per glyph of the plan's value, and its unit, which slides in with
+    # it: it never draws another number.
     cut = _Cut(project, plan)
-    assert len(cut.layers[stat["id"]]["glyphs"]) == len("13,100")
+    assert len(cut.layers[stat["id"]]["glyphs"]) == len("13,100") + len(["sq ft"])
     first = cut.frame_at(stat["land"] + 1).astype(np.float32)
     landed = cut.frame_at(stat["key"]).astype(np.float32)
     assert np.abs(first - landed).mean() > 1  # the figure slides in, then holds
@@ -933,6 +934,14 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
             with _NoText(cut):
                 bare = cut.frame_at(f).astype(np.int16)
             assert np.abs(frame[words] - bare[words]).max(axis=1).mean() < 3, (stat["id"], f)
+    # The unit lands with its figure, as one block: whole when the figure is, before the label.
+    ux, uy, uw, uh = next(i["box"] for i in cut.ink if i["shot"] == "N2" and i["layer"] == "unit")
+    whole = n2["land"] + half - 1  # the slide's last frame, the one before its label starts in
+    frame = cut.frame_at(whole).astype(np.int16)
+    with _NoText(cut):
+        bare = cut.frame_at(whole).astype(np.int16)
+    unit = np.abs(frame[uy : uy + uh, ux : ux + uw] - bare[uy : uy + uh, ux : ux + uw]).max(axis=2)
+    assert np.quantile(unit, 0.95) > 40, np.quantile(unit, 0.95)
     frame = cut.frame_at(n2["f0"] - 1).astype(np.int16)  # N1's last frame: its text is gone
     with _NoText(cut):
         bare = cut.frame_at(n2["f0"] - 1).astype(np.int16)

@@ -877,11 +877,12 @@ class _Cut:
                     ink_bottom = max(ink_bottom, box[3])
                 x += a
             rest = []
-            if unit:
-                layer, _ = self._ink(
+            if unit:  # it slides in with the figure, one block: never a figure without its unit
+                layer, box = self._ink(
                     [(x + 0.18 * value_s.size * u, base, unit, unit_s, "l")], shadow=0.0, note=(sid, "unit")
                 )
-                rest.append(layer)
+                glyphs.append(layer)
+                ink_bottom = max(ink_bottom, box[3])
             for line, y in zip(st.label_lines, st.label_bases, strict=True):
                 layer, _ = self._ink([(lay.margin, y, line, label_s, "l")], shadow=0.0, note=(sid, "label"))
                 rest.append(layer)
