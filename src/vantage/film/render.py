@@ -26,7 +26,8 @@ VANTAGE_FILM_JOBS=1 renders them one after another, with the same bytes) and ren
 the original numbers, classic-9x16 the story safe zone) and inputs all come from the plan, so a plan
 read back from plan.json renders the same bytes. Both renderers record the ink box of every typeset
 layer (`ink`); `check_ink` writes them to plan.json `checks` and turns any box outside the safe zone
-into a plan warning (an error with --release). Frames are composed with numpy/OpenCV and
+into a plan warning (an error with --release), as is a story cut's stat run whose words had to be
+set under the type floor to fit (film/cut.py `stat_type_problem`). Frames are composed with numpy/OpenCV and
 piped to ffmpeg (media.ffmpeg.FrameWriter). Text is typeset once per card and capture with Pillow in
 the brand fonts and alpha-composited, so a frame costs one warp, the occasional blend and a few small
 composites. VANTAGE_FAST=1 caps the long edge at 960 px and encodes with a fast preset.
@@ -806,6 +807,10 @@ def _render_parts(
         raise ReleaseError(
             f"release film {plan.id} blocked: text outside the safe zone:\n  " + "\n  ".join(ink)
         )
+    small = list(getattr(film, "small", []))  # story cuts: stat words set under the type floor
+    plan.warnings.extend(w for w in small if w not in plan.warnings)
+    if release and small:
+        raise ReleaseError(f"release film {plan.id} blocked: " + "; ".join(small))
     try:
         if plan_only:
             plan.render = None

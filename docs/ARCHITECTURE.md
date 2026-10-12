@@ -766,9 +766,13 @@ small masters leave little to push, they are 77 and 77 beats.
     many, the one whose panel (its ink box padded by 44 units) covers the smaller share of its
     pictures' subjects, averaged over the run's stats in the view each ends on (its push target,
     else the rest view) (`place_subject`; film/subject.py: what changed since the vantage's first
-    picture, and the stats' hotspots; ties: low). Everything shrinks
-    together until the run fits in the safe zone (`cut.stat_run`, shared by story.py and the
-    renderer).
+    picture, and the stats' hotspots; ties: low); a place whose words keep their full size beats
+    one where they shrink. Labels and sources wrap (balanced) to the text width. A run taller than
+    the safe zone shrinks its figures first, down to 0.6 of their size (`FIGURE_MIN`), and only
+    then every size together until it fits (`cut.stat_run`, shared by story.py and the renderer):
+    words set under their size (the type floor below) are a plan warning (`cut.stat_type_problem`)
+    and block a `--release` render. Before that, the honesty line and disclaimer only ride under a
+    run that keeps its words at full size in one of its places; else the end card keeps them.
   - Camera (`move`: `{how, subjects, focus, upscale, f0, f1}`, plus `gentled`, the share of its log
     zoom kept, when the flash margin softened its push): a stat whose facts are printed in
     the label or body of a hotspot of a scrub or compare chapter on that vantage, shown at that

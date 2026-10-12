@@ -1374,7 +1374,7 @@ def _place_stats(
     from vantage.film.subject import under
 
     lay = b.layout
-    best: tuple[tuple[int, float], str, list[tuple[Cam | None, str] | None]] | None = None
+    best: tuple[tuple[bool, int, float], str, list[tuple[Cam | None, str] | None]] | None = None
     covered: dict[str, float] = {}
     for place in ("low", "high"):
         run = stat_run(t, lay, items, honesty, place, tagged)
@@ -1406,7 +1406,8 @@ def _place_stats(
             view = x[0] if x is not None and x[0] is not None else pic.rest
             shares.append(under(maps[at[k]] if at[k] < len(maps) else None, [_crop(pic.geo, view)], panel))
         covered[place] = round(sum(shares) / max(1, len(shares)) * area, 3)
-        score = (sum(1 for x in aims if x is not None and x[0] is not None), -covered[place])
+        full = run.words >= 1 - 1e-6  # its words at full size (`stat_type_problem`)
+        score = (full, sum(1 for x in aims if x is not None and x[0] is not None), -covered[place])
         if best is None or score > best[0]:
             best = (score, place, aims)
     assert best is not None
@@ -1480,6 +1481,11 @@ def _stats(
         return place, kept, covered, keep
 
     place, kept, covered, keeps = b.decide(f"stats:{cid}", placed)
+    from vantage.film.cut import stat_run, stat_type_problem
+
+    first_id = f"N{sum(s['kind'] == 'stat' for s in b.shots) + 1}"
+    if small := stat_type_problem(film.id, first_id, stat_run(t, lay, items, honesty, place, tagged)):
+        b.warnings.append(small)
     aims: list[tuple[Cam | None, str] | None] = [
         None if x is None else ((tuple(x[0]) if x[0] else None), x[1])  # type: ignore[misc]
         for x in kept
@@ -1643,7 +1649,13 @@ def _stats(
     return None if plain or held == end_rest else held
 
 
-def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, Any]) -> dict[str, Any]:
+def _end_text(
+    b: _Builder,
+    honesty: str,
+    has_stats: bool,
+    last_part: tuple[str, Any],
+    fits: Callable[[str], bool] = lambda _ride: True,
+) -> dict[str, Any]:
     """The end card's text and length. A loop's: the brand and the short URL, `end_beats` or as long
     as they take to read after the dip, with the honesty line and the disclaimer riding under its
     stats (when it has stats). Any other
@@ -1652,7 +1664,8 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
     a glance, as legal text is). The card takes as long as its words take to read at 17 characters
     a second after its dip (the partners a beat to scan), plus the last beat its text fades out
     over, and at least `end_beats`. When that is over END_MAX_S and the film has stats, the honesty
-    line rides along under the stats instead (`ride`), then the disclaimer too; a card still over
+    line rides along under the stats instead (`ride`), then the disclaimer too, as long as the run
+    still `fits` with them (its words at full size, `stat_run`); a card still over
     END_MAX_S leaves the partners out (a warning), and one over it even so is a warning too (a film
     without stats has nothing for its honesty line to ride along with).
     Returns {text, facts, ride, ride_facts, beats(dip)}."""
@@ -1705,6 +1718,8 @@ def _end_text(b: _Builder, honesty: str, has_stats: bool, last_part: tuple[str, 
 
     for text in (honesty, disclaimer):
         if text and has_stats and need(read(), bool(partners), dip0) > most:
+            if not fits(" ".join([*riding, text])):
+                break  # the run would set its words under the type floor: the card keeps the rest
             card.remove(text)
             riding.append(text)
     if partners and need(read(), True, dip0) > most:
@@ -1987,7 +2002,22 @@ def _derive_cut(
         last = max(k for k, p in enumerate(parts) if p[0] == "montage")
         parts.insert(last + 1, stat_part)
         on_vid, on_cap = montages[-1].vantage, montages[-1].captures[-1]
-    end = _end_text(b, honesty, any(k == "stats" for k, _ in parts), parts[-1])
+    tagged = cfg.simulated or cfg.draft
+
+    def fits(ride: str) -> bool:
+        """Whether the stat run sets its words at full size, in either place, with `ride` under it."""
+        if stat_part is None:
+            return True
+        from vantage.film.cut import stat_run
+
+        def full() -> bool:
+            t = _stat_type(project, fonts, lay)
+            items = stat_part[1][2]
+            return any(stat_run(t, lay, items, ride, p, tagged).words >= 1 - 1e-6 for p in ("low", "high"))
+
+        return bool(b.decide(f"ride:{ride}", full))  # decided at the full size, like the place
+
+    end = _end_text(b, honesty, any(k == "stats" for k, _ in parts), parts[-1], fits)
 
     def stats_on(vid: str, cap: _Capture) -> _StatsOn:
         first_file = caps.of(vid)[0].file

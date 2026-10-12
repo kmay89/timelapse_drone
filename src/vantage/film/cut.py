@@ -83,7 +83,12 @@ STAT_TYPE = {"landscape": (52.0, 34.0, 30.0), "portrait": (86.0, 58.0, 38.0)}
 STAT_LANDSCAPE_PX = (72.0, 48.0, 36.0)
 STAT_LABEL = _Style("text", 52, 400, "ink", leading=1.22)
 STAT_SOURCE = _Style("text", 34, 400, "ink")
+SOURCE_LEADING = 1.3  # a source too long for one line wraps, like a label
 RIDE = _Style("text", 30, 400, "ink", leading=1.3)
+# A run too tall for the safe zone shrinks its figures first, to FIGURE_MIN of their size (a figure
+# of 220 units is still twice a label's 86 at that), and only then its words with them: words set
+# under their STAT_TYPE size are a plan warning (`stat_type_problem`) and block a release.
+FIGURE_MIN = 0.6
 SMALL_CONTRAST = 4.5  # WCAG 1.4.3 for small text: the tag, the date labels and stat panels keep this
 LARGE_CONTRAST = 3.0  # WCAG 1.4.3 for large text: a stat panel whose every text is large keeps this
 # WCAG's large text (18 pt, 24 CSS px) in film px at a 1080 px short edge, the frame seen 393 pt
@@ -134,7 +139,8 @@ class StatSet:
     label_lines: tuple[str, ...]
     label_bases: tuple[float, ...]
     source_text: str | None
-    source_base: float
+    source_lines: tuple[str, ...]  # the source wrapped to the text width, like the label
+    source_bases: tuple[float, ...]
     box: Box4
 
 
@@ -151,6 +157,18 @@ class StatRun:
     ride_bases: tuple[float, ...]
     box: Box4
     blocks: Box4
+    words: float = 1.0  # the scale the words were set at: under 1, under the type floor (STAT_TYPE)
+
+
+def stat_type_problem(film: str, shot: str, run: StatRun) -> str | None:
+    """A plan warning (an error in a release) when a stat run had to set its words under their
+    STAT_TYPE size to fit the safe zone, else None."""
+    if run.words >= 1 - 1e-6:
+        return None
+    return (
+        f"stats from {shot}: label and source set at {run.words:.0%} of their size to fit the safe zone, "
+        f"under the type floor a phone needs (film {film}); shorten the labels or sources"
+    )
 
 
 def stat_type(lay: Layout) -> tuple[float, float, float]:
@@ -218,8 +236,9 @@ def stat_run(
 ) -> StatRun:
     """Where each stat of a run (items with value, unit, label, source) and the riding honesty line
     sit. Every stat's block is aligned on the run's edge ('low': their bottoms on the line above the
-    honesty line; 'high': their figures' cap tops on one line), so one panel holds them all. Shrunk
-    (all sizes together) until the run fits between the safe top and bottom."""
+    honesty line; 'high': their figures' cap tops on one line), so one panel holds them all. A run
+    taller than the safe top to bottom shrinks its figures first, down to FIGURE_MIN, then every size
+    together until it fits (`words` < 1: under the type floor, `stat_type_problem`)."""
     u = t.unit
     size_l, size_s, size_r = stat_type(lay)
     top_y, bottom_y = float(lay.top), float(lay.bottom)
@@ -230,14 +249,27 @@ def stat_run(
         top_y = max(top_y, lay.top + tag_cap + TAG_CLEAR * u)
     elif place == "high":
         top_y = max(top_y, float(lay.label_top))
-    scale = 1.0
-    for _attempt in range(5):
+    scale = figure = 1.0  # the words' scale, and the figures' on top of it
+    for _attempt in range(9):
         label_s = dataclasses.replace(STAT_LABEL, size=size_l * scale)
         source_s = dataclasses.replace(STAT_SOURCE, size=size_s * scale)
         ride_s = dataclasses.replace(RIDE, size=size_r * scale)
-        rel: list[tuple[_Style, _Style, float, list[str], list[float], str | None, float, float, float]] = []
+        rel: list[
+            tuple[
+                _Style,
+                _Style,
+                float,
+                list[str],
+                list[float],
+                str | None,
+                list[str],
+                list[float],
+                float,
+                float,
+            ]
+        ] = []
         for item in items:
-            value_s, unit_s = stat_values(t, lay, item["value"], item.get("unit"), scale)
+            value_s, unit_s = stat_values(t, lay, item["value"], item.get("unit"), scale * figure)
             cap_v = _cap_of(t, value_s)
             lines = t.wrap(item["label"], label_s, lay.text_width, balanced=True)
             step = label_s.size * u * label_s.leading
@@ -245,11 +277,13 @@ def stat_run(
             bases = [first + k * step for k in range(len(lines))]
             bottom = bases[-1] + _ink_y(t, label_s, lines[-1])[1]
             source = f"Source: {item['source']}" if item.get("source") else None
-            sbase = bases[-1]
-            if source:
-                sbase = bases[-1] + 0.8 * source_s.size * u + _cap_of(t, source_s)
-                bottom = sbase + _ink_y(t, source_s, source)[1]
-            rel.append((value_s, unit_s, cap_v, lines, bases, source, sbase, -cap_v, bottom))
+            slines = t.wrap(source, source_s, lay.text_width, balanced=True) if source else []
+            sbases: list[float] = []
+            if slines:
+                s0 = bases[-1] + 0.8 * source_s.size * u + _cap_of(t, source_s)
+                sbases = [s0 + k * source_s.size * u * SOURCE_LEADING for k in range(len(slines))]
+                bottom = sbases[-1] + _ink_y(t, source_s, slines[-1])[1]
+            rel.append((value_s, unit_s, cap_v, lines, bases, source, slines, sbases, -cap_v, bottom))
         ride_lines = t.wrap(honesty, ride_s, lay.text_width, balanced=True) if honesty else []
         ride_step = ride_s.size * u * ride_s.leading
         ride_cap = _cap_of(t, ride_s)
@@ -263,38 +297,51 @@ def stat_run(
         if place == "low":
             ride_top = bottom_y - ride_h
             edge = ride_top - gap if ride_lines else bottom_y
-            shifts = [edge - r[8] for r in rel]
+            shifts = [edge - r[9] for r in rel]
         else:
             shifts = [top_y + r[2] for r in rel]
-            ride_top = max(s + r[8] for s, r in zip(shifts, rel, strict=True)) + gap
-        tops = [s + r[7] for s, r in zip(shifts, rel, strict=True)]
-        bottoms = [s + r[8] for s, r in zip(shifts, rel, strict=True)]
+            ride_top = max(s + r[9] for s, r in zip(shifts, rel, strict=True)) + gap
+        tops = [s + r[8] for s, r in zip(shifts, rel, strict=True)]
+        bottoms = [s + r[9] for s, r in zip(shifts, rel, strict=True)]
         run_top, run_bottom = min(tops), max(bottoms)
         if ride_lines:
             run_bottom = max(run_bottom, ride_top + ride_h)
         over = max(0.0, top_y - run_top) + max(0.0, run_bottom - bottom_y)
-        if over <= 0.5 or _attempt == 4:
+        if over <= 0.5 or _attempt == 8:
             break
-        scale *= (run_bottom - run_top - over) / (run_bottom - run_top) * 0.98
+        if figure > FIGURE_MIN + 1e-6:  # the figures give way first: their cap height is the run's slack
+            cap = max(r[2] for r in rel)
+            figure = max(FIGURE_MIN, figure * (1 - over / max(cap, 1.0)) * 0.99)
+        else:
+            scale *= (run_bottom - run_top - over) / (run_bottom - run_top) * 0.98
     sets = []
     x0 = float(lay.margin)
     right = x0
-    for (value_s, unit_s, _cap_v, lines, bases, source, sbase, rtop, rbottom), shift, item in zip(
+    for (value_s, unit_s, _cap_v, lines, bases, source, slines, sbases, rtop, rbottom), shift, item in zip(
         rel, shifts, items, strict=True
     ):
         widths = [t.width(line, label_s) for line in lines]
         fig = sum(stat_advances(t, value_s, item["value"]))
         if item.get("unit"):
             fig += 0.18 * value_s.size * u + t.width(item["unit"], unit_s)
-        if source:
-            widths.append(t.width(source, source_s))
+        widths += [t.width(line, source_s) for line in slines]
         x1 = x0 + max([fig, *widths])
         right = max(right, x1)
         box = (x0, shift + rtop, x1, shift + rbottom)
         lines_at = tuple(b + shift for b in bases)
         sets.append(
             StatSet(
-                value_s, unit_s, label_s, source_s, shift, tuple(lines), lines_at, source, sbase + shift, box
+                value_s,
+                unit_s,
+                label_s,
+                source_s,
+                shift,
+                tuple(lines),
+                lines_at,
+                source,
+                tuple(slines),
+                tuple(b + shift for b in sbases),
+                box,
             )
         )
     ride_bases = tuple(ride_top + ride_cap + k * ride_step for k in range(len(ride_lines)))
@@ -305,7 +352,7 @@ def stat_run(
     if ride_lines:
         rw = max(t.width(line, ride_s) for line in ride_lines)
         box = (x0, min(blocks[1], ride_top), max(right, x0 + rw), max(blocks[3], ride_top + ride_h))
-    return StatRun(place, tuple(sets), ride_s, tuple(ride_lines), ride_bases, box, blocks)
+    return StatRun(place, tuple(sets), ride_s, tuple(ride_lines), ride_bases, box, blocks, round(scale, 4))
 
 
 # --------------------------------------------------------------------------- #
@@ -879,6 +926,7 @@ class _Cut:
         self.stat_mask: dict[str, tuple[int, int]] = {}
         self.stat_runs: dict[str, dict[str, Any]] = {}  # shot id → its run's panel and honesty line
         self.panels: list[dict[str, Any]] = []  # measured stat panels, for plan.json checks
+        self.small: list[str] = []  # stat runs set under the type floor (stat_type_problem)
         for i, shot in enumerate(self.shots):
             sid, kind = shot["id"], shot["kind"]
             text = {item["role"]: item["text"] for item in shot["text"]}
@@ -987,6 +1035,8 @@ class _Cut:
         tagged = bool(self.p.get("tag"))
         honesty = first.get("honesty")
         geo = stat_run(t, lay, run, honesty, first.get("place", "low"), tagged)
+        if small := stat_type_problem(self.plan.id, first["id"], geo):
+            self.small.append(small)
         for shot, st in zip(run, geo.sets, strict=True):
             sid, value, unit = shot["id"], shot["value"], shot.get("unit")
             value_s, unit_s, label_s, source_s = (
@@ -1018,11 +1068,8 @@ class _Cut:
             for line, y in zip(st.label_lines, st.label_bases, strict=True):
                 layer, _ = self._ink([(lay.margin, y, line, label_s, "l")], shadow=0.0, note=(sid, "label"))
                 rest.append(layer)
-            if st.source_text:
-                layer, _ = self._ink(
-                    [(lay.margin, st.source_base, st.source_text, source_s, "l")], shadow=0.0,
-                    note=(sid, "source"),
-                )  # fmt: skip
+            for line, y in zip(st.source_lines, st.source_bases, strict=True):
+                layer, _ = self._ink([(lay.margin, y, line, source_s, "l")], shadow=0.0, note=(sid, "source"))
                 rest.append(layer)
             # The slide is clipped at the figure's own ink (its baseline, or a comma's tail), never
             # lower, so rising glyphs never show in the band above the label.

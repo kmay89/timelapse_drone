@@ -1023,6 +1023,60 @@ def test_stat_panel_calms_the_picture_under_it(tmp_path, monkeypatch):
     assert chroma(calmed) < 0.7 * chroma(busy), (chroma(calmed), chroma(busy))
 
 
+LONG_STAT = {
+    "label": "young trees planted along the paths, the promenade and the new beach, by volunteers",
+    "source": "Planting plan and the volunteer coordinator's spring logs",
+}
+DISCLAIMER = "A demonstration: every place, person and figure in it is fictional."
+
+
+def _long_stats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, item: dict[str, str], name: str) -> Project:
+    """_big with `item`'s label and source on the first stat, and a disclaimer that fills the end card
+    (so the honesty line would ride under the stats)."""
+    monkeypatch.setitem(globals(), "RUN", {**RUN, "items": [{**RUN["items"][0], **item}, RUN["items"][1]]})
+    project = _big(tmp_path / name, monkeypatch)
+    brand = yaml.safe_load((project.root / "brand" / "brand.yaml").read_text())
+    brand |= {"disclaimer": DISCLAIMER, "copyright": "© 2026 Tiny Brand"}
+    (project.root / "brand" / "brand.yaml").write_text(yaml.safe_dump(brand))
+    return load_project(project.root)
+
+
+def test_a_long_stat_label_keeps_the_type_floor(tmp_path, monkeypatch):
+    """A long label and source wrap inside the text column, the figures give way first and the
+    riding honesty line goes back to the end card, so a 9:16 run keeps its words at their full size
+    (STAT_TYPE: 44 / 30 px x-height at 1080 wide); a run that cannot even so is a plan warning and
+    blocks a release."""
+    from vantage.film.cut import STAT_VALUE, stat_run, stat_type
+    from vantage.film.render import _render_parts, check_ink
+
+    project = _long_stats(tmp_path, monkeypatch, LONG_STAT, "long")
+    plan = _plan(project, "9x16")
+    cut = _Cut(project, plan)
+    stats = [s for s in plan.plan["shots"] if s["kind"] == "stat"]
+    run = stat_run(cut.type, cut.lay, stats, stats[0]["honesty"], stats[0]["place"], True)
+    label, source, _ride = stat_type(cut.lay)
+    assert run.words == 1.0
+    for st in run.sets:
+        assert st.label.size == label and st.source.size == source
+        assert st.value.size < STAT_VALUE.size  # the figures gave way
+    assert len(run.sets[0].source_lines) > 1  # wrapped, not run off the frame
+    assert check_ink(plan, cut) == [] and cut.small == []
+    assert not [w for w in plan.warnings if "type floor" in w]
+    # With the honesty line under it the run would not fit: the end card keeps it.
+    (end,) = (s for s in plan.plan["shots"] if s["kind"] == "end")
+    assert stats[0]["honesty"] is None and "honesty" in [t["role"] for t in end["text"]]
+    # Labels no run can hold at full size: the words shrink to fit, said in the plan and refused in
+    # a release.
+    huge = {"label": " ".join([LONG_STAT["label"]] * 2), "source": LONG_STAT["source"]}
+    project = _long_stats(tmp_path, monkeypatch, huge, "huge")
+    plan = _plan(project, "9x16")
+    assert [w for w in plan.warnings if "under the type floor" in w], plan.warnings
+    out = tmp_path / "out"
+    out.mkdir()
+    with pytest.raises(ReleaseError, match="type floor"):
+        _render_parts(project, plan, out, plan_only=True, release=True)
+
+
 def test_stat_type_reads_on_a_phone(tmp_path, monkeypatch):
     """In 9:16 at 1080 wide a stat label's x-height is at least 44 px and its source's 30, and the
     whole run, honesty line included, stays inside the safe zone, above the tag. In 16:9 at 1080
