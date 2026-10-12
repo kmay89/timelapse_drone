@@ -26,7 +26,7 @@ from test_film import FILM, SIZE, make_project
 from vantage.cli import check_project
 from vantage.config import Project, load_project
 from vantage.film import beat
-from vantage.film.cut import CURTAIN_LABEL, RISE, STAT_CONTRAST, _Cut, words_set
+from vantage.film.cut import CURTAIN_LABEL, RISE, SMALL_CONTRAST, _Cut, words_set
 from vantage.film.layout import Layout
 from vantage.film.plan import SIMULATED_NOTE, check_films, plan_films, resolve_films
 from vantage.film.render import _render_one, film_jobs, render_film
@@ -898,7 +898,11 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
     cut = _Cut(project, plan)
     (scrim,) = cut.panels
     assert scrim["shots"] == ["N1", "N2"] and scrim["tint"] == (surface or "paper")
-    assert scrim["contrast"] >= STAT_CONTRAST, scrim  # as measured along the camera path
+    # Its labels and sources are small text: 4.5:1 (WCAG 1.4.3), as measured along the camera path,
+    # at the least opacity that keeps it (not AAA's 7:1, which washes out the picture).
+    assert scrim["target"] == SMALL_CONTRAST and scrim["contrast"] >= SMALL_CONTRAST, scrim
+    if scrim["alpha"] > 0.3:
+        assert scrim["contrast"] < 7.0, scrim
     w, h = cut.width, cut.height
     half = round(B / 2)
     for stat in (n1, n2):
@@ -973,7 +977,7 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
 def test_stat_type_reads_on_a_phone(tmp_path, monkeypatch):
     """In 9:16 at 1080 wide a stat label's x-height is at least 44 px and its source's 30, and the
     whole run, honesty line included, stays inside the safe zone, above the tag."""
-    from vantage.film.cut import stat_run
+    from vantage.film.cut import panel_contrast, stat_run
     from vantage.film.render import check_ink
 
     project = _big(tmp_path, monkeypatch)
@@ -994,6 +998,19 @@ def test_stat_type_reads_on_a_phone(tmp_path, monkeypatch):
     assert check_ink(plan, cut) == []
     tag = next(i["box"] for i in cut.ink if i["layer"] == "tag")
     assert run.box[3] < tag[1], (run.box, tag)
+    # The panel keeps what WCAG 1.4.3 asks of the smallest text on it: 4.5:1 for these sources, 3:1
+    # only when every text on the panel is large (18 pt seen on a phone: 66 px at 1080 wide).
+    assert panel_contrast(cut.lay, run) == SMALL_CONTRAST
+
+    def large(style: Any) -> Any:
+        return dataclasses.replace(style, size=70 / cut.lay.unit)
+
+    sets = tuple(
+        dataclasses.replace(st, **{k: large(getattr(st, k)) for k in ("value", "unit", "label", "source")})
+        for st in run.sets
+    )
+    assert panel_contrast(cut.lay, dataclasses.replace(run, sets=sets, ride=large(run.ride))) == 3.0
+    assert panel_contrast(cut.lay, dataclasses.replace(run, sets=sets)) == SMALL_CONTRAST  # its ride
 
 
 def test_degrade(tmp_path):

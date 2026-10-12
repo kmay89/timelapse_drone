@@ -722,7 +722,9 @@ small masters leave little to push, they are 77 and 77 beats.
   - Panel: one feathered box (padding 44 units, sigma 16) behind all of the run's ink, in the run's
     **tint**, the stats chapter's `surface` (default paper, as on the web), with ink text on paper
     and paper text on night. Its opacity is measured (`cut._measure_panel`): the least of 0.30…0.95
-    at which the text colour keeps 7:1 (`STAT_CONTRAST`; WCAG 1.4.3 asks 4.5:1 of small text) over
+    at which the text colour keeps what WCAG 1.4.3 asks of the smallest text on it
+    (`cut.panel_contrast`: 3:1 when every figure, unit, label, source and riding line is large, at
+    least 18 pt seen on a phone, `LARGE_TEXT` = 66 px at a 1080 px short edge; else 4.5:1) over
     the 99.5th-worst percentile of the picture under the run's ink box, sampled on every beat along
     the camera path. It comes in with the text, over the B/3 frames before the first figure lands
     (a held entry, `N1.0`, shows the bare picture until then, never an empty panel), and stays
@@ -908,8 +910,9 @@ renderer no longer has constants of its own.
   ([x, y, w, h]; rising text includes its rise travel; the rail includes its knob) and write plan.json
   `checks` (not hashed): `{"safe": [x0, y0, x1, y1], "ink": [{"shot": id | null, "layer": name,
   "box": [x, y, w, h]}], "outside": [indices]}`, and for a story cut with stats over a picture
-  `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "box": [x, y, w, h]}, {"text": "tag" |
-  "<shot id> label", "alpha", "contrast"}]` (each run's measured panel and the contrast it gives;
+  `"scrims": [{"shots": [ids], "tint", "alpha", "contrast", "target", "box": [x, y, w, h]}, {"text":
+  "tag" | "<shot id> label", "alpha", "contrast"}]` (each run's measured panel, the contrast it gives
+  and the one it was measured to;
   then the tag's and each date label's measured scrim, see below). A box more than 1 px (antialiasing) outside the safe
   rectangle is a plan warning; `vantage film --release` refuses it.
 

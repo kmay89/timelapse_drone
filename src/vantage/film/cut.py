@@ -15,8 +15,8 @@ Curtains split two warps of the same camera at the rule (before left, after righ
 accent rule and grip; their labels are clipped to their own side and shown only inside the plan's
 reveal intervals. A run of stats is set once (`stat_run`, shared with film/story.py): each figure on
 a fixed digit advance, the figure and its unit sliding into a mask as one block, over a picture
-under one panel in the run's tint whose opacity is measured so the text keeps STAT_CONTRAST over the
-picture along the camera path; the panel comes in with the first figure, and one stat's text fades
+under one panel in the run's tint whose opacity is measured so the text keeps the contrast WCAG 1.4.3
+asks of its size (`panel_contrast`) over the picture along the camera path; the panel comes in with the first figure, and one stat's text fades
 out before the next figure lands (never two figures, and never a partial one, on screen). The tag's
 and each date label's scrim are measured too, so their small type keeps 4.5:1 over every picture
 (`scrims`, for plan.json `checks`). Cards,
@@ -78,8 +78,11 @@ STAT_TYPE = {"landscape": (52.0, 34.0, 30.0), "portrait": (86.0, 58.0, 38.0)}
 STAT_LABEL = _Style("text", 52, 400, "ink", leading=1.22)
 STAT_SOURCE = _Style("text", 34, 400, "ink")
 RIDE = _Style("text", 30, 400, "ink", leading=1.3)
-STAT_CONTRAST = 7.0  # WCAG 1.4.3 asks 4.5:1 of small text (7:1 at AAA): the panel is measured to this
-SMALL_CONTRAST = 4.5  # WCAG 1.4.3 for small text: the tag and the date labels keep this over the picture
+SMALL_CONTRAST = 4.5  # WCAG 1.4.3 for small text: the tag, the date labels and stat panels keep this
+LARGE_CONTRAST = 3.0  # WCAG 1.4.3 for large text: a stat panel whose every text is large keeps this
+# WCAG's large text (18 pt, 24 CSS px) in film px at a 1080 px short edge, the frame seen 393 pt
+# wide on a phone (scaled with the short edge; type_scale makes text larger, not the threshold).
+LARGE_TEXT = 24 * 1080 / 393
 TAG_SCRIM, LABEL_SCRIM = 0.3, 0.42  # the least scrim behind the tag and a date label (raised as measured)
 PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 sigma clear of the ink
 # Units between a stat run's ink and the tag's: the panel's padding and feather (3 sigma) end 8 units
@@ -140,6 +143,18 @@ class StatRun:
 def stat_type(lay: Layout) -> tuple[float, float, float]:
     """(label, source, ride) sizes in units for a layout's orientation."""
     return STAT_TYPE["portrait" if lay.height > lay.width else "landscape"]
+
+
+def panel_contrast(lay: Layout, run: StatRun) -> float:
+    """The contrast a stat run's panel keeps under its text (WCAG 1.4.3): LARGE_CONTRAST when every
+    text on it (figures, units, labels, sources, the riding line) is large, at least LARGE_TEXT px
+    at a 1080 px short edge, else SMALL_CONTRAST."""
+    styles = [x for st in run.sets for x in (st.value, st.unit, st.label)]
+    styles += [st.source for st in run.sets if st.source_text]
+    if run.ride_lines:
+        styles.append(run.ride)
+    large = LARGE_TEXT * min(lay.width, lay.height) / 1080
+    return LARGE_CONTRAST if all(s.size * lay.unit >= large for s in styles) else SMALL_CONTRAST
 
 
 def stat_values(
@@ -847,7 +862,8 @@ class _Cut:
         """A run of stats (film/story.py places it: `place`): each figure on a fixed advance per
         digit, one layer per glyph for the slide into its mask, the unit after it, label and source
         below; the riding honesty line under the run; and, over a picture, one panel in the run's tint
-        behind all of it, its opacity measured so every text keeps STAT_CONTRAST over the picture."""
+        behind all of it, its opacity measured so every text keeps the contrast its size asks
+        (`panel_contrast`) over the picture."""
         lay, u, t = self.lay, self.u, self.type
         first = run[0]
         surface = first["surface"]
@@ -908,21 +924,22 @@ class _Cut:
         panel = None
         if first.get("file"):
             tint = np.array(self.paper if surface == "paper" else self.night, np.float32)
-            alpha, contrast = self._measure_panel(run, geo.box, tint, color)
+            target = panel_contrast(lay, geo)
+            alpha, contrast = self._measure_panel(run, geo.box, tint, color, target)
             panel = self._scrim(geo.box, alpha, color=tint, pad=(PANEL_PAD, PANEL_PAD), sigma=PANEL_SIGMA)
             self.panels.append(
                 {"shots": [s["id"] for s in run], "tint": surface, "alpha": round(alpha, 3),
-                 "contrast": round(contrast, 2), "box": ink_box(*geo.box)}
+                 "contrast": round(contrast, 2), "target": target, "box": ink_box(*geo.box)}
             )  # fmt: skip
         entry = {"panel": panel, "ride": ride, "first": first["id"]}
         for shot in run:
             self.stat_runs[shot["id"]] = entry
 
     def _measure_panel(
-        self, run: Sequence[dict[str, Any]], box: Sequence[float], tint: np.ndarray, color: str
+        self, run: Sequence[dict[str, Any]], box: Sequence[float], tint: np.ndarray, color: str, target: float
     ) -> tuple[float, float]:
         """(alpha, contrast): the least panel opacity (0.30 to 0.95) at which the text colour keeps
-        STAT_CONTRAST over the 99.5th-worst percentile of the picture under the run's ink, sampled on
+        `target` over the 99.5th-worst percentile of the picture under the run's ink, sampled on
         every beat of the run along its camera path (the luminance of what the panel leaves showing,
         in display gamma as `_put` mixes it); and the contrast it gives."""
         from vantage.film.safety import _BGR_WEIGHTS, _SRGB_TO_LINEAR
@@ -949,7 +966,7 @@ class _Cut:
             return (hi + 0.05) / (lo + 0.05)
 
         for k in range(30, 96):
-            if (c := ratio(k / 100)) >= STAT_CONTRAST:
+            if (c := ratio(k / 100)) >= target:
                 return k / 100, c
         return 0.95, ratio(0.95)
 
