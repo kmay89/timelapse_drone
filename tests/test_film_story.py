@@ -976,7 +976,8 @@ def test_stat_run_over_a_picture(tmp_path, monkeypatch, fid, surface):
 
 def test_stat_type_reads_on_a_phone(tmp_path, monkeypatch):
     """In 9:16 at 1080 wide a stat label's x-height is at least 44 px and its source's 30, and the
-    whole run, honesty line included, stays inside the safe zone, above the tag."""
+    whole run, honesty line included, stays inside the safe zone, above the tag. In 16:9 at 1080
+    high, also read on a phone (held sideways), they are at least 36 and 24 px."""
     from vantage.film.cut import panel_contrast, stat_run
     from vantage.film.render import check_ink
 
@@ -998,6 +999,15 @@ def test_stat_type_reads_on_a_phone(tmp_path, monkeypatch):
     assert check_ink(plan, cut) == []
     tag = next(i["box"] for i in cut.ink if i["layer"] == "tag")
     assert run.box[3] < tag[1], (run.box, tag)
+    wide = _plan(project, "16x9")
+    wcut = _Cut(project, wide)
+    assert wcut.height == 1080
+    wstats = [s for s in wide.plan["shots"] if s["kind"] == "stat"]
+    for st in stat_run(wcut.type, wcut.lay, wstats, wstats[0]["honesty"], wstats[0]["place"], True).sets:
+        x_label = -wcut.type.font(st.label).getbbox("x", anchor="ls")[1]
+        x_source = -wcut.type.font(st.source).getbbox("x", anchor="ls")[1]
+        assert x_label >= 36 and x_source >= 24, (x_label, x_source)
+    assert check_ink(wide, wcut) == []
     # The panel keeps what WCAG 1.4.3 asks of the smallest text on it: 4.5:1 for these sources, 3:1
     # only when every text on the panel is large (18 pt seen on a phone: 66 px at 1080 wide).
     assert panel_contrast(cut.lay, run) == SMALL_CONTRAST

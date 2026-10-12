@@ -750,12 +750,14 @@ small masters leave little to push, they are 77 and 77 beats.
     glyph's ink starts on the text column with the label. The figure and its unit slide up into a
     mask as one block over B/2 frames from `land` (the first beat after the entry for the first stat
     of a run, the shot's first frame for the next), so no frame shows part of a figure beside its
-    unit and label. The mask ends at the figure's own ink bottom (its
-    baseline, or a comma's tail), so a rising glyph never shows above the label. The value is the
+    unit and label. The mask ends at the ink bottom of the figure and its unit (the baseline, a
+    comma's tail or the unit's descender), so a rising glyph never shows above the label. The value is the
     plan's printed fact text: it never counts.
   - Unit at 0.35× the value size after it; label and "Source: <source>" below, fully opaque, at 52
     and 34 units in 16:9 and 86 and 58 in 9:16 (read on a phone: x-heights of 44 and 30 px at 1080
-    wide). They fade in over B/3 at `text_in` (= `land` + B/2: once the figure is whole).
+    wide). A 16:9 film is read on a phone held sideways too: its label, source and riding line are
+    at least 72, 48 and 36 px at a 1080 px short edge whatever its type_scale (`STAT_LANDSCAPE_PX`:
+    x-heights of 37 and 25 px; the screen loop's type_scale 1.6 sets them larger still). They fade in over B/3 at `text_in` (= `land` + B/2: once the figure is whole).
   - Length: max(4, ceil((text_in − f0 + B/3 + cue_frames(label + source) + out) / B)) beats (`out`:
     B/3 before another stat of the run), so label and source are fully on screen for as long as
     they take to read at 17 characters a second (the figure itself is read at a glance); the last
@@ -781,7 +783,8 @@ small masters leave little to push, they are 77 and 77 beats.
   line, link, honesty line and disclaimer take to read at 17 characters a second, plus a beat to scan the
   partners and the last beat, and at least `end_beats` (6). When that would run over 6 s with its
   dip (`END_MAX_S`) and the film has stats, the honesty line **rides along** under the stat run
-  instead (`ride: true` here; the stats' `honesty`: 30 units in 16:9, 38 in 9:16, in with the
+  instead (`ride: true` here; the stats' `honesty`: 30 units in 16:9 (at least 36 px at a 1080 px short
+  edge), 38 in 9:16, in with the
   panel over the B/3 before the first figure lands and held to the run's end, which lasts until it
   reads), then the disclaimer too (after the honesty line, one riding text). A card still over 6 s
   leaves the partners out (a warning), and one over 6 s even so is a warning too: with no stats the
@@ -917,7 +920,7 @@ renderer no longer has constants of its own.
   rectangle is a plan warning; `vantage film --release` refuses it.
 
 Story styles (units): kicker 38, title 124, date label 52 (caps, tracking .08), lead 120 (shrinks to
-fit between the margins), curtain labels 44, stat value 220 / unit 77 / label 52 (9:16: 86) / source 34 (58) / riding honesty 30 (38), card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
+fit between the margins), curtain labels 44, stat value 220 / unit 77 / label 52 (9:16: 86) / source 34 (58) / riding honesty 30 (38), the 16:9 ones at least 72 / 48 / 36 px at a 1080 px short edge whatever the type_scale, card title 96, end brand 92, honesty 38, fine print 27, tag 22. Text rises
 are composited at sub-pixel offsets by bilinear warping of the pre-rendered layer patch. Story cuts
 break lines balanced (`render.balance`): the greedy line count, then the break set with no one-word
 last line and no line ending on a word that starts a sentence when another exists, then the

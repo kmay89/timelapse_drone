@@ -72,9 +72,13 @@ STAT_VALUE = _Style("numeric", 220, 500, "ink")
 STAT_UNIT = _Style("text", 220 * 0.35, 500, "ink")
 # A stat's label, its source and the honesty line riding under a stat run, in units, by the film's
 # orientation: a portrait film is read on a phone in the hand, so its words are half as large again
-# (a 9:16 label's x-height is 44 px at 1080 wide, its source's 30 px). All fully opaque: their
-# contrast over the panel is measured, not left to an alpha.
+# (a 9:16 label's x-height is 44 px at 1080 wide, its source's 30 px). A landscape film is read on a
+# phone held sideways too, so its words are at least STAT_LANDSCAPE_PX px at a 1080 px short edge
+# whatever its type_scale (a 16:9 label's x-height is 37 px, its source's 25); a loop's larger
+# type_scale sets them larger still. All fully opaque: their contrast over the panel is measured,
+# not left to an alpha.
 STAT_TYPE = {"landscape": (52.0, 34.0, 30.0), "portrait": (86.0, 58.0, 38.0)}
+STAT_LANDSCAPE_PX = (72.0, 48.0, 36.0)
 STAT_LABEL = _Style("text", 52, 400, "ink", leading=1.22)
 STAT_SOURCE = _Style("text", 34, 400, "ink")
 RIDE = _Style("text", 30, 400, "ink", leading=1.3)
@@ -141,8 +145,13 @@ class StatRun:
 
 
 def stat_type(lay: Layout) -> tuple[float, float, float]:
-    """(label, source, ride) sizes in units for a layout's orientation."""
-    return STAT_TYPE["portrait" if lay.height > lay.width else "landscape"]
+    """(label, source, ride) sizes in units for a layout's orientation (STAT_TYPE, STAT_LANDSCAPE_PX)."""
+    if lay.height > lay.width:
+        return STAT_TYPE["portrait"]
+    ts = lay.type_scale  # a size of S units is S × type_scale px at a 1080 px short edge
+    floor = zip(STAT_TYPE["landscape"], STAT_LANDSCAPE_PX, strict=True)
+    label, source, ride = (max(size, px / ts) for size, px in floor)
+    return label, source, ride
 
 
 def panel_contrast(lay: Layout, run: StatRun) -> float:
