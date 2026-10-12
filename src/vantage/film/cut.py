@@ -562,6 +562,7 @@ class _Cut:
         self.masters = inputs["masters"]
         self._levels: dict[str, tuple[np.ndarray, np.ndarray | None]] = {}
         self.tag_scrim: _Layer | None = None  # its unit mask: drawn at the measured `levels["tag"]`
+        self.tag_box: tuple[float, ...] | None = None  # the tag's ink (x0, y0, x1, y1): the rule stops short
         self.levels: dict[str, float] = {}  # measured scrim opacities: "tag", "<shot id> label", …
         self.measured: list[dict[str, Any]] = []  # their records, for plan.json checks
         self._bare_text = False  # measuring: frames without the tag and labels being measured
@@ -652,6 +653,7 @@ class _Cut:
             return self._ink([(lay.right, base, text, style, "r")], shadow=0.0)[0]
         layer, box = self._ink([(lay.right, base, text, style, "r")], shadow=0.6, blur=3, note=(None, "tag"))
         self.tag_scrim = self._scrim(box, 1.0)
+        self.tag_box = tuple(float(v) for v in box)
         return layer
 
     def _put_tag(self, frame: np.ndarray) -> None:
@@ -1370,6 +1372,14 @@ class _Cut:
             e, out = self._line(shot, k, f)
             if e * out > 0.002 and bx - pad <= x <= bx + bw + pad:
                 gaps.append((by - pad, by + bh + pad, e * out))
+        # Nor through the tag: across the tag's columns the rule stops its scrim's padding short of
+        # it, on the frame's edge side (the honesty marker is never struck through).
+        if self.tag is not None and self.tag_box is not None:
+            tx0, ty0, tx1, ty1 = self.tag_box
+            gx, gy = 26 * self.u, 18 * self.u  # the tag scrim's padding (`_scrim`)
+            if tx0 - gx <= x <= tx1 + gx:
+                top = ty0 + ty1 < self.height
+                gaps.append((0.0, ty1 + gy, 1.0) if top else (ty0 - gy, float(self.height), 1.0))
         self._grip(frame, x, fade * edge, gaps)
         self._curtain_overlays(frame, i, f, x, fade)
         self._put_tag(frame)

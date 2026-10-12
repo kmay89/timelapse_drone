@@ -1306,6 +1306,30 @@ def test_curtain_rule_breaks_behind_its_words(tmp_path):
         assert rule[by : by + bh].max() <= 2, (fid, rule[by : by + bh].tolist())  # but not behind them
 
 
+def test_curtain_rule_stops_short_of_the_tag(tmp_path):
+    """A rule swept under the top-right tag (a split of 0.9) stops short of the tag and its scrim's
+    padding, so the honesty marker is never struck through; lower down the rule is there."""
+    compare = {**COMPARE, "steps": [{"text": "Most of it.", "split": 0.9}]}
+    project = tiny(tmp_path / "p", chapters=[compare], simulated=True)
+    plan = _plan(project)
+    curtain = next(s for s in plan.plan["shots"] if s["kind"] == "curtain")
+    cut = _Cut(project, plan)
+    tx0, _, tw, th = next(i["box"] for i in cut.ink if i["layer"] == "tag")
+    tx1, ty1 = tx0 + tw, th + next(i["box"][1] for i in cut.ink if i["layer"] == "tag")
+    f = curtain["keys"][-1]["b"] - 1
+    x = round(_split(curtain, f) * cut.width)
+    assert tx0 < x < tx1, (x, tx0, tx1)
+    frame = cut.frame_at(f).astype(np.int16)
+    grip, cut._grip = cut._grip, lambda *a, **k: None  # type: ignore[method-assign]
+    try:
+        bare = cut.frame_at(f).astype(np.int16)
+    finally:
+        cut._grip = grip  # type: ignore[method-assign]
+    rule = np.abs(frame[:, x - 1 : x + 2] - bare[:, x - 1 : x + 2]).max(axis=(1, 2))
+    assert rule[: math.ceil(ty1) + 2].max() <= 2, rule[: math.ceil(ty1) + 2].tolist()
+    assert rule[cut.height // 2 :].max() > 40
+
+
 def test_curtain_lines_hand_off_without_overlap(tmp_path):
     """Consecutive curtain lines share a zone: the first is out by the downbeat the next lands on."""
     compare = {
