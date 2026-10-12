@@ -8,7 +8,7 @@ planner's margin, film/margin.py; WCAG 2.3.1 allows 3); every step that asks for
 pushes (zoom ≥ 1.2) and its subject ends inside the frame and outside its words' ink; every frame
 of a stat from its words' landing to its text's exit shows its words and, once in, its figure;
 every measured scrim (the tag, date labels, title kickers, stat panels) keeps the contrast its text
-asks; the film spends at most 6 s on night after its last picture; and its length is within the
+asks, and the tag, date labels and stat text keep 4.5:1 in frames decoded from the encoded MP4; the film spends at most 6 s on night after its last picture; and its length is within the
 target (both cuts 40–48 s, the screen loop at most 80 s). CI runs this module on pull requests that
 touch the films (.github/workflows/films.yml).
 """
@@ -185,6 +185,94 @@ def test_full_size_length_and_tail(full, fid):
     assert (p["frames"] - end["f0"]) / p["fps"] <= TAIL_S, (fid, end, p["frames"])
     images = [s for s in p["shots"] if s["kind"] in ("title", "capture", "curtain", "stat")]
     assert images[-1]["f1"] == end["f0"], fid  # the last picture runs into the end card's dip
+
+
+def _decoded(mp4: Path, frames: list[int], width: int, height: int) -> dict[int, np.ndarray]:
+    """Frames `frames` of an encoded film, decoded to BGR as a player shows them (BT.709, TV range)."""
+    import subprocess
+
+    from vantage.media.ffmpeg import ffmpeg_bin
+
+    order = sorted(set(frames))
+    pick = "+".join(f"eq(n\\,{f})" for f in order)
+    out = subprocess.run(
+        [ffmpeg_bin(), "-v", "error", "-i", str(mp4), "-vf",
+         f"select={pick},scale=in_color_matrix=bt709:in_range=tv,format=bgr24",
+         "-fps_mode", "passthrough", "-f", "rawvideo", "-"],
+        check=True, capture_output=True,
+    ).stdout  # fmt: skip
+    size = width * height * 3
+    assert len(out) == size * len(order), (mp4, len(out), order)
+    return {
+        f: np.frombuffer(out[k * size : (k + 1) * size], np.uint8).reshape(height, width, 3)
+        for k, f in enumerate(order)
+    }
+
+
+def _ink_contrast(frame: np.ndarray, layers: list[Any]) -> float:
+    """The contrast of text layers as a reader meets them in a decoded frame (as film/cut.py measures
+    a scrim): the median luminance of the glyph cores against the worst 5 % of the pixels 1 to 4 px
+    around the glyphs (the brightest for light text, the darkest for dark text)."""
+    import cv2
+
+    from test_film_story import _lum
+
+    h, w = frame.shape[:2]
+    alpha = np.zeros((h, w), np.float32)
+    for layer in layers:
+        a = layer.alpha[..., 0]
+        y0, x0 = max(layer.y, 0), max(layer.x, 0)
+        y1, x1 = min(layer.y + a.shape[0], h), min(layer.x + a.shape[1], w)
+        alpha[y0:y1, x0:x1] = np.maximum(
+            alpha[y0:y1, x0:x1], a[y0 - layer.y : y1 - layer.y, x0 - layer.x : x1 - layer.x]
+        )
+    near = (alpha > 0.02).astype(np.uint8)
+    ring = (
+        cv2.dilate(near, np.ones((9, 9), np.uint8)) & (1 - cv2.dilate(near, np.ones((3, 3), np.uint8)))
+    ) > 0
+    core = alpha >= 0.9 * alpha.max()
+    lt = float(np.median(_lum(frame[core])))
+    around = _lum(frame[ring])
+    lb = float(np.quantile(around, 0.95 if lt > float(np.median(around)) else 0.05))
+    return (max(lt, lb) + 0.05) / (min(lt, lb) + 0.05)
+
+
+@pytest.mark.parametrize("fid", FILMS)
+def test_full_size_text_keeps_its_contrast_in_the_encoded_film(full, fid):
+    """WCAG 1.4.3 sampled from the encoded film, not the plan's own measurement: in decoded frames
+    of the MP4, the tag (on every capture's key frame), each date label (on its key frame) and every
+    stat's figure, label and source (once its text is fully in, and on its last frame before it
+    leaves) keep 4.5:1 against what is around their glyphs."""
+    project, out = full
+    plan = _plan(full, fid)
+    p = plan.plan
+    cut = _Cut(project, plan)
+    B, third = p["grid"]["fpb"], round(p["grid"]["fpb"] / 3)
+    checks: list[tuple[int, str, list[Any]]] = []
+    shots = p["shots"]
+    for k, shot in enumerate(shots):
+        if shot["kind"] == "capture":
+            d = shot.get("dissolve")
+            f = max(shot["key"], shot["f0"] + B // 2, d["f1"] if d else 0)
+            if f < shot["f1"]:
+                checks.append((f, f"{shot['id']} label", [cut.layers[shot["id"]]["label"]]))
+                if cut.tag is not None:
+                    checks.append((f, f"{shot['id']} tag", [cut.tag]))
+        elif shot["kind"] == "stat":
+            nxt = shots[k + 1] if k + 1 < len(shots) else None
+            last = shot["f1"] - (third if nxt is not None and nxt["kind"] == "stat" else 0) - 1
+            layers = cut.layers[shot["id"]]
+            for f in (max(shot["key"], shot["text_in"] + third, shot["land"] + B // 2), last):
+                checks.append((f, f"{shot['id']} figure", list(layers["glyphs"])))
+                checks.append((f, f"{shot['id']} label and source", list(layers["rest"])))
+    assert any("label and source" in what for _, what, _ in checks), fid
+    frames = _decoded(out / f"{project.slug}-{fid}.mp4", [f for f, _, _ in checks], cut.width, cut.height)
+    low = [
+        (what, f, round(r, 2))
+        for f, what, layers in checks
+        if (r := _ink_contrast(frames[f], layers)) < SMALL_CONTRAST
+    ]
+    assert not low, (fid, low)
 
 
 @pytest.mark.parametrize("fid", FILMS)
