@@ -176,9 +176,11 @@ def test_chapters_and_transcript(tmp_path):
     ride = [line for line in timed if "] Under the figures: " in line]
     assert ride and ride[0].endswith(f"Under the figures: {HONESTY['simulated']}")
     assert len(timed) == len(p["shots"]) + 1
-    # The riding line is captioned too: the second line of every cue over the stats, read in full.
+    # The riding line is captioned too: its sentences spread in order as the second line of the cues
+    # over the stats, each once (never the whole line under every figure), read in full over them.
     under = [c for c in p["captions"] if c.get("lasting")]
-    assert under and all(c["text"].endswith(f"\n{HONESTY['simulated']}") for c in under)
+    assert under and all(c["text"].endswith(f"\n{c['lasting']}") for c in under)
+    assert " ".join(c["lasting"] for c in under) == HONESTY["simulated"]
     stats = [s for s in p["shots"] if s["kind"] == "stat"]
     assert all(stats[0]["f0"] <= (c["f0"] + c["f1"]) / 2 < stats[-1]["f1"] for c in under)
     assert len(under) == len(stats)
@@ -371,3 +373,25 @@ def test_tracks_say_the_curtain_lines_on_screen(tmp_path):
         "The line moves to 50%, with the words “Old meets new”: Half and half: the old lot meets the new"
         " beach. Then to 20%, with the words “The new park”: Mostly new."
     ), line
+
+
+def test_a_lasting_line_is_captioned_once_across_its_cues():
+    """A line riding under several cues (the honesty line and disclaimer under the figures) is
+    captioned once, its sentences in order under the cues it lasts through, not whole under each."""
+    honesty = "Every frame is made from the simulated flights. No in-between images are invented."
+    disclaimer = "A demonstration: every place, person and figure in it is fictional."
+    t = tracks.Tracks(30)
+    t.cue(0, "Before the figures.", [])
+    t.cue(60, "12 drone flights over the build", ["flights"])
+    t.cue(180, "13,100 square feet of old pool, now beach", ["area"])
+    t.cue(300, "Credits", [])
+    t.lasting(60, 300, f"{honesty} {disclaimer}", ["d"])
+    caps = t.record(360, title="T", subtitle=None, honesty="H")["captions"]
+    under = [c for c in caps if c.get("lasting")]
+    assert [c["text"].split("\n")[0] for c in under] == [
+        "12 drone flights over the build",
+        "13,100 square feet of old pool, now beach",
+    ]
+    assert " ".join(c["lasting"] for c in under) == f"{honesty} {disclaimer}"
+    assert all(len(c["lasting"]) < len(honesty) + len(disclaimer) for c in under)
+    assert under[0]["facts"] == ["flights", "d"] and "lasting" not in caps[0] and "lasting" not in caps[-1]

@@ -1265,8 +1265,10 @@ do-not-print fact is left out of the tracks (the cue keeps its shorter form) wit
   quiet capture's date label becomes one "<first> – <last>" cue ("June 2026 – August 2026"); any
   other short cue is held into the next cue, which starts later but ends where it did. Only the
   last cue can stay short (the film ends). A line printed under text that changes meanwhile (the
-  honesty line riding along under the stats, `Tracks.lasting`) becomes the second line of every cue
-  whose middle falls in its time (`lasting` names it in each; mov_text cannot overlap cues); the
+  honesty line riding along under the stats, `Tracks.lasting`) is captioned once, as second lines:
+  its sentences spread in order over the cues whose middle falls in its time, each sentence under
+  the cue whose share of the reading time its own words leave holds the sentence's middle
+  (`tracks._spread`; `lasting` names each cue's part; mov_text cannot overlap cues); the
   readability rule then measures each cue without it, and the line over all of them.
   - title → the title (else the kicker); card → the chapter title;
   - capture → "<label>. <words>" ("April 2025. Before."); its note is appended only when the whole

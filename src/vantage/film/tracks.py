@@ -20,6 +20,7 @@ are metadata, and it blanks them.
 from __future__ import annotations
 
 import html
+import itertools
 import math
 import re
 import struct
@@ -78,6 +79,24 @@ def fits(text: str, f0: int, f1: int, fps: int) -> bool:
 def cue_frames(text: str, fps: int) -> int:
     """The fewest frames a cue of `text` needs: MIN_CUE_S, and CPS characters per second."""
     return max(math.ceil(MIN_CUE_S * fps), math.ceil(len(text) * fps / CPS))
+
+
+def _spread(text: str, cues: Sequence[dict[str, Any]], fps: int) -> list[str]:
+    """A lasting line's sentences spread in order over the cues it lasts through, each captioned
+    once: a sentence goes to the cue whose share of the reading time left over by the cues' own
+    words (CPS characters a second) holds its middle character."""
+    parts = [p for p in re.split(r"(?<=[.!?…])\s+", text) if p]
+    room = [max(1.0, CPS * (c["f1"] - c["f0"]) / fps - len(c["text"])) for c in cues]
+    total = sum(room)
+    out: list[list[str]] = [[] for _ in cues]
+    edges = list(itertools.accumulate(r / total for r in room))
+    done = 0
+    for part in parts:
+        middle = (done + len(part) / 2) / len(text)
+        k = next((i for i, e in enumerate(edges) if middle < e), len(cues) - 1)
+        out[k].append(part)
+        done += len(part) + 1
+    return [" ".join(p) for p in out]
 
 
 def _readable(captions: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
@@ -147,8 +166,9 @@ class Tracks:
 
     def lasting(self, f0: int, f1: int, text: str | None, facts: Sequence[str] = ()) -> None:
         """A line printed from f0 to f1 under other text that changes meanwhile (the honesty line that
-        rides along under the stats): it becomes the second line of every cue whose middle falls in
-        that time, so the captions stay one cue at a time (mov_text cannot overlap cues)."""
+        rides along under the stats): its sentences become the second line of the cues whose middle
+        falls in that time, spread over them in order and each captioned once (`_spread`), so the
+        captions stay one cue at a time (mov_text cannot overlap cues) and no cue repeats it whole."""
         if self.enabled and text and f1 > f0:
             self.lasts.append({"f0": f0, "f1": f1, "text": one_line(text), "facts": list(facts)})
 
@@ -166,7 +186,8 @@ class Tracks:
         """plan.json `captions`, `chapters` and `transcript` (hashed). The first chapter starts at
         frame 0 (the title belongs to it); a chapter or cue that would last no frames is dropped,
         consecutive cues with the same text become one, short cues are made readable (`_readable`),
-        and a `lasting` line is added under the cues it lasts through (`lasting` names it in each)."""
+        and a `lasting` line is spread under the cues it lasts through (`lasting` names each cue's
+        part)."""
         if not self.enabled:
             return {"captions": [], "chapters": [], "transcript": None}
         cues = sorted(self.cues, key=lambda c: c["f0"])
@@ -189,14 +210,16 @@ class Tracks:
         captions = _readable(captions, self.fps)
         for last in self.lasts:
             under = [c for c in captions if last["f0"] <= (c["f0"] + c["f1"]) / 2 < last["f1"]]
-            for c in under or [  # else the cue it overlaps most, if any
-                max(captions, key=lambda c: min(c["f1"], last["f1"]) - max(c["f0"], last["f0"]), default=None)
-            ]:
-                if c is None or min(c["f1"], last["f1"]) <= max(c["f0"], last["f0"]):
-                    continue
-                c["text"] = f"{c['text']}\n{last['text']}"
-                c["facts"] = list(dict.fromkeys([*c["facts"], *last["facts"]]))
-                c["lasting"] = last["text"]
+            if not under:  # else the cue it overlaps most, if any
+                c = max(
+                    captions, key=lambda c: min(c["f1"], last["f1"]) - max(c["f0"], last["f0"]), default=None
+                )
+                under = [c] if c is not None and min(c["f1"], last["f1"]) > max(c["f0"], last["f0"]) else []
+            for c, part in zip(under, _spread(last["text"], under, self.fps), strict=True):
+                if part:
+                    c["text"] = f"{c['text']}\n{part}"
+                    c["facts"] = list(dict.fromkeys([*c["facts"], *last["facts"]]))
+                    c["lasting"] = part
         marks = sorted(self.marks, key=lambda m: m["f0"])
         if marks:
             marks[0] = {**marks[0], "f0": 0}
