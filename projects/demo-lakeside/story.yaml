@@ -255,6 +255,7 @@ chapters:
 films:
   # Two figures (by their facts: the flights, and the pool that became the beach the shoreline shows)
   # and two or three looks from the water; the stats close each film over the montage's last picture.
+  # The loop shows the same two: a meadow the shoreline picture does not show is not its figure.
   16x9: { stats: [flights, wave-pool-area], montage: 2 }
   9x16: { stats: [flights, wave-pool-area], montage: 3 }
-  screen: { preset: screen }
+  screen: { preset: screen, stats: [flights, wave-pool-area] }

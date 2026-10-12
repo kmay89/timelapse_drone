@@ -6,9 +6,9 @@ pytest's cache between sessions, or VANTAGE_TEST_FOOTAGE), aligns it into master
 For each film: the meter measures at most 2 flash transitions per region in any second (the
 planner's margin, film/margin.py; WCAG 2.3.1 allows 3); every step that asks for a push really
 pushes (zoom ≥ 1.2) and its subject ends inside the frame and outside its words' ink; every frame
-of a stat from its words' landing to its text's exit shows its words and, once in, its figure; the film spends at most 6 s on
-night after its last picture; and its length is within the target (9:16 40–48 s, 16:9 40–54 s with
-every chapter, the screen loop at most 80 s).
+of a stat from its words' landing to its text's exit shows its words and, once in, its figure; the
+film spends at most 6 s on night after its last picture; and its length is within the target (both
+cuts 40–48 s, the screen loop at most 80 s).
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from vantage.models import FilmPlan, MastersIndex
 pytestmark = pytest.mark.slow
 
 FILMS = ("9x16", "16x9", "screen")
-LENGTH = {"9x16": (40.0, 48.0), "16x9": (40.0, 54.0), "screen": (40.0, 80.0)}
+LENGTH = {"9x16": (40.0, 48.0), "16x9": (40.0, 48.0), "screen": (40.0, 80.0)}
 TAIL_S = 6.0  # seconds on night after the last picture (the end card, its dip, a loop's dip)
 
 

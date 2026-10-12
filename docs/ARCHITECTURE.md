@@ -754,13 +754,14 @@ small masters leave little to push, they are 77 and 77 beats.
     mask as one block over B/2 frames from `land` (the first beat after the entry for the first stat
     of a run, the shot's first frame for the next), so no frame shows part of a figure beside its
     unit and label. The mask ends at the ink bottom of the figure and its unit (the baseline, a
-    comma's tail or the unit's descender), so a rising glyph never shows above the label. The value is the
-    plan's printed fact text: it never counts.
+    comma's tail or the unit's descender), so a rising glyph never shows above the label. The value
+    is the plan's printed fact text: it never counts.
   - Unit at 0.35× the value size after it; label and "Source: <source>" below, fully opaque, at 52
     and 34 units in 16:9 and 86 and 58 in 9:16 (read on a phone: x-heights of 44 and 30 px at 1080
     wide). A 16:9 film is read on a phone held sideways too: its label, source and riding line are
     at least 72, 48 and 36 px at a 1080 px short edge whatever its type_scale (`STAT_LANDSCAPE_PX`:
-    x-heights of 37 and 25 px; the screen loop's type_scale 1.6 sets them larger still). They fade in over B/3 at `text_in` (= `land` + B/2: once the figure is whole).
+    x-heights of 37 and 25 px; the screen loop's type_scale 1.6 sets them larger still). Label and
+    source fade in over B/3 at `text_in` (= `land` + B/2: once the figure and its unit are whole).
   - Length: max(4, ceil((text_in − f0 + B/3 + cue_frames(label + source) + out) / B)) beats (`out`:
     B/3 before another stat of the run), so label and source are fully on screen for as long as
     they take to read at 17 characters a second (the figure itself is read at a glance); the last
@@ -823,7 +824,8 @@ small masters leave little to push, they are 77 and 77 beats.
     reaching it on frame N (`ramp(f, f0, n + 1)`), one past the last frame. So frame(N) == frame(0),
     byte for byte, and a player looping the file shows no seam. The renderer checks it before
     encoding (`render.check_seam`).
-  - For the demo the screen cycle is 92 beats at 75 bpm (2208 frames, 73.6 s at 30 fps).
+  - For the demo the screen cycle is 88 beats at 75 bpm (2112 frames, 70.4 s at 30 fps), with the
+    same two stats as the cuts (`films.screen.stats`).
 - **Push target**: `film.focus` when given (`target: film.focus`, used as given); otherwise the
   step's `focus`, recentred to the crop nearest it that puts the step's **subject hotspots** inside
   the layout's subject box (`focus+subject:<ids>`; `story.subject_box`: the safe zone 1 % in from
