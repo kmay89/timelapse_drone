@@ -1946,11 +1946,13 @@ def _capture_step(
     held, lead, ease = b.holds.get(sid, 0), (1 + b.holds.get(sid, 0)) * B, b.push_ease(sid)
 
     def plan(box: Box | None) -> tuple[dict[str, Any] | None, Cam | None, int]:
+        mark = len(b.warnings)
         step, target = _push(b, s, cap, rest, zmax, box, sid)
         if id(cap) in still and target is not None:
             assert step is not None
             step.update(push=False, reason=still[id(cap)])
             target = None
+            b.warnings[mark:] = [w for w in b.warnings[mark:] if "soft push" not in w and "clamped" not in w]
         quiet, stepped, pushing = film.beats
         beats = quiet if step is None else (pushing if target else stepped)
         if total_images == 1 or id(cap) in still:

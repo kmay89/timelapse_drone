@@ -1697,3 +1697,18 @@ def test_a_curtains_lines_share_one_size_and_land_with_their_picture(tmp_path):
             assert cut.lay.margin - 2 <= box[0] and box[2] <= cut.lay.right + 2, box
         # The short line is not set larger than the long ones: its ink is no taller than one row.
         assert boxes[1][3] - boxes[1][1] - rise <= 120 * scale * cut.u, boxes
+
+
+def test_a_still_capture_does_not_warn_about_a_push_it_does_not_make(tmp_path):
+    """With two captures the first is held still (the curtain shows both): a push that would have
+    been clamped and soft is not made, so neither is reported."""
+    steps = [{**STEPS[0], "focus": [0.62, 0.5, 1.8]}]
+    excluded = [{"date": d, "exclude": True} for d in DATES[2:]]
+    project = tiny(
+        tmp_path / "p", steps=steps, captures=excluded, film={"vertical": True},
+        films={"9x16": {"max_upscale": 2.4}},
+    )  # fmt: skip
+    plan = _plan(project, "9x16")
+    step = next(s["step"] for s in plan.plan["shots"] if s.get("step"))
+    assert step["push"] is False and step["reason"] == "two captures", step
+    assert not [w for w in plan.warnings if "soft push" in w or "clamped" in w], plan.warnings
