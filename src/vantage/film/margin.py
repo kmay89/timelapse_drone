@@ -18,28 +18,33 @@ run of more than the limit in one region within `fps` frames, earliest first (`f
             zoom scaled by limit / count × 0.9, never below SOFTEST, or for a pan (a push that zooms
             under PAN_ZOOM) that share of its way, never below PAN_SOFTEST (`Fixes.caps`: key →
             share; the step records it as `gentled`)
-    hold    else a beat more at a slot between them, on the beat grid: a quiet capture plays a beat
-            longer, a step's picture plays a beat before its words land and its push starts, a
+    hold    else a beat more at a slot that splits them, on the beat grid: a quiet capture plays a
+            beat longer, a step's picture plays a beat before its words land and its push starts, a
             montage picture holds, a curtain holds after its entry ("<id>.0") or after step k's
             sweep ("<id>.<k>"), the first stat holds before its figure lands ("<id>.0") and any
             stat before the next (`Fixes.holds`, at most MAX_HOLD beats a slot). Quiet captures go
             first, then steps and montage pictures, then curtains and stats; among them the slot
-            that splits the transitions most evenly, the later of two.
+            that splits the transitions most evenly, the later of two. An ease back under way at
+            the slot runs from its own first frame: a hold moves none of its transitions, so a slot
+            inside one splits only a run that also has transitions after it.
     slow    else a move holding two or more of them is softened or, once at SOFTEST, slowed a beat
             (`Fixes.slows`, at most MAX_SLOW): a capture's push then eases back as slowly and the
             capture lasts until it lands B/3 before its end, a curtain step's sweep waits for its
-            move, and a stat's push is slowed by holding the stat.
+            move, and a stat's push is slowed by holding the stat. When two or more of them fall in
+            a capture's ease back to rest (from the next shot's first frame) and the camera then
+            rests a beat or more on that vantage, that ease back alone is slowed ("<id>.back"): it
+            plays over the shots after the push, so the film gets no longer.
 
-Each fix shifts the measured transitions as it would (a hold moves what follows it a beat later, a
-slow stretches its move; a softened push is assumed to keep the limit until measured), so one render
-finds most fixes; the film is then planned and metered again, at most PASSES times, each pass
-rendering only from the shot before the first change (`Measured.snaps`). The plan records `flash`
-({limit, held, slowed, softened}: what decides frames) and checks `flash` ({estimate, frame, proxy,
-measures, passes}: not hashed); when the estimate stays above the limit (nothing left to lengthen) a
-warning says so. The render meter remains the final check: it refuses a film above LIMIT, warns
-above the limit, and a release refuses that too. A proxy's transitions are memoised by its plan's
-hash within a process and on disk (work/film/flash/), and proxy masters decoded once (at a JPEG
-reduction) within a process.
+Each fix shifts the measured transitions as it would (a hold moves what follows it a beat later but
+not an ease back under way, a slow stretches its move; a softened push is assumed to keep the limit
+until measured), so one render finds most fixes; the film is then planned and metered again, at
+most PASSES times, each pass rendering only from the shot before the first change
+(`Measured.snaps`). The plan records `flash` ({limit, held, slowed, softened}: what decides frames)
+and checks `flash` ({estimate, frame, proxy, measures, passes}: not hashed); when the estimate stays
+above the limit (nothing left to lengthen) a warning says so. The render meter remains the final
+check: it refuses a film above LIMIT, warns above the limit, and a release refuses that too. A
+proxy's transitions are memoised by its plan's hash within a process and on disk (work/film/flash/),
+and proxy masters decoded once (at a JPEG reduction) within a process.
 """
 
 from __future__ import annotations
@@ -344,6 +349,8 @@ class _Move:
     full: float  # the zoom of the push it makes or eases back from, unsoftened
     cap: str | None  # the key softening its push (`Fixes.caps`)
     slow: str | None  # the key slowing it (`Fixes.slows`; "hold:<id>": holding that shot slows it)
+    back: str | None = None  # the key slowing its ease back to rest alone ("<id>.back")
+    room: int = 0  # frames the camera rests after that ease back on its vantage: what it may grow into
 
 
 def _slots(plan: dict[str, Any]) -> list[_Slot]:
@@ -370,15 +377,24 @@ def _moves(plan: dict[str, Any]) -> list[_Move]:
     move and each stat's push to a hotspot, as frame spans."""
     cams = plan["camera"]
     out = []
-    for s in plan["shots"]:
+    for j, s in enumerate(plan["shots"]):
         step = s.get("step") or {}
         if s["kind"] == "capture" and step.get("push_f0") is not None:
             k = next((i for i, w in enumerate(cams) if w["a"] == step["push_f1"]), None)
             spans = [[step["push_f0"], step["push_f1"]]]
+            back, room = None, 0
             if k is not None and k + 1 < len(cams):
                 spans.append([cams[k]["b"], cams[k + 1]["a"]])
+                if cams[k]["b"] == s["f1"]:  # an ease back to rest from the next shot's first frame
+                    # It may run on while the camera rests, over this vantage's next captures only.
+                    end = s["f1"]
+                    for t in plan["shots"][j + 1 :]:
+                        if t["kind"] != "capture" or t.get("montage") or t.get("vantage") != s.get("vantage"):
+                            break
+                        end = t["f1"]
+                    back, room = f"{s['id']}.back", min(cams[k + 1]["b"], end) - cams[k + 1]["a"]
             zoom = cams[k]["zoom"] if k is not None else step["focus"][2]
-            out.append(_Move(spans, _full(zoom, step), s["id"], s["id"]))
+            out.append(_Move(spans, _full(zoom, step), s["id"], s["id"], back, room))
         elif s["kind"] == "curtain":  # each step's move (to its push, or back from it): "<id>.<k>"
             pushed: tuple[str, float] | None = None
             for k, st in enumerate(s["steps"], 1):
@@ -407,22 +423,49 @@ def fixes(events: list[Event], plan: dict[str, Any], limit: int, given: Fixes) -
     """`given` plus the fixes that bring the measured transitions of `plan` to at most `limit` per
     region in any second, found by shifting the transitions as each fix would. For each run of too
     many transitions, earliest first: when they all come from one push (or its ease back), that push
-    is softened (`caps`: its log zoom scaled by limit / count, not below SOFTEST); else a slot between
-    them is held a beat (`holds`); else a move holding two or more of them is softened or, once at
-    SOFTEST, slowed a beat (`slows`). Returns (the fixes, whether any was added)."""
+    is softened (`caps`: its log zoom scaled by limit / count, not below SOFTEST); else a slot that
+    splits them is held a beat (`holds`; a hold does not move an ease back already under way,
+    `under_way`); else a move holding two or more of them is softened or, once at SOFTEST, slowed a
+    beat (`slows`): when two or more fall in a capture's ease back to rest and the camera rests a
+    beat or more after it before the picture changes vantage, that ease back alone ("<id>.back": it
+    plays over the shots after the push, so the film is no longer), else the move. Returns (the
+    fixes, whether any was added)."""
     fps, B = plan["fps"], plan["grid"]["fpb"]
     out = given.copy()
     frames = [list(e) for e in events]
     slots, moves = _slots(plan), _moves(plan)
     added = False
 
-    def warp(fn: Callable[[int], int]) -> None:
+    def warp(fn: Callable[[int], int], at: int | None = None) -> None:
+        """Shift every transition, slot and move as `fn` does; with `at` (a hold there), an ease
+        back already under way at `at` keeps its frames and the transitions in them (`under_way`)."""
+        keep = [] if at is None else under_way(at)
         for e in frames:
-            e[0] = fn(e[0])
+            if not any(a <= e[0] < b for a, b in keep):
+                e[0] = fn(e[0])
         for slot in slots:
             slot.at = fn(slot.at)
         for move in moves:
-            move.spans = [[fn(a), fn(b)] for a, b in move.spans]
+            move.spans = [span if span in keep else [fn(span[0]), fn(span[1])] for span in move.spans]
+
+    def under_way(at: int) -> list[list[int]]:
+        """The ease backs (every span of a move after its first) that started before `at` and run on
+        past it. One runs from its shot's first frame for as long as its push went in: holding a
+        slot inside it lengthens a shot it plays over, not the ease back, so its transitions stay."""
+        return [span for m in moves for span in m.spans[1:] if span[0] < at < span[1]]
+
+    def stays(at: int, f: int) -> bool:
+        """Whether a transition on frame f stays put when the slot at `at` is held."""
+        return f < at or any(a <= f < b for a, b in under_way(at))
+
+    def ease(span: list[int]) -> None:
+        """Stretch the transitions in `span` (an ease back) over a beat more; nothing after it moves."""
+        c, d = span
+        m = max(1, d - c)
+        for e in frames:
+            if c <= e[0] < d:
+                e[0] = c + round((e[0] - c) * (m + B) / m)
+        span[1] = d + B
 
     def inside(move: _Move, run: list[int]) -> int:
         return max(sum(a <= f < b for f in run) for a, b in move.spans)
@@ -457,26 +500,41 @@ def fixes(events: list[Event], plan: dict[str, Any], limit: int, given: Fixes) -
         if found is None:
             break
         run, region = found
-        first, last = run[0], run[-1]
         own = [m for m in moves if m.cap is not None and inside(m, run) == len(run)]
         if own and soften(own[0], run, region, limit):
             added = True
             continue
-        open_slots = [s for s in slots if first < s.at <= last and out.holds.get(s.key, 0) < MAX_HOLD]
+        # A slot splits the run when holding it moves some of its transitions and not others.
+        staying = {id(s): sum(stays(s.at, f) for f in run) for s in slots}
+        open_slots = [
+            s for s in slots if 0 < staying[id(s)] < len(run) and out.holds.get(s.key, 0) < MAX_HOLD
+        ]
         if open_slots:
-            slot = min(
-                open_slots,
-                key=lambda s, run=run: (s.rank, abs(2 * sum(f < s.at for f in run) - len(run)), -s.at),
-            )
+            slot = min(open_slots, key=lambda s: (s.rank, abs(2 * staying[id(s)] - len(run)), -s.at))
             out.holds[slot.key] = out.holds.get(slot.key, 0) + 1
             at = slot.at
-            warp(lambda t, at=at: t + B if t >= at else t)
+            warp(lambda t, at=at: t + B if t >= at else t, at)
             added = True
             continue
         busy = sorted((m for m in moves if inside(m, run) >= 2), key=lambda m: -inside(m, run))
         if any(
             m.cap is not None and soften(m, run, region, limit - (len(run) - inside(m, run))) for m in busy
         ):
+            added = True
+            continue
+        # Two or more in a capture's ease back to rest: slowing it alone adds no length.
+        back = next(
+            (
+                m for m in moves
+                if m.back is not None and m.room >= B and out.slows.get(m.back, 0) < MAX_SLOW
+                and sum(m.spans[1][0] <= f < m.spans[1][1] for f in run) >= 2
+            ),
+            None,
+        )  # fmt: skip
+        if back is not None and back.back is not None:
+            out.slows[back.back] = out.slows.get(back.back, 0) + 1
+            ease(back.spans[1])
+            back.room -= B
             added = True
             continue
 
@@ -500,12 +558,8 @@ def fixes(events: list[Event], plan: dict[str, Any], limit: int, given: Fixes) -
 
         warp(stretch)
         for span in rest:  # its ease back, as slow (nothing after it moves)
-            c, d = span
-            m = max(1, d - c)
-            for e in frames:
-                if c <= e[0] < d:
-                    e[0] = c + round((e[0] - c) * (m + B) / m)
-            span[1] = d + B
+            ease(span)
+        move.room -= B  # its ease back starts a beat later and lasts a beat longer
         added = True
     return out, added
 

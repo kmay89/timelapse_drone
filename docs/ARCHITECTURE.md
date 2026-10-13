@@ -573,7 +573,8 @@ chapters[].film: {line: str, skip: bool}   # gallery chapters: the montage's wor
 - `max_s` holds a story cut (not a loop) to a length budget (`plan._fit_length`, default 48 s). A cut
   planned over it shows one picture fewer in its longest montage at a time (down to 2), then one
   stat fewer (the last; down to 1), each trial planned without the flash margin, until it fits; the
-  film is then planned in full with those settings and a warning names what was left out (and the
+  film is then planned in full with those settings (trimming goes on while the flash margin's fixes
+  take it over again) and a warning names what was left out (and the
   length when it still runs over). A project on the defaults (stats 3, montage 5) gets films of at
   most 48 s; one that sets `montage` and `stats` itself to fit is planned once.
 - `film.line` sets a step's words on screen; `film.focus` its push target (used as given, only
@@ -660,7 +661,9 @@ small masters leave little to push, they are 78 and 78 beats.
   - The flash margin (see Safety) may hold a capture: its picture plays `held` beats longer before
     its words land and its push starts (`land` and `push_f0` move on by as many beats); soften its
     push (`step.gentled`: the share of the log zoom it keeps, z_eff = z^gentled); or slow it by a beat per level (it then eases
-    back as slowly, and the capture lasts until the push lands B/3 before its end).
+    back as slowly, and the capture lasts until the push lands B/3 before its end); or slow its
+    ease back alone by a beat per level (`S07.back`: it plays over the shots after it, so the film
+    is no longer).
   - Several steps on one capture: films use the first (warning). Skipped steps play as quiet beats.
 - **montage** (capture shots with `montage: true`, numbered on from the series; one run per gallery
   chapter with a `vantage` that is a drone vantage other than the main one, unless its `film.skip`
@@ -1077,23 +1080,30 @@ of the right edge.
     a stat's push to its hotspot), that push is **softened**: its log zoom scaled by limit / count ×
     0.9, never below 1.25 (`flash.softened`: push key → the share of its log zoom the push keeps, so
     its zoom is z_full^share; the step, and a stat's `move`, record that share as `gentled`);
-  - else a slot between them is **held** a beat (`flash.held`: slot → beats, at most 2): a capture
-    (`S07`: a quiet capture plays a beat longer, a step's picture a beat before its words land and
-    its push starts), a montage picture, a curtain after its entry (`C1.0`) or after step k's sweep
-    (`C1.k`), the first stat before its figure lands (`N1.0`), or a stat before the next (`N2`);
-    quiet captures first, then steps and montage pictures, then curtains and stats, splitting the
-    transitions most evenly;
+  - else a slot that splits them is **held** a beat (`flash.held`: slot → beats, at most 2): a
+    capture (`S07`: a quiet capture plays a beat longer, a step's picture a beat before its words
+    land and its push starts), a montage picture, a curtain after its entry (`C1.0`) or after step
+    k's sweep (`C1.k`), the first stat before its figure lands (`N1.0`), or a stat before the next
+    (`N2`); quiet captures first, then steps and montage pictures, then curtains and stats,
+    splitting the transitions most evenly. An ease back under way at the slot keeps its own frames
+    (it runs from the first frame of the shot after its push): a hold moves none of its transitions,
+    so a slot inside one is not held for a run that lies within it (that would only lengthen the
+    film, and can take a story cut over its `max_s` with nothing left to trim);
   - else a move holding two or more of them is softened or, at 1.25, **slowed** a beat
     (`flash.slowed`: key → beats, at most 4; a capture's push then eases back as slowly and the
     capture lasts long enough for it to land B/3 before its end; a curtain step's move delays its
-    sweep; a stat's push is slowed by holding the stat).
-  Each fix shifts the measured transitions as it would (a hold moves what follows a beat later, a
-  slow stretches its move), so one render finds most fixes; the film is then planned and metered
-  again (at most 6 passes; a pass re-renders only from the shot before the first change). Every
-  shot, sweep and landing stays on the beat grid. The plan records what decides frames as `flash`
-  (hashed: `{limit, held, slowed, softened}`) and the measurement as `checks.flash` (not hashed:
-  `{estimate, frame, proxy, measures, passes}`); when the estimate stays above the limit a warning
-  says so ("flash margin: the planner estimates …"), and the render meter remains the final check.
+    sweep; a stat's push is slowed by holding the stat). When two or more of them fall in a
+    capture's ease back to rest and the camera then rests a beat or more on that vantage, that ease
+    back alone is slowed (`S07.back`): it plays over the shots after the push, so the film gets no
+    longer.
+  Each fix shifts the measured transitions as it would (a hold moves what follows a beat later, but
+  not an ease back under way; a slow stretches its move), so one render finds most fixes; the film
+  is then planned and metered again (at most 6 passes; a pass re-renders only from the shot before
+  the first change). Every shot, sweep and landing stays on the beat grid. The plan records what
+  decides frames as `flash` (hashed: `{limit, held, slowed, softened}`) and the measurement as
+  `checks.flash` (not hashed: `{estimate, frame, proxy, measures, passes}`); when the estimate stays
+  above the limit a warning says so ("flash margin: the planner estimates …"), and the render meter
+  remains the final check.
   A proxy's transitions are memoised by its plan hash within a process and cached on disk in
   `work/film/flash/<key>.json` (keyed by the proxy plan's hash, its sizes and a digest of the
   renderer's sources), so re-planning an unchanged film (`--plan-only`, the package stale check)

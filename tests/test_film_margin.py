@@ -156,6 +156,37 @@ def test_fixes_soften_a_push_that_flashes_on_its_own_then_slow_it():
     assert added and fixes.slows == {"S01": 2} and not fixes.caps
 
 
+def test_fixes_slow_an_ease_back_and_never_hold_a_capture_under_it():
+    """Three transitions inside the ease back of a push (2 beats from the next shot's first frame,
+    over a one-beat quiet capture and into the next), the push already as soft as it may be. The
+    ease back alone is slowed (`<id>.back`): it plays over the shots after the push, so the film is
+    no longer. Holding the capture under it, or the next one's words, would lengthen those shots but
+    not the ease back (its transitions stay where they are): only length, which once took a cut over
+    its `max_s` with nothing left to trim. With no rest after the ease back to grow into, the push
+    is slowed instead (its ease back with it); a run that has transitions after the ease back is
+    still split by holding the capture."""
+    shots = [
+        {"id": "S01", "kind": "capture", "f0": 0, "f1": 72,
+         "step": {"land": 18, "push_f0": 18, "push_f1": 54, "focus": [0.44, 0.58, 1.2754], "gentled": 0.6}},
+        {"id": "S02", "kind": "capture", "f0": 72, "f1": 90, "step": None},
+        {"id": "S03", "kind": "capture", "f0": 90, "f1": 144, "step": {"land": 108}},
+    ]  # fmt: skip
+    camera = [
+        {"a": 0, "b": 18, "x": 0.5, "y": 0.5, "zoom": 1.0},
+        {"a": 54, "b": 72, "x": 0.44, "y": 0.58, "zoom": 1.2754},
+        {"a": 108, "b": 144, "x": 0.5, "y": 0.5, "zoom": 1.0},  # rests 2 beats after the ease back
+    ]
+    soft = margin.Fixes(caps={"S01": 0.6})  # softened as far as it goes (SOFTEST) on an earlier pass
+    events = _events([77, 89, 96])  # S02's slot (90) and S03's (108) lie inside the ease back [72, 108)
+    fixes, added = margin.fixes(events, _plan(shots, camera), 2, soft)
+    assert added and fixes.slows == {"S01.back": 2} and not fixes.holds, fixes
+    tight = [*camera[:2], {**camera[2], "b": 108}, {"a": 144, "b": 144, "x": 0.6, "y": 0.5, "zoom": 1.1}]
+    fixes, added = margin.fixes(events, _plan(shots, tight), 2, soft)
+    assert added and not fixes.holds and fixes.slows.get("S01", 0) >= 1 and "S01.back" not in fixes.slows
+    fixes, added = margin.fixes(_events([100, 110, 120]), _plan(shots, camera), 2, soft)
+    assert added and fixes.holds == {"S02": 1} and not fixes.slows, fixes
+
+
 def test_fixes_give_up_when_nothing_lies_between():
     """Transitions inside one dissolve-free stretch with no slot and no move: nothing to lengthen."""
     shots = [{"id": "E1", "kind": "end", "f0": 0, "f1": 90}]
