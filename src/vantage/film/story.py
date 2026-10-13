@@ -675,8 +675,9 @@ class _Builder:
     tracks: Tracks = field(default_factory=lambda: Tracks(1, enabled=False))
     placer: _Placer | None = None  # chooses the words' zones (None: always the default zone)
     # The flash margin (film/margin.py): beats held at a slot (a shot id, "<curtain id>.<k>" or
-    # "<first stat id>.0"), beats added to a capture's push (and its ease back) or a curtain step's
-    # move, and the share of its move a push keeps (by push key).
+    # "<first stat id>.0"), beats added to a capture's push (and its ease back), to its ease back
+    # alone ("<id>.back") or to a curtain step's move, and the share of its move a push keeps (by
+    # push key).
     holds: dict[str, int] = field(default_factory=dict)
     slows: dict[str, int] = field(default_factory=dict)
     caps: dict[str, float] = field(default_factory=dict)
@@ -734,12 +735,13 @@ class _Builder:
 
     def push_ease(self, sid: str) -> int:
         """Frames the push of shot `sid` takes: `ease`, plus a beat per level the flash margin slowed
-        it (`slows`); it eases back as slowly (`back`)."""
+        it (`slows`); it eases back as slowly (`back`), and a beat slower per level the margin slowed
+        that ease back alone (`slows` "<sid>.back": it plays over the shots after, adding no length)."""
         return self.ease + self.slows.get(sid, 0) * self.grid.fpb
 
     @property
     def easing_back(self) -> int:
-        """Frames the ease back from the last push takes (as slowly as it went in)."""
+        """Frames the ease back from the last push takes (as slowly as it went in, or slower)."""
         return self.ease if self.back is None else self.back
 
     def rest(self, part: _Series | _Curtain) -> Cam:
@@ -2126,7 +2128,7 @@ def _derive_cut(
                 )
                 dissolve = None if n == 1 and b.prev and b.prev["kind"] == "title" else b.entry()
                 _capture_camera(b, cam, f0, rest, pushed, target, beats, lead, ease)
-                b.back = ease if target is not None else None
+                b.back = ease + b.slows.get(f"{sid}.back", 0) * B if target is not None else None
                 if zone is not None:
                     assert step is not None
                     step.update(zone)
