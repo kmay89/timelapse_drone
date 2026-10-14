@@ -75,7 +75,7 @@ time scrub, pins on real 3D positions, and a fly-in from the hero frame. It need
 
 ## Recommendation
 
-1. Add COLMAP as an **optional extra** (`vantage[sfm]`, pycolmap CPU) behind a `vantage sfm` stage:
+1. Add COLMAP as an **optional extra** (`vantage[sfm]`, pycolmap CPU) behind a new structure-from-motion stage (a proposed `sfm` command, not built yet):
    joint model per vantage with EXIF/GPS priors, plane-induced alignment as `align.method: sfm`, and
    the metres-off report on the review sheet. Measurable against the demo truth today.
 2. Treat the 3D chapter as a separate project gated on (a) one real orbit capture from a milestone
