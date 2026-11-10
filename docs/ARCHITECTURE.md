@@ -1018,8 +1018,9 @@ a stat run's panel is one such box in the run's tint, its opacity measured (see 
 units, caps, fully opaque), a title's kicker (38 units, accent) and a capture's date label (52 units)
 are small text: their scrims are measured too (`_Cut._least_scrim`), the least opacity from 0.30
 (tag), 0.45 (the title's scrim, for its kicker) or 0.42 (label) up to 0.95 at
-which the text, composited over the scrimmed picture, keeps 4.5:1 between its glyph cores' median
-luminance and the 95th-percentile brightest pixel 1 to 4 px around its glyphs. The tag's is measured
+which the text, composited over the scrimmed picture, keeps 4.5:1 × 1.05 (`SCRIM_MARGIN`, so the
+encoded film keeps 4.5:1: H.264 softens small type's edges by about 1 %) between its glyph cores'
+median luminance and the 95th-percentile brightest pixel 1 to 4 px around its glyphs. The tag's is measured
 once over every half beat of the film (frames rendered without it: pictures, dissolves and panels),
 a kicker's over its title's picture (under the title's wash) while its text is up, a date label's
 over its own shot's picture along the camera. A stat run's panel stays
