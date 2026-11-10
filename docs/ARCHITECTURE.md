@@ -456,10 +456,15 @@ Films are made in two stages: plan, then render. `plan_films` turns YAML, `maste
 master and font files and the settings into one **FilmPlan** per film. That step is pure and renders
 nothing. A renderer then evaluates a pure frame function over the plan and pipes the frames to
 ffmpeg. The same plan, with the same inputs, gives the same bytes with the same ffmpeg build, on any
-machine: x264's thread count, which changes its output, is pinned to 4 (`-threads 4`,
-`media.ffmpeg.ENCODER_THREADS`, recorded as `encode.threads`) rather than left to the CPU count.
-The demo's synthetic footage is encoded with `threads=0` (x264 auto, as before): it is an input,
-and the demo story's hotspots are authored against the crop that footage aligns to.
+machine and under any load: x264 encodes on one thread (`-threads 1`, `media.ffmpeg.ENCODER_THREADS`,
+recorded as `encode.threads` and `encode.web.threads`). Its frame threads (any count above 1, or auto)
+change the output with the CPU count, and also from run to run: a frame's rate control reads how far
+the frames still encoding on other threads have got, so on a busy machine a few frames come out a few
+bytes different (most often under the web encode's VBV cap; seen as a flaky byte-identity test on
+loaded CI runners). `tests/test_film_layout.py` encodes the same frames many times at once to hold
+this. The demo's synthetic footage is encoded with `threads=0` (x264 auto, as before): it is an
+input, never compared byte for byte, and the demo story's hotspots are authored against the crop
+that footage aligns to.
 
 A film has one of two cuts:
 
@@ -489,7 +494,7 @@ when one fails. Parallel and sequential renders give the same bytes.
 ```
 <slug>-<id>.mp4              H.264 High, yuv420p, BT.709 tags, +faststart, bitexact, no audio stream;
                              mov_text captions (off by default) and named chapters (see "Tracks");
-                             crf 18 slow (VANTAGE_FAST: crf 20 veryfast), -threads 4
+                             crf 18 slow (VANTAGE_FAST: crf 20 veryfast), -threads 1
 <slug>-<id>-web.mp4          web copy ≤ 25 MiB: the same frames, crf 23 under a VBV cap (see "Web encode");
                              not for loop films, nor with output.film.web: false
 <slug>-<id>.jpg              poster (classic: the main vantage's final hold; story: `plan.poster`, see plan.json)
@@ -1170,8 +1175,8 @@ shortest round-trip repr means a plan read back renders the same bytes. The file
              "outside": [],                            // NOT hashed: written by the renderer (see Layout presets)
              "flash": {"estimate": 2, "frame": 434, "proxy": [270, 480], "measures": [[135, 240], [67, 120]],
                        "passes": 3}},                  // story: the flash margin's measurement (see Safety)
-  "encode": {"crf": 18, "preset": "slow", "threads": 4, "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
-             "bufsize": 8030000, "threads": 4} | null, "gop": null | 48, "tracks": true, "lang": "eng"},  // NOT hashed: bytes, not frames
+  "encode": {"crf": 18, "preset": "slow", "threads": 1, "web": {"crf": 23, "preset": "slow", "maxrate": 4015000,
+             "bufsize": 8030000, "threads": 1} | null, "gop": null | 48, "tracks": true, "lang": "eng"},  // NOT hashed: bytes, not frames
                                                        // tracks: embed captions and chapters; lang: ISO 639-2
                                                        // gop: a loop film's closed GOP, 2B frames
   "render": null | {"mp4": {"bytes": 0, "sha256": ""}, "web": {"bytes": 0, "sha256": ""} | null,
@@ -1264,7 +1269,7 @@ date, a vantage name to the masters' name) and a warning is recorded.
   `<slug>-<id>-web.mp4`, encoded from the same frame pipe as the main film (`FrameWriter`
   `extra_outputs`: one rawvideo input, one independent encoder per output, so the main film's bytes
   equal a single-output encode).
-- Args: `-c:v libx264 -profile:v high -crf 23 -preset slow (VANTAGE_FAST: veryfast) -threads 4
+- Args: `-c:v libx264 -profile:v high -crf 23 -preset slow (VANTAGE_FAST: veryfast) -threads 1
   -maxrate R -bufsize 2R -pix_fmt yuv420p -movflags +faststart` plus the main film's BT.709 and bitexact args.
   R = min(6,000,000, floor(0.9 · 25 MiB · 8 / duration_s)) bit/s, floored to a whole kbit/s
   (`plan.web_maxrate`; 37.2 s → 5,073,000).

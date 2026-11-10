@@ -421,7 +421,8 @@ def encode_settings(
     crf 23 under a VBV cap, null for loop films and when output.film.web is false. `gop` is a loop
     film's closed GOP in frames (2 beats of `fpb`), else null. `tracks`: the MP4s embed the captions
     and chapters (film/tracks.py), whose subtitle track is tagged `lang` (ISO 639-2). `threads`:
-    x264's thread count, pinned because it changes the bytes (media/ffmpeg.py ENCODER_THREADS)."""
+    x264's thread count, pinned to 1 because frame threads change the bytes with the CPU count and
+    the machine's load (media/ffmpeg.py ENCODER_THREADS)."""
     preset = "veryfast" if fast else "slow"
     web = None
     if settings.web and not film.loop:
