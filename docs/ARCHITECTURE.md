@@ -383,6 +383,11 @@ Bundled fonts: `runtime/fonts/fonts.json` maps a key (`fraunces`, `inter`,
 `{family, category, axes, weight, license, unicode_range, faces: [{file, style, weight}]}`
 with files relative to `runtime/fonts/`. A brand `FontSpec` uses either
 `bundled: <key>` or its own `files` (client-licensed woff2).
+A client `FontSpec` may also name a `bold` woff2: it ships as that family's 700 face, so labels,
+kickers and `<strong>` use the real bold instead of a synthesized one (set the regular file's `weight`
+to its own weight, e.g. `"400"`, so the bold is chosen at 600 and above). `typography.dek`
+(`display`, the default, or `text`) picks the face of the dek: the hero's line, the standfirst and the
+credits' line (`--v-font-dek`).
 Its `fallback`, `weight` and `features` go into the theme CSS, so `config.py` accepts only
 values of that kind (a list of font names, a weight or range, `font-feature-settings` tags) and
 a `family` without control characters: a brand kit cannot add CSS rules or `url()`s.

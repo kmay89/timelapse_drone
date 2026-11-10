@@ -62,10 +62,11 @@ h1, h2, h3 { font-weight: inherit; }
 .v-label, .v-kicker, .v-badge { font-size: var(--v-fs-label); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; line-height: 1.3; }
 .v-kicker { color: var(--v-acc); display: flex; gap: .9em; align-items: center; margin-bottom: 1.1rem; }
 .v-kicker::before { content: ""; width: 2rem; height: 1px; background: currentColor; }
-.v-display, .v-title, .v-pull, .v-stat__value, .v-dek {
+.v-display, .v-title, .v-pull, .v-stat__value {
   font-family: var(--v-font-display); font-style: var(--v-display-style);
   font-feature-settings: var(--v-display-features); font-optical-sizing: auto;
 }
+.v-dek { font-family: var(--v-font-dek, var(--v-font-display)); font-style: var(--v-dek-style, normal); font-feature-settings: var(--v-dek-features, normal); font-optical-sizing: auto; }
 .v-display { font-size: var(--v-fs-display); font-weight: 400; line-height: .98; letter-spacing: -.022em; text-wrap: balance; }
 .v-title { font-size: var(--v-fs-title); font-weight: 400; line-height: 1.04; letter-spacing: -.018em; text-wrap: balance; max-width: 18ch; }
 .v-dek { font-size: var(--v-fs-dek); font-weight: 350; line-height: 1.38; letter-spacing: -.004em; text-wrap: pretty; }
