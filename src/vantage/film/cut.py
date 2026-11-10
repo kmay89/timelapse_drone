@@ -102,6 +102,8 @@ PANEL_PAD, PANEL_SIGMA = 44.0, 16.0  # units: the panel's feather starts 2.75 si
 # boards of a pier never punch through the text; it stays a photograph, moving with the drift.
 CALM_SIGMA, CALM_GREY = 8.0, 0.5
 PANEL_MARGIN = 1.2  # a stat panel is measured to its WCAG target × this, so it keeps a margin
+SCRIM_MARGIN = 1.05  # the tag's, a kicker's and a date label's scrim are measured to 4.5:1 × this, so
+# the encoded film keeps 4.5:1: H.264 softens small type's edges by about 1 %
 # Units between a stat run's ink and the tag's: the panel's padding and feather (3 sigma) end 8 units
 # clear of the tag, so a paper panel never lightens the picture under the tag's paper type.
 TAG_CLEAR = PANEL_PAD + 3 * PANEL_SIGMA + 8
@@ -801,8 +803,9 @@ class _Cut:
         self, layer: _Layer, scrim: _Layer, backgrounds: Sequence[np.ndarray], floor: float
     ) -> tuple[float, float]:
         """(alpha, contrast): the least opacity (floor to 0.95) of a night `scrim` (a unit mask) at
-        which a text `layer` keeps SMALL_CONTRAST in every one of `backgrounds` (frames without that
-        text), and the worst contrast it gives. Contrast as a reader meets it: the text composited
+        which a text `layer` keeps SMALL_CONTRAST × SCRIM_MARGIN in every one of `backgrounds` (frames
+        without that text), and the worst contrast it gives: the margin keeps SMALL_CONTRAST once the
+        film is encoded. Contrast as a reader meets it: the text composited
         over the scrimmed picture, the median luminance of its glyph cores against the 95th-percentile
         brightest pixel 1 to 4 px around the glyphs (where small type's edges are read)."""
         from vantage.film.safety import _BGR_WEIGHTS, _SRGB_TO_LINEAR
@@ -838,14 +841,15 @@ class _Cut:
                 worst = min(worst, (max(lt, lb) + 0.05) / (min(lt, lb) + 0.05))
             return worst
 
+        aim = SMALL_CONTRAST * SCRIM_MARGIN
         lo, hi = round(floor * 100), 95
-        if not crops or not core.any() or not ring.any() or ratio(lo / 100) >= SMALL_CONTRAST:
+        if not crops or not core.any() or not ring.any() or ratio(lo / 100) >= aim:
             return lo / 100, ratio(lo / 100) if crops and core.any() and ring.any() else 21.0
-        if ratio(hi / 100) < SMALL_CONTRAST:
+        if ratio(hi / 100) < aim:
             return hi / 100, ratio(hi / 100)
         while hi - lo > 1:  # the contrast only grows with the scrim
             mid = (lo + hi) // 2
-            if ratio(mid / 100) >= SMALL_CONTRAST:
+            if ratio(mid / 100) >= aim:
                 hi = mid
             else:
                 lo = mid

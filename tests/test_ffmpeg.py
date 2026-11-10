@@ -20,6 +20,7 @@ from typing import TypeVar
 import numpy as np
 import pytest
 
+from same_bytes import assert_same_bytes
 from vantage.media import ffmpeg
 
 T = TypeVar("T")
@@ -199,7 +200,7 @@ def test_frame_writer_extra_outputs(tmp_path: Path) -> None:
     single, main, second = tmp_path / "single.mp4", tmp_path / "main.mp4", tmp_path / "sub" / "second.mp4"
     _within(lambda: encode(single, []))
     _within(lambda: encode(main, [(second, small)]))
-    assert main.read_bytes() == single.read_bytes()
+    assert_same_bytes(main, single)
     assert second.is_file() and second.read_bytes() != main.read_bytes()
     info = ffmpeg.probe(second)
     assert (info.codec, info.width, info.height) == ("h264", W, H)

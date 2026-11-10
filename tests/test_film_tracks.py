@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from same_bytes import assert_same_bytes
 from test_film import FILM, make_project
 from test_film_story import COMPARE, DATES, STEPS, _facts, tiny
 from vantage.config import Project
@@ -242,7 +243,7 @@ def test_embed_is_bitexact_and_keeps_video(tmp_path):
         runs[run] = tmp_path / run
         render_film(project, runs[run])
     for path in sorted(runs["a"].iterdir()):
-        assert path.read_bytes() == (runs["b"] / path.name).read_bytes(), path.name
+        assert_same_bytes(path, runs["b"] / path.name)
     plan = FilmPlan.load(runs["a"] / "tiny-site-16x9.plan.json")
     bare = tmp_path / "bare.mp4"
     encode_frames(renderer(project, plan), bare, crf=plan.encode["crf"], preset=plan.encode["preset"])

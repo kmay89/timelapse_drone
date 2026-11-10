@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import yaml
 
+from same_bytes import assert_same_bytes
 from vantage.config import Project, load_project
 from vantage.film.plan import _sections, plan_films
 from vantage.film.render import _Film, capture_labels, render_film
@@ -189,7 +190,7 @@ def test_render_film_is_reproducible_and_never_leaves_partial_mp4s(tmp_path, mon
         "tiny-site-16x9.vtt",
     ]
     for path in sorted(first.iterdir()):  # films (with their embedded tracks), sidecars, plan, storyboard
-        assert path.read_bytes() == (second / path.name).read_bytes(), path.name
+        assert_same_bytes(path, second / path.name)
 
 
 @pytest.mark.parametrize(

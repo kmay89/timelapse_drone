@@ -230,7 +230,11 @@ def iter_frames(
         stderr.text()
 
 
-ENCODER_THREADS = 4  # pinned so the same frames give the same bytes on any machine
+# x264 encodes on one thread, so the same frames give the same bytes on any machine and under any
+# load. Its frame threads (any count above 1) make the bytes depend on the CPU count and on thread
+# timing: a frame's rate control reads how far the frames still being encoded on other threads have
+# got, so a busy machine changes a few frames by a few bytes (most often under the -web.mp4's VBV cap).
+ENCODER_THREADS = 1
 
 
 class FrameWriter:
@@ -243,9 +247,11 @@ class FrameWriter:
     each output's args are its complete output options (codec, rate control, filters, flags), so
     every output is encoded independently and the main one's bytes equal a single-output run.
 
-    The encoder's thread count is pinned (`threads`, default ENCODER_THREADS): x264 splits its work
-    by thread count, and left on auto (1.5 × the CPUs it may use) the same frames give different
-    bytes on machines with different CPU counts. `threads=0` leaves it to x264 (auto).
+    The encoder's thread count is pinned (`threads`, default ENCODER_THREADS = 1): x264's frame
+    threads split its work by thread count and let a frame's rate control see how far the frames
+    still encoding on other threads have got, so with more than one thread (or auto, 1.5 × the CPUs it
+    may use) the same frames give different bytes on machines with different CPU counts and from run
+    to run on a busy one. `threads=0` leaves it to x264 (auto).
     """
 
     def __init__(

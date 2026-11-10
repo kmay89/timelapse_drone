@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from same_bytes import assert_same_bytes
 from test_film import FILM, make_project
 from test_film_story import COMPARE, tiny
 from vantage.config import Project
@@ -156,7 +157,7 @@ def test_classic_16x9_unchanged(tmp_path):
     bare = tmp_path / "bare"
     bare.mkdir()
     _render_one(plain, plan_films(plain, fast=True)["16x9"], bare, plan_only=False)
-    assert again.read_bytes() == (bare / "tiny-site-16x9.mp4").read_bytes()
+    assert_same_bytes(again, bare / "tiny-site-16x9.mp4")
 
 
 def _h264(path: Path) -> bytes:
@@ -194,7 +195,7 @@ def test_web_encode(tmp_path):
         out[run] = tmp_path / run
         render_film(project, out[run])
     web, main = out["a"] / "tiny-site-16x9-web.mp4", out["a"] / "tiny-site-16x9.mp4"
-    assert web.read_bytes() == (out["b"] / web.name).read_bytes()
+    assert_same_bytes(web, out["b"] / web.name)
     info = probe(web)
     stream = next(s for s in info.raw["streams"] if s["codec_type"] == "video")
     assert (info.codec, stream["profile"], stream["pix_fmt"], stream.get("color_space")) == (
@@ -208,7 +209,7 @@ def test_web_encode(tmp_path):
     plan = FilmPlan.load(out["a"] / "tiny-site-16x9.plan.json")
     p, encode = plan.plan, plan.encode
     rate = web_maxrate(p["frames"] / p["fps"])
-    assert encode["web"] == {"crf": 23, "preset": "slow", "maxrate": rate, "bufsize": 2 * rate, "threads": 4}
+    assert encode["web"] == {"crf": 23, "preset": "slow", "maxrate": rate, "bufsize": 2 * rate, "threads": 1}
     assert plan.render is not None and plan.render["web"]["bytes"] == web.stat().st_size
     assert check_films(project, out["a"]) == []
     # A hand-replaced web copy is caught like a hand-replaced film.
@@ -304,9 +305,52 @@ def test_encode_bytes_do_not_depend_on_the_cpu_count(tmp_path, monkeypatch):
         out[name] = tmp_path / f"{name}.mp4"
         web = (tmp_path / f"{name}-web.mp4", plan.encode["web"])
         encode_frames(film, out[name], crf=plan.encode["crf"], preset=plan.encode["preset"], web=web)
-    assert out["all"].read_bytes() == out["one"].read_bytes()
-    assert (tmp_path / "all-web.mp4").read_bytes() == (tmp_path / "one-web.mp4").read_bytes()
+    assert_same_bytes(out["all"], out["one"])
+    assert_same_bytes(tmp_path / "all-web.mp4", tmp_path / "one-web.mp4")
     assert plan.encode["threads"] == ffmpeg.ENCODER_THREADS
+
+
+class _Frames:
+    """Pre-rendered frames as a Renderable: encode_frames can run on many threads at once."""
+
+    def __init__(self, film, frames: list) -> None:
+        self.width, self.height, self.fps, self.frames = film.width, film.height, film.fps, len(frames)
+        self._frames = frames
+
+    def frame_at(self, k: int):
+        return self._frames[k]
+
+
+def test_encode_bytes_do_not_depend_on_scheduling(tmp_path):
+    """x264's frame threads make bytes depend on thread timing (a frame's QP reads how far the frames
+    still encoding on other threads have got; worst under the web encode's VBV cap): the film of
+    test_parallel_equals_sequential came out 3 bytes apart under a loaded CPU. Encoded single-threaded,
+    the same frames give the same bytes however busy the machine. Many encodes at once, more than
+    the CPUs, so the scheduler interleaves them."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from vantage.media import ffmpeg
+
+    project = tiny(tmp_path / "p", film={"vertical": True}, chapters=[COMPARE], simulated=True)
+    plan = plan_films(project, only=["9x16"], fast=True)["9x16"]
+    film = renderer(project, plan)
+    frames = _Frames(film, [film.frame_at(k) for k in range(film.frames)])
+    jobs = max(8, 3 * (os.cpu_count() or 1))
+
+    def encode(i: int) -> tuple[Path, Path]:
+        main, web = tmp_path / f"{i}.mp4", tmp_path / f"{i}-web.mp4"
+        encode_frames(
+            frames, main, crf=plan.encode["crf"], preset=plan.encode["preset"], web=(web, plan.encode["web"]),
+            threads=plan.encode["threads"],
+        )  # fmt: skip
+        return main, web
+
+    with ThreadPoolExecutor(jobs) as pool:
+        outs = list(pool.map(encode, range(2 * jobs)))
+    for main, web in outs[1:]:
+        assert_same_bytes(outs[0][0], main)
+        assert_same_bytes(outs[0][1], web)
+    assert plan.encode["threads"] == plan.encode["web"]["threads"] == ffmpeg.ENCODER_THREADS == 1
 
 
 def test_balanced_wrapping():
