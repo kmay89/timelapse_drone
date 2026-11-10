@@ -22,6 +22,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from same_bytes import assert_same_bytes
 from test_film import FILM, SIZE, make_project
 from vantage.cli import check_project
 from vantage.config import Project, load_project
@@ -564,7 +565,7 @@ def test_story_render_is_reproducible(tmp_path):
         "tiny-site-16x9.vtt",
     ]  # fmt: skip
     for name in names:
-        assert (out["a"] / name).read_bytes() == (out["b"] / name).read_bytes(), name
+        assert_same_bytes(out["a"] / name, out["b"] / name)
     plan = FilmPlan.load(out["a"] / "tiny-site-16x9.plan.json")
     assert plan.render is not None and plan.render["flash"]["pass"] is True
     p = plan.plan
@@ -589,7 +590,7 @@ def test_classic_still_identical(tmp_path):
     _render_one(project, plan, a, plan_only=False)
     _render_one(project, FilmPlan.load(a / "tiny-site-16x9.plan.json"), b, plan_only=False)
     for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.jpg"):
-        assert (a / name).read_bytes() == (b / name).read_bytes(), name
+        assert_same_bytes(a / name, b / name)
     record = FilmPlan.load(a / "tiny-site-16x9.plan.json").render
     assert record is not None and record["flash"]["pass"] is True and record["flash"]["max_delta"] > 0
 
@@ -1520,7 +1521,7 @@ def test_default_is_story_and_classic_opt_out(tmp_path, monkeypatch):
         render_film(classic, out[run])
     assert FilmPlan.load(out["a"] / "tiny-site-16x9.plan.json").plan["cut"] == "classic"
     for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.jpg", "tiny-site-16x9.plan.json"):
-        assert (out["a"] / name).read_bytes() == (out["b"] / name).read_bytes(), name
+        assert_same_bytes(out["a"] / name, out["b"] / name)
 
 
 def test_parallel_equals_sequential(tmp_path, monkeypatch):
@@ -1535,7 +1536,7 @@ def test_parallel_equals_sequential(tmp_path, monkeypatch):
     assert names == sorted(p.name for p in out["2"].iterdir()) and len(names) == 18
     assert not [n for n in names if n.endswith(".part")]
     for name in names:
-        assert (out["1"] / name).read_bytes() == (out["2"] / name).read_bytes(), name
+        assert_same_bytes(out["1"] / name, out["2"] / name)
 
 
 def test_film_jobs(monkeypatch):

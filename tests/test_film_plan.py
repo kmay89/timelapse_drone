@@ -12,6 +12,7 @@ import pytest
 import yaml
 from PIL import Image
 
+from same_bytes import assert_same_bytes
 from test_film import FILM, make_project
 from vantage.config import Project, load_project
 from vantage.film import storyboard
@@ -61,7 +62,7 @@ def test_plan_is_deterministic(tmp_path):
     first, second = _plan(project), _plan(project)
     assert first.hash == second.hash and len(first.hash) == 64
     a, b = first.save(tmp_path / "a.plan.json"), second.save(tmp_path / "b.plan.json")
-    assert a.read_bytes() == b.read_bytes()
+    assert_same_bytes(a, b)
     loaded = FilmPlan.load(a)
     assert loaded == first and loaded.hash == first.hash
     assert json.loads(a.read_text())["hash"] == first.hash
@@ -176,7 +177,7 @@ def test_render_from_loaded_plan_is_identical(tmp_path):
     _render_one(project, plan, a, plan_only=False)
     _render_one(project, loaded, b, plan_only=False)
     for name in ("tiny-site-16x9.mp4", "tiny-site-16x9.jpg", "tiny-site-16x9.storyboard.jpg"):
-        assert (a / name).read_bytes() == (b / name).read_bytes(), name
+        assert_same_bytes(a / name, b / name)
     saved = FilmPlan.load(a / "tiny-site-16x9.plan.json")
     assert saved.hash == plan.hash
     assert (
@@ -205,7 +206,7 @@ def test_storyboard_tiles_and_bytes(tmp_path, monkeypatch):
                 cols * tile_w,
                 math.ceil(len(tiles) / cols) * (tile_h + storyboard.STRIP) + storyboard.FOOTER,
             )
-        assert board.read_bytes() == (out["b"] / board.name).read_bytes()
+        assert_same_bytes(board, out["b"] / board.name)
 
 
 def test_storyboard_chips_follow_fact_status():

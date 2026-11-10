@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 import yaml
 
+from same_bytes import describe_difference
 from test_film_story import COMPARE, STATS, STEPS, STORY_FILM, _facts, tiny
 from vantage.config import Project, load_project
 from vantage.film import loop, render
@@ -175,7 +176,8 @@ def test_hours_concat(tmp_path):
     assert len(keys["frames"]) == k * plan.plan["frames"]
     first = usb.read_bytes()
     assert loop.concat_hours(out / "tiny-site-screen.mp4", 0.01, out / "usb") == usb
-    assert usb.read_bytes() == first  # the same cycle gives the same bytes
+    changed = describe_difference(first, usb.read_bytes(), usb.name)
+    assert not changed, changed  # the same cycle gives the same bytes
     # Never packaged: not in SHA256SUMS, not in build.json.
     package_project(project, dist)
     sums = (dist / "SHA256SUMS").read_text(encoding="utf-8")

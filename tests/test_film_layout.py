@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from same_bytes import assert_same_bytes
 from test_film import FILM, make_project
 from test_film_story import COMPARE, tiny
 from vantage.config import Project
@@ -156,7 +157,7 @@ def test_classic_16x9_unchanged(tmp_path):
     bare = tmp_path / "bare"
     bare.mkdir()
     _render_one(plain, plan_films(plain, fast=True)["16x9"], bare, plan_only=False)
-    assert again.read_bytes() == (bare / "tiny-site-16x9.mp4").read_bytes()
+    assert_same_bytes(again, bare / "tiny-site-16x9.mp4")
 
 
 def _h264(path: Path) -> bytes:
@@ -194,7 +195,7 @@ def test_web_encode(tmp_path):
         out[run] = tmp_path / run
         render_film(project, out[run])
     web, main = out["a"] / "tiny-site-16x9-web.mp4", out["a"] / "tiny-site-16x9.mp4"
-    assert web.read_bytes() == (out["b"] / web.name).read_bytes()
+    assert_same_bytes(web, out["b"] / web.name)
     info = probe(web)
     stream = next(s for s in info.raw["streams"] if s["codec_type"] == "video")
     assert (info.codec, stream["profile"], stream["pix_fmt"], stream.get("color_space")) == (
@@ -304,8 +305,8 @@ def test_encode_bytes_do_not_depend_on_the_cpu_count(tmp_path, monkeypatch):
         out[name] = tmp_path / f"{name}.mp4"
         web = (tmp_path / f"{name}-web.mp4", plan.encode["web"])
         encode_frames(film, out[name], crf=plan.encode["crf"], preset=plan.encode["preset"], web=web)
-    assert out["all"].read_bytes() == out["one"].read_bytes()
-    assert (tmp_path / "all-web.mp4").read_bytes() == (tmp_path / "one-web.mp4").read_bytes()
+    assert_same_bytes(out["all"], out["one"])
+    assert_same_bytes(tmp_path / "all-web.mp4", tmp_path / "one-web.mp4")
     assert plan.encode["threads"] == ffmpeg.ENCODER_THREADS
 
 

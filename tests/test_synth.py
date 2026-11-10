@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from PIL import ExifTags, Image
 
+from same_bytes import assert_same_bytes
 from vantage import config
 from vantage.demo import synth
 from vantage.media.ffmpeg import iter_frames, probe
@@ -440,7 +441,7 @@ def test_serial_render_matches_parallel_workers(footage: tuple[Path, dict], tmp_
         synth._WORKER.clear()
     assert entry == next(v for v in truth["visits"] if v["date"] == visit.date)
     for f in entry["files"]:
-        assert (tmp_path / f["path"]).read_bytes() == (root / f["path"]).read_bytes(), f["path"]
+        assert_same_bytes(tmp_path / f["path"], root / f["path"])
 
 
 def test_interrupted_regeneration_leaves_no_truth_behind(
