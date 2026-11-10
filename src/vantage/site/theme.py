@@ -187,18 +187,26 @@ def _faces(spec: FontSpec, styles: set[str], brand: BrandKit) -> list[_Face]:
         ]
     faces = []
     for rel in spec.files:
-        path = brand.resolve(rel)
-        assert path is not None
-        if brand.root is not None and not path.resolve().is_relative_to(brand.root.resolve()):
-            raise ValueError(f"brand.yaml: font {rel!r} is outside the brand folder {brand.root}")
-        if path.suffix.lower() != ".woff2":
-            raise ValueError(f"brand.yaml: font {rel!r} is not a .woff2 file")
-        if re.search(r'["\\\x00-\x1f\x7f]', path.name):  # it goes into url("…") in the CSS
-            raise ValueError(f"brand.yaml: font {rel!r} has a quote or control character; rename the file")
+        path = _client_font(rel, brand)
         style = "italic" if "italic" in path.stem.lower() else spec.style
         if style in styles:
             faces.append(_Face(spec.family, path, style, spec.weight, None))
+    if spec.bold and spec.style in styles:  # a real bold, so labels and <strong> aren't synthesized
+        faces.append(_Face(spec.family, _client_font(spec.bold, brand), spec.style, "700", None))
     return faces
+
+
+def _client_font(rel: str, brand: BrandKit) -> Path:
+    """A client .woff2 named in brand.yaml, checked: inside the brand folder, and safe in url("…")."""
+    path = brand.resolve(rel)
+    assert path is not None
+    if brand.root is not None and not path.resolve().is_relative_to(brand.root.resolve()):
+        raise ValueError(f"brand.yaml: font {rel!r} is outside the brand folder {brand.root}")
+    if path.suffix.lower() != ".woff2":
+        raise ValueError(f"brand.yaml: font {rel!r} is not a .woff2 file")
+    if re.search(r'["\\\x00-\x1f\x7f]', path.name):  # it goes into url("…") in the CSS
+        raise ValueError(f"brand.yaml: font {rel!r} has a quote or control character; rename the file")
+    return path
 
 
 def font_file(brand: BrandKit, role: str) -> Path:
@@ -317,6 +325,9 @@ def theme_css(brand: BrandKit, *, font_prefix: str = "assets/fonts/", italic: bo
         "--v-font-numeric": _stack(numeric) if typo.numeric else "var(--v-font-text)",
         "--v-display-style": typo.display.style,
         "--v-display-features": typo.display.features or "normal",
+        "--v-font-dek": "var(--v-font-text)" if typo.dek == "text" else "var(--v-font-display)",
+        "--v-dek-style": typo.text.style if typo.dek == "text" else typo.display.style,
+        "--v-dek-features": (typo.text if typo.dek == "text" else typo.display).features or "normal",
         "--v-text-features": typo.text.features or "normal",
         "--v-numeric-features": numeric.features or "normal",
         "color-scheme": "light" if brand.theme == "light" else "dark",

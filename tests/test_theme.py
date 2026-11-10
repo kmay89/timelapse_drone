@@ -137,6 +137,41 @@ def test_client_fonts_numeric_face_and_light_theme(tmp_path: Path):
     ]  # fmt: skip
 
 
+def test_a_bold_file_ships_as_the_700_face_and_the_dek_can_take_the_text_face(tmp_path: Path):
+    (tmp_path / "fonts").mkdir()
+    (tmp_path / "fonts" / "Sans-Regular.woff2").write_bytes(b"wOF2-regular")
+    (tmp_path / "fonts" / "Sans-Bold.woff2").write_bytes(b"wOF2-bold")
+    spec = {
+        "family": "Brand Sans",
+        "files": ["fonts/Sans-Regular.woff2"],
+        "weight": "400",
+        "bold": "fonts/Sans-Bold.woff2",
+        "features": "'tnum' 1",
+    }
+    brand = BrandKit.model_validate({"name": "Client", "typography": {"text": spec, "dek": "text"}})  # fmt: skip
+    brand.root = tmp_path
+    css = theme_css(brand, italic=False).css
+    bold = f"Sans-Bold-{hashlib.sha256(b'wOF2-bold').hexdigest()[:8]}.woff2"
+    assert f'font-family:"Brand Sans";src:url("assets/fonts/{bold}") format("woff2");font-weight:700' in css
+    assert re.search(r'Sans-Regular-[0-9a-f]{8}\.woff2"\) format\("woff2"\);font-weight:400;', css)
+    assert "--v-font-dek:var(--v-font-text)" in css and "--v-dek-features:'tnum' 1" in css
+    # By default the dek stays in the display face, as every story had it before.
+    default = theme_css(BrandKit(name="Client")).css
+    assert "--v-font-dek:var(--v-font-display)" in default and "Bold" not in default
+
+
+def test_a_bold_file_follows_the_client_font_rules(tmp_path: Path):
+    (tmp_path / "Sans.woff2").write_bytes(b"wOF2")
+    (tmp_path / "Sans-Bold.ttf").write_bytes(b"\0\1")
+    brand = BrandKit.model_validate({
+        "name": "Client",
+        "typography": {"text": {"family": "S", "files": ["Sans.woff2"], "bold": "Sans-Bold.ttf"}},
+    })  # fmt: skip
+    brand.root = tmp_path
+    with pytest.raises(ValueError, match=r"not a \.woff2"):
+        theme_css(brand)
+
+
 def test_client_fonts_with_one_file_name_keep_their_own_url(tmp_path: Path):
     # display and text from two folders, both "Regular.woff2": one shared dest would mean the last copy
     # wins in assets/fonts/ and the display face renders in the text font

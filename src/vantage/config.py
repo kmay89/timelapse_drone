@@ -109,6 +109,11 @@ class FontSpec(Model):
         "100 900", description="CSS font-weight range for variable fonts, or a single weight."
     )
     style: Literal["normal", "italic"] = "normal"
+    bold: str | None = Field(
+        None,
+        description="Optional .woff2 for this family's bold weight (700), relative to brand.yaml: labels, "
+        "kickers and <strong> use it instead of a synthesized bold. Same licence rules as `files`.",
+    )
     fallback: str = "system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif"
     features: str | None = Field(None, description="CSS font-feature-settings, e.g. \"'ss01' 1\".")
 
@@ -141,6 +146,11 @@ class BrandTypography(Model):
     )
     text: FontSpec = Field(default_factory=lambda: FontSpec(family="Inter", bundled="inter"))
     numeric: FontSpec | None = Field(None, description="Optional font for dates/odometers; defaults to text.")
+    dek: Literal["display", "text"] = Field(
+        "display",
+        description="Face of the dek (the hero's line, the standfirst, the credits' line): the display "
+        "face, or the text face for a brand whose guide sets copy in its text face.",
+    )
 
 
 class BrandVoice(Model):
