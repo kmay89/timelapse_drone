@@ -2190,9 +2190,8 @@ def _write_video(
     meta = ["-metadata", f"creation_time={utc:%Y-%m-%dT%H:%M:%S}.{utc.microsecond // 1000:03d}Z"]
     homs, srt = [], []
     # threads=0: x264 picks its own thread count, as it always has for the synthetic footage. The
-    # demo's story.yaml is authored against the crop this footage aligns to; pinning the count (as
-    # the films pin ENCODER_THREADS) shifts the overview crop by 2% of the frame. The footage is an
-    # input, never compared byte for byte: its bytes may vary with the CPU count and load.
+    # demo's story.yaml is authored against the crop this footage aligns to; the films' pinned count
+    # (ENCODER_THREADS) shifts the overview crop by 2% of the frame.
     with FrameWriter(
         path, cam.width, cam.height, fps=mode.fps, crf=mode.crf, preset=mode.preset, extra=meta, threads=0
     ) as out:
