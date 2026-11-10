@@ -37,7 +37,9 @@ concurrency:
 jobs:
   full:
     name: Full-size demo films (slow tests)
-    runs-on: ubuntu-latest
+    # Pinned like ci.yml's browser job: these tests check film plans made from footage generated on
+    # the runner, and ubuntu-latest (26.04) builds it differently enough to change the trims.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       VANTAGE_TEST_FOOTAGE: ${{ github.workspace }}/.footage-full
